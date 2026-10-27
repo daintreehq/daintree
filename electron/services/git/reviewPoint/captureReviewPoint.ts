@@ -29,6 +29,7 @@ import {
   type StatusChangedRecord,
   type StatusUnmergedRecord,
 } from "./parseGitRecords.js";
+import { disableFilters, filterDriversIn } from "./filterDrivers.js";
 import {
   GitOutputLimitError,
   GitTimeoutError,
@@ -725,44 +726,25 @@ async function resolveBase(
   };
 }
 
-/**
- * The whole config, read as bytes: a key regexp would run under a UTF-8
- * locale, where a subsection name that isn't valid UTF-8 can fail to match,
- * and that driver would then run unswitched.
- */
+/** The whole config, read as bytes (`filterDriversIn` says why). */
 async function readRepositorySettings(git: Git, cwd: string): Promise<RepositorySettings> {
   const out = await git(["config", "-z", "--list"], { cwd, okExitCodes: [1] });
-  const settings: RepositorySettings = { filterDrivers: [], fileMode: true, symlinks: true };
-  const drivers = new Set<string>();
+  const settings: RepositorySettings = {
+    filterDrivers: filterDriversIn(out.stdout),
+    fileMode: true,
+    symlinks: true,
+  };
   for (const { key, value } of parseConfigListing(out.stdout)) {
     const text = key.toString("utf8");
     if (text === "core.filemode") settings.fileMode = gitBool(value);
     else if (text === "core.symlinks") settings.symlinks = gitBool(value);
-    else if (/^filter\..+\.(clean|process|required)$/s.test(text)) {
-      // The override is handed to git as text; a name it can't carry exactly
-      // would switch off some other driver and leave this one running.
-      if (!Buffer.from(text, "utf8").equals(key)) {
-        throw new Error("A filter driver's name isn't valid UTF-8, so it can't be switched off.");
-      }
-      drivers.add(text.slice("filter.".length, text.lastIndexOf(".")));
-    }
   }
-  settings.filterDrivers = [...drivers];
   return settings;
 }
 
 function gitBool(value: string | null): boolean {
   if (value === null) return true;
   return !["false", "no", "off", "0", ""].includes(value.trim().toLowerCase());
-}
-
-/** Switch a driver's clean side off, and stop git failing a path for lacking it. */
-function disableFilters(drivers: readonly string[]): Array<readonly [string, string]> {
-  return drivers.flatMap((name) => [
-    [`filter.${name}.clean`, ""] as const,
-    [`filter.${name}.process`, ""] as const,
-    [`filter.${name}.required`, "false"] as const,
-  ]);
 }
 
 // -- Working-tree reads -------------------------------------------------------

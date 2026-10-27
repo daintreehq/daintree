@@ -1,66 +1,88 @@
-import { runGitForBytes } from "./git/reviewPoint/runGit.js";
+import { disableFilters, filterDriversIn } from "./git/reviewPoint/filterDrivers.js";
+import {
+  GitCommandError,
+  GitTimeoutError,
+  runGitForBytes,
+  type RunGitOptions,
+} from "./git/reviewPoint/runGit.js";
 import { diffCodeNames } from "./voiceCodeNames.js";
 
 // A branch's whole diff, read once per dictation; one past this is too big to
 // say much about what the speaker is on right now.
 const MAX_DIFF_BYTES = 2_000_000;
-// Dictations come in runs; one read serves the worktree's next minute of them.
-const DIFF_NAMES_FRESH_MS = 60_000;
 
-const recent = new Map<string, { at: number; names: Promise<string[]> }>();
-
-async function readDiff(cwd: string, deadline: number): Promise<string[]> {
-  const left = () => Math.max(1, deadline - Date.now());
-  const run = async (args: string[]) =>
-    (await runGitForBytes(cwd, args, { timeoutMs: left(), maxStdoutBytes: MAX_DIFF_BYTES })).stdout
-      .toString("utf8")
-      .trim();
-  const base = await run(["merge-base", "HEAD", "origin/HEAD"]);
-  if (!base) return [];
-  // Tree to tree: the working tree is never read, so no filter, textconv or
-  // fsmonitor the repository configures runs. Committed work only. Submodules
-  // are ignored, since an inline submodule diff runs a nested git diff that
-  // keeps neither of the flags above.
-  const diff = await run([
-    "diff",
-    "-U0",
-    "--no-color",
-    "--no-ext-diff",
-    "--no-textconv",
-    "--no-renames",
-    "--ignore-submodules=all",
-    "--submodule=short",
-    `${base}..HEAD`,
-    "--",
+async function readDiff(cwd: string, deadline: number, signal: AbortSignal): Promise<string[]> {
+  const git = (args: string[], extra: Partial<RunGitOptions> = {}) => {
+    const timeoutMs = deadline - Date.now();
+    if (timeoutMs <= 0) return Promise.reject(new GitTimeoutError(args[0] ?? ""));
+    return runGitForBytes(cwd, args, {
+      signal,
+      timeoutMs,
+      maxStdoutBytes: MAX_DIFF_BYTES,
+      ...extra,
+    });
+  };
+  const [config, mergeBase] = await Promise.all([
+    git(["config", "-z", "--list"], { okExitCodes: [1] }),
+    git(["merge-base", "HEAD", "origin/HEAD"]).then(
+      ({ stdout }) => stdout.toString("utf8").trim(),
+      // With no default branch to have left (or no history shared with it),
+      // the branch starts at its last commit, and only its uncommitted work
+      // counts. Git has to have said so: a read that ran out of time or was
+      // killed ends here instead.
+      (error: unknown) => {
+        if (error instanceof GitCommandError && error.exitCode !== null) return "";
+        throw error;
+      }
+    ),
   ]);
-  return diffCodeNames(diff);
+  const base = mergeBase || "HEAD";
+  // The base's tree against the working tree, for every path in the index:
+  // committed work and uncommitted work, staged or not, but no untracked file.
+  // No program the repository configures runs: every clean and process filter
+  // is switched off for the command (a stat-dirty file is hashed through its
+  // clean filter), and plumbing runs no textconv or external diff (the flags
+  // say so anyway). The hardened profile turns fsmonitor off and points hooks
+  // at an app-owned directory. Submodules are never entered: checking one for
+  // changes runs status inside it, with its own filters on.
+  const { stdout } = await git(
+    [
+      "diff-index",
+      "-p",
+      "-U0",
+      "--no-color",
+      "--no-ext-diff",
+      "--no-textconv",
+      "--no-renames",
+      "--ignore-submodules=all",
+      "--submodule=short",
+      base,
+      "--",
+    ],
+    { config: disableFilters(filterDriversIn(config.stdout)) }
+  );
+  return diffCodeNames(stdout.toString("utf8"));
 }
 
 /**
- * The code names a worktree's branch is working on (`diffCodeNames`): its
- * commits since it left the remote's default branch, through the hardened git
- * runner. Shared by the worktree's dictations for a minute. None on any
- * failure, none past `timeoutMs`, whatever git is still doing.
+ * The code names a worktree's branch is working on (`diffCodeNames`): what its
+ * working tree holds now against where it left the remote's default branch,
+ * uncommitted work included, through the hardened git runner. Read fresh for
+ * each dictation, since an agent's latest edit is the likeliest thing said.
+ * None on any failure, none past `timeoutMs`, whatever git is still doing.
  */
 export function readWorktreeDiffNames(cwd: string, timeoutMs = 800): Promise<string[]> {
-  const now = Date.now();
-  const cached = recent.get(cwd);
-  if (cached && now - cached.at < DIFF_NAMES_FRESH_MS) return cached.names;
+  // Aborted once the answer is in, so a command still finding git (on Windows,
+  // a PATH lookup) never starts after the caller has moved on.
+  const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const names = Promise.race([
-    readDiff(cwd, now + timeoutMs).catch((): string[] => []),
+  return Promise.race([
+    readDiff(cwd, Date.now() + timeoutMs, controller.signal).catch((): string[] => []),
     new Promise<string[]>((resolve) => {
       timer = setTimeout(() => resolve([]), timeoutMs);
     }),
-  ]).finally(() => clearTimeout(timer));
-  recent.set(cwd, { at: now, names });
-  for (const [key, entry] of recent) {
-    if (now - entry.at >= DIFF_NAMES_FRESH_MS) recent.delete(key);
-  }
-  return names;
-}
-
-/** Forgets every cached read, for tests. */
-export function resetWorktreeDiffNamesForTests(): void {
-  recent.clear();
+  ]).finally(() => {
+    clearTimeout(timer);
+    controller.abort();
+  });
 }
