@@ -10,7 +10,7 @@ import type { ReactNode } from "react";
 export function CanopyEmptyLine({ children, note }: { children: ReactNode; note?: ReactNode }) {
   return (
     <div className="flex flex-col gap-0.5 px-3 py-2.5" data-canopy-empty-line="">
-      <p className="text-sm leading-5 text-pretty text-text-secondary">{children}</p>
+      <p className="text-sm leading-5 text-balance text-text-secondary">{children}</p>
       {note && <p className="text-xs leading-4 text-text-secondary">{note}</p>}
     </div>
   );
