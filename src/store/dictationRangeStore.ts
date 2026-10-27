@@ -465,7 +465,6 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
   mapDrafts: (previous, next) => {
     const { drafts, anchors } = get();
     const nextAnchors = mapAnchors(anchors, previous, next);
-    if (nextAnchors) set({ anchors: nextAnchors });
     let nextDrafts: Record<string, DictationRecord[]> | null = null;
     for (const [key, records] of Object.entries(drafts)) {
       const after = next.get(key) ?? "";
@@ -482,7 +481,14 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
       );
     }
     expectedChanges.clear();
-    if (nextDrafts) set({ drafts: nextDrafts });
+    // One update: a subscriber woken between two would read ranges that
+    // haven't moved yet against the draft that has.
+    if (nextAnchors || nextDrafts) {
+      set({
+        ...(nextAnchors ? { anchors: nextAnchors } : {}),
+        ...(nextDrafts ? { drafts: nextDrafts } : {}),
+      });
+    }
   },
 
   expectDraftChange: (panelId, projectId, before, after, change) => {
