@@ -22,6 +22,9 @@ export { AmpIcon } from "./AmpIcon";
 export { AiderIcon } from "./AiderIcon";
 export { GrokIcon } from "./GrokIcon";
 
+// Speech-to-text providers
+export { DeepgramIcon } from "./DeepgramIcon";
+
 // JavaScript ecosystem
 export { NpmIcon } from "./NpmIcon";
 export { YarnIcon } from "./YarnIcon";

@@ -330,6 +330,15 @@ describe("recordingModeDescription", () => {
   });
 });
 
+/** Open the provider select from the keyboard and choose an option, the way Radix expects in jsdom. */
+async function pickProvider(name: string): Promise<void> {
+  const trigger = await screen.findByRole("combobox", { name: "Transcription provider" });
+  trigger.focus();
+  fireEvent.keyDown(trigger, { key: "Enter" });
+  const option = await screen.findByRole("option", { name });
+  fireEvent.keyDown(option, { key: "Enter" });
+}
+
 describe("VoiceInputSettingsTab provider switch", () => {
   it("never carries one provider's key result into the other's row", async () => {
     install(
@@ -347,12 +356,66 @@ describe("VoiceInputSettingsTab provider switch", () => {
     fireEvent.keyDown(input, { key: "Enter" });
     await waitFor(() => expect(container.textContent).toContain("Incorrect API key"));
 
-    fireEvent.click(screen.getByRole("radio", { name: "Deepgram" }));
+    await pickProvider("Deepgram");
 
     await waitFor(() => expect(container.textContent).toContain("Deepgram API key"));
     expect(container.textContent).not.toContain("Incorrect API key");
     const deepgramInput = container.querySelector<HTMLInputElement>('input[type="password"]');
     expect(deepgramInput?.value).toBe("");
+  });
+});
+
+describe("VoiceInputSettingsTab provider select", () => {
+  it("puts a logo on the trigger and on every option", async () => {
+    install({});
+    render(<VoiceInputSettingsTab />);
+
+    const trigger = await screen.findByRole("combobox", { name: "Transcription provider" });
+    // The row keeps the anchor the `voice-provider` search deep link scrolls to.
+    expect(document.getElementById("voice-provider")?.contains(trigger)).toBe(true);
+    expect(trigger.textContent).toContain("OpenAI");
+    expect(trigger.querySelector('svg[width="14"]')).not.toBeNull();
+
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: "Enter" });
+    for (const name of ["OpenAI", "Deepgram"]) {
+      const option = await screen.findByRole("option", { name });
+      expect(option.querySelector('svg[width="14"]')).not.toBeNull();
+    }
+  });
+
+  it("swaps the privacy note with the selection, naming recipient, retention and hints", async () => {
+    install({});
+    const { container } = render(<VoiceInputSettingsTab />);
+
+    const openai = await screen.findByText(/OpenAI receives your audio/);
+    expect(openai.textContent).toMatch(/up to 30 days/);
+    expect(openai.textContent).toMatch(/doesn't train on it/);
+    expect(openai.textContent).toMatch(/Recognition hints go with the audio/);
+    expect(openai.textContent).toMatch(/dictionary/);
+    expect(openai.textContent).toMatch(/branch/);
+    expect(openai.textContent).toMatch(/terminal output/);
+
+    await pickProvider("Deepgram");
+
+    const deepgram = await screen.findByText(/Deepgram receives your audio/);
+    expect(deepgram.textContent).toMatch(/doesn't retain streaming audio/);
+    expect(deepgram.textContent).toMatch(/Recognition hints go with the audio/);
+    expect(container.textContent).not.toContain("OpenAI receives your audio");
+  });
+
+  it("saves the picked provider and resets to OpenAI", async () => {
+    const setSettings = vi.fn().mockResolvedValue(undefined);
+    install({ transcriptionProvider: "deepgram" }, { setSettings });
+    render(<VoiceInputSettingsTab />);
+
+    const trigger = await screen.findByRole("combobox", { name: "Transcription provider" });
+    expect(trigger.textContent).toContain("Deepgram");
+
+    fireEvent.click(screen.getByRole("button", { name: /Reset Transcription provider/ }));
+    await waitFor(() =>
+      expect(setSettings).toHaveBeenCalledWith({ transcriptionProvider: "openai" })
+    );
   });
 });
 

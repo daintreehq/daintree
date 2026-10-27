@@ -161,8 +161,8 @@ describe("VoiceInputSettingsTab", () => {
     render(<VoiceInputSettingsTab />);
 
     await waitFor(() => {
-      expect(screen.queryByText(/encrypted connection/)).toBeNull();
-      expect(screen.queryByText(/model training/)).toBeNull();
+      expect(screen.queryByText(/receives your audio/)).toBeNull();
+      expect(screen.queryByText(/train on it/)).toBeNull();
     });
   });
 
@@ -283,16 +283,17 @@ describe("VoiceInputSettingsTab", () => {
     render(<VoiceInputSettingsTab />);
 
     await waitFor(() => {
-      expect(screen.getByText(/encrypted connection to OpenAI/)).toBeTruthy();
-      expect(screen.getByText(/not used for model training/)).toBeTruthy();
-      expect(screen.getByText(/abuse-monitoring logs for up to 30 days/)).toBeTruthy();
+      expect(screen.getByText(/OpenAI receives your audio/)).toBeTruthy();
+      expect(screen.getByText(/doesn't train on it/)).toBeTruthy();
+      expect(screen.getByText(/abuse monitoring/)).toBeTruthy();
       // Keyterms leave the machine too, so the disclosure names every source.
-      const disclosure = screen.getByText(/encrypted connection to OpenAI/).textContent ?? "";
-      expect(disclosure).toMatch(/project name/);
+      const disclosure = screen.getByText(/OpenAI receives your audio/).textContent ?? "";
+      expect(disclosure).toMatch(/up to 30 days/);
+      expect(disclosure).toMatch(/dictionary/);
+      expect(disclosure).toMatch(/project, host and worktree names/);
       expect(disclosure).toMatch(/branch/);
-      expect(disclosure).toMatch(/terminal you're dictating into/);
+      expect(disclosure).toMatch(/terminal output/);
       expect(disclosure).toMatch(/go with the audio/);
-      expect(disclosure).toMatch(/filtered out of everything except your dictionary/);
       // Where the key will live is said before it's saved, not only after.
       expect(screen.getByText(/stored locally in plain text/)).toBeTruthy();
     });
@@ -318,12 +319,13 @@ describe("VoiceInputSettingsTab", () => {
     render(<VoiceInputSettingsTab />);
 
     await waitFor(() => {
-      const disclosure = screen.getByText(/encrypted connection to Deepgram/).textContent ?? "";
-      expect(disclosure).toMatch(/project name/);
+      const disclosure = screen.getByText(/Deepgram receives your audio/).textContent ?? "";
+      expect(disclosure).toMatch(/doesn't retain streaming audio/);
+      expect(disclosure).toMatch(/dictionary/);
+      expect(disclosure).toMatch(/project, host and worktree names/);
       expect(disclosure).toMatch(/branch/);
-      expect(disclosure).toMatch(/terminal you're dictating into/);
+      expect(disclosure).toMatch(/terminal output/);
       expect(disclosure).toMatch(/go with the audio/);
-      expect(disclosure).toMatch(/filtered out of everything except your dictionary/);
     });
   });
 

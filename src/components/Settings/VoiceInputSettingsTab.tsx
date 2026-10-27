@@ -10,6 +10,8 @@ import { SettingsSection } from "./SettingsSection";
 import { VoiceDictionaryPage } from "./VoiceDictionaryPage";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { SettingsSelect } from "./SettingsSelect";
+import { CodexIcon } from "@/components/icons/brands/CodexIcon";
+import { DeepgramIcon } from "@/components/icons/brands/DeepgramIcon";
 import { MicTestRow } from "./MicTestRow";
 import { SettingsPresetGroup } from "./SettingsPresetGroup";
 import { SettingsTextarea } from "./SettingsTextarea";
@@ -50,16 +52,16 @@ const PROVIDER_NAME: Record<VoiceTranscriptionProvider, string> = {
 };
 
 const PROVIDER_OPTIONS = [
-  { value: "openai" as const, label: "OpenAI" },
-  { value: "deepgram" as const, label: "Deepgram" },
+  { value: "openai" as const, label: "OpenAI", icon: CodexIcon },
+  { value: "deepgram" as const, label: "Deepgram", icon: DeepgramIcon },
 ];
 
 const RECOGNITION_HINTS_PRIVACY =
-  "Recognition hints go with the audio: your dictionary, the project name, the names of your hosts, projects and worktrees, the worktree's branch, and identifiers from the recent output of the terminal you're dictating into. Likely keys and tokens are filtered out of everything except your dictionary.";
+  "Recognition hints go with the audio: your dictionary, project, host and worktree names, the branch, and identifiers from terminal output.";
 
 const PROVIDER_PRIVACY: Record<VoiceTranscriptionProvider, string> = {
-  openai: `Microphone audio is streamed over an encrypted connection to OpenAI for transcription using your API key. Audio is not used for model training. OpenAI may retain audio in abuse-monitoring logs for up to 30 days. ${RECOGNITION_HINTS_PRIVACY}`,
-  deepgram: `Microphone audio is streamed over an encrypted connection to Deepgram for transcription using your API key. Deepgram does not retain streaming audio or transcripts by default. ${RECOGNITION_HINTS_PRIVACY}`,
+  openai: `OpenAI receives your audio over an encrypted connection, keeps it for up to 30 days for abuse monitoring, and doesn't train on it. ${RECOGNITION_HINTS_PRIVACY}`,
+  deepgram: `Deepgram receives your audio over an encrypted connection and doesn't retain streaming audio or transcripts by default. ${RECOGNITION_HINTS_PRIVACY}`,
 };
 
 const DEFAULT_SETTINGS: VoiceInputSettings = {
@@ -521,13 +523,15 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
 
           {settings.enabled && (
             <SettingsDependents>
-              <SettingsPresetGroup
+              <SettingsSelect
                 id="voice-provider"
                 label="Transcription provider"
                 description={PROVIDER_PRIVACY[provider]}
                 options={PROVIDER_OPTIONS}
                 value={provider}
-                onChange={(v) => void update({ transcriptionProvider: v })}
+                onValueChange={(v) =>
+                  void update({ transcriptionProvider: v as VoiceTranscriptionProvider })
+                }
                 isModified={provider !== DEFAULT_SETTINGS.transcriptionProvider}
                 onReset={() =>
                   void update({ transcriptionProvider: DEFAULT_SETTINGS.transcriptionProvider })
