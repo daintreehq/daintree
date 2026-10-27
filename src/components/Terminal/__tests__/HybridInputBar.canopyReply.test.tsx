@@ -26,7 +26,8 @@ import { initBuiltInPanelKinds } from "@/panels/registry";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
 import { canopyReplyVoiceId } from "@/services/canopyReplyDictation";
 import { isolatedComposerScope } from "@/lib/draftKey";
-import { HybridInputBar } from "../HybridInputBar";
+import { HybridInputBar, type HybridInputBarHandle } from "../HybridInputBar";
+import { createRef } from "react";
 
 const WT_ID = "/repo/wt";
 
@@ -258,6 +259,36 @@ describe("HybridInputBar — Canopy's reply beside the pane's own composer", () 
       expect(host?.closest("[data-keybindings-isolated]")).not.toBeNull();
       expect(host?.closest("[data-dictation-owner]")).not.toBeNull();
     });
+  });
+
+  it("puts the caret at the end of a draft the reply hasn't shown a caret in, for dictation", async () => {
+    useTerminalInputStore
+      .getState()
+      .setDraftInput("term-1", "Context first:", isolatedComposerScope());
+    const ref = createRef<HybridInputBarHandle>();
+    const { container } = render(
+      <TooltipProvider>
+        <WorktreeStoreContext.Provider value={createWorktreeStore()}>
+          <HybridInputBar
+            ref={ref}
+            isolated
+            terminalId="term-1"
+            cwd=""
+            agentId="claude"
+            onSend={() => {}}
+            voiceTarget={REPLY}
+          />
+        </WorktreeStoreContext.Provider>
+      </TooltipProvider>
+    );
+    await act(async () => {});
+    const view = EditorView.findFromDOM(container.querySelector<HTMLElement>(".cm-editor")!)!;
+    expect(view.state.doc.toString()).toBe("Context first:");
+
+    act(() => ref.current!.focusForDictation());
+
+    expect(view.contentDOM.contains(document.activeElement)).toBe(true);
+    expect(view.state.selection.main.head).toBe("Context first:".length);
   });
 
   it("offers Escape in the reply to the reply's dictation, not the pane's", async () => {

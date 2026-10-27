@@ -500,7 +500,7 @@ export function CanopyCard({
   // and its listeners together.
   const stopHandoffRef = useRef<() => void>(() => {});
   useEffect(() => () => stopHandoffRef.current(), []);
-  const focusComposer = (): boolean => {
+  const focusComposer = (forDictation = false): boolean => {
     stopHandoffRef.current();
     // No reply here (a secret is being asked for, perhaps before the card
     // knows it): the keyboard goes to the live terminal, where it is typed,
@@ -537,7 +537,8 @@ export function CanopyCard({
     });
     const attempt = (tries: number) => {
       if (!canReplyRef.current) return stop();
-      composerRef.current?.focus();
+      if (forDictation) composerRef.current?.focusForDictation();
+      else composerRef.current?.focus();
       const landed = sectionRef.current
         ?.querySelector(".cm-editor")
         ?.contains(document.activeElement);
@@ -589,11 +590,13 @@ export function CanopyCard({
         // Already in the reply, expanded or not: there is nothing to hand over.
         const active = document.activeElement;
         if (active?.closest(".cm-editor") && active.closest(`[${DICTATION_OWNER_ATTR}]`)) return;
-        focusComposer();
+        // The words go in at the caret the reply showed, not wherever a fresh
+        // editor's focus would put it.
+        focusComposer(true);
       },
     };
   };
-  useImperativeHandle(ref, () => ({ handleKey, focusComposer, dictation }));
+  useImperativeHandle(ref, () => ({ handleKey, focusComposer: () => focusComposer(), dictation }));
 
   const agentId = isBuiltInAgentId(run.agentId) ? run.agentId : undefined;
   // The grid's chip rules: nothing while idle, and a settled agent keeps its

@@ -56,9 +56,16 @@ vi.mock("../CanopyTerminal", () => ({
 vi.mock("@/components/Terminal/HybridInputBar", async () => {
   const { useImperativeHandle } = await import("react");
   return {
-    HybridInputBar: (props: ComposerProps & { ref?: React.Ref<{ focus: () => void }> }) => {
+    HybridInputBar: (
+      props: ComposerProps & {
+        ref?: React.Ref<{ focus: () => void; focusForDictation: () => void }>;
+      }
+    ) => {
       composerProps.current = props;
-      useImperativeHandle(props.ref, () => ({ focus: composerFocus }));
+      useImperativeHandle(props.ref, () => ({
+        focus: composerFocus,
+        focusForDictation: composerFocus,
+      }));
       return <div data-testid="composer" />;
     },
   };

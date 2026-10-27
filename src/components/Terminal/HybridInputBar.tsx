@@ -149,6 +149,12 @@ import { isScratchpadElement } from "@/lib/terminalScratchpad";
 
 export interface HybridInputBarHandle {
   focus: () => void;
+  /**
+   * Focus for dictation starting here from a surface with no pane to ask
+   * through (Canopy's reply): the caret stays where the composer last showed
+   * it, else goes to the end, as a pane's does on a dictation focus (#14770).
+   */
+  focusForDictation: () => void;
   /** Returns whether an editor was mounted to take the focus. */
   focusWithCursorAtEnd: () => boolean;
   cancelPendingFocus: () => void;
@@ -1279,6 +1285,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       ref,
       () => ({
         focus: focusEditor,
+        focusForDictation: () => {
+          const view = editorViewRef.current;
+          if (!view) return;
+          if (!editorOwnsDomFocus(view)) parkUnchosenCaret(view);
+          view.focus();
+        },
         focusWithCursorAtEnd: () => {
           const view = editorViewRef.current;
           // No mounted editor (lazy CodeMirror still loading) means nothing can
