@@ -79,7 +79,7 @@ import {
   useTerminalColorSchemeStore,
   selectEffectiveTheme,
 } from "@/store/terminalColorSchemeStore";
-import { resolveInputBarColors } from "@/utils/terminalTheme";
+import { resolveInputBarColors, VOICE_LISTENING_FILL_MIX } from "@/utils/terminalTheme";
 
 import { useEditorCompartments } from "./hooks/useEditorCompartments";
 import { useAutocompleteItems } from "./hooks/useAutocompleteItems";
@@ -481,11 +481,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // delivers real audio, but the listening chrome waits for it (#13105).
     const isVoiceMicStarting =
       (isVoiceRecording || isVoiceConnecting || isVoiceReconnecting) && voiceMicSignal !== "live";
-    // Only a session the mic is feeding gets the full glow. Paused, finishing
-    // and reconnecting keep a quieter outline so they don't pass for recording.
+    // Only a session the mic is feeding gets the full glow. Every other open
+    // session (paused, finishing, reconnecting, the mic still starting) keeps a
+    // quieter outline so it doesn't pass for recording.
     const isVoiceListeningChrome =
       (isVoiceRecording || isVoiceConnecting) && voiceMicSignal === "live";
-    const isVoiceHeldChrome = isVoicePaused || isVoiceFinishing || isVoiceReconnecting;
+    const isVoiceHeldChrome =
+      isVoicePaused || isVoiceFinishing || isVoiceReconnecting || isVoiceMicStarting;
 
     const commandContext = { terminalId, cwd, projectId };
 
@@ -1693,6 +1695,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         : inputBarColors.placeholder,
       "--ib-placeholder-more": inputBarColors.placeholderMore,
       "--ib-accent": inputBarColors.accent,
+      "--ib-voice": inputBarColors.voiceSignal,
+      "--ib-voice-held": inputBarColors.voiceHeld,
       "--ib-fg": inputBarColors.foreground,
       "--ib-pane": inputBarColors.background,
       "--ib-wait-fill": inputBarColors.waitFill,
@@ -1725,7 +1729,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       : isVoiceListeningChrome
         ? {
             borderColor: `color-mix(in oklab, ${inputBarColors.accent} 60%, transparent)`,
-            backgroundColor: `color-mix(in oklab, ${inputBarColors.accent} 12%, ${inputBarColors.background})`,
+            backgroundColor: `color-mix(in oklab, ${inputBarColors.accent} ${VOICE_LISTENING_FILL_MIX}%, ${inputBarColors.background})`,
             boxShadow: `0 0 0 1px color-mix(in oklab, ${inputBarColors.accent} 35%, transparent), 0 0 16px color-mix(in oklab, ${inputBarColors.accent} 15%, transparent)`,
           }
         : isVoiceHeldChrome
@@ -1953,14 +1957,16 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 they sit, and they sit at the same x either way. `bottom-2` is
                 the shell's own foot padding, so in every arrangement they are
                 centred on the bottom row and never move relative to the pane
-                foot. `right-0.5` sets the last glyph's ink about 9px in from
-                the border, mirroring the `❯`'s inset on the left.
+                foot. `right-2` matches it on the other edge: a recording
+                session fills the mic's 24px circle, and that circle sits as
+                far from the right border as from the top and bottom, so the
+                corner stays even in every state.
 
                 Content-sized, so the width `useComposerMeasure` reads is the
                 buttons' and nothing else. */}
             <div
               ref={trailingGroupRef}
-              className="absolute right-0.5 bottom-2 flex shrink-0 items-center"
+              className="absolute right-2 bottom-2 flex shrink-0 items-center"
             >
               {/* One control in both modes. In a remote window it opens a
                   menu, since a file can come from this machine or the host;

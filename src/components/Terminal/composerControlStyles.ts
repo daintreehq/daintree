@@ -29,10 +29,10 @@ export const COMPOSER_CONTROL_HOVER_BG_CLASS =
 
 /**
  * Outline only — no colour change — so a control carrying a status colour (the
- * mic in its error state) keeps it under keyboard focus. Inset, so it survives
- * the mic's `contain: strict` wrapper, which clips anything painted outside its
- * 24px box. Drawn on the control itself so a Tab onto one reads as that control
- * and not the editor beside it.
+ * mic in its error state) keeps it under keyboard focus. Inset, because the
+ * trailing controls sit edge to edge and an outward ring would paint over the
+ * neighbour. Drawn on the control itself so a Tab onto one reads as that
+ * control and not the editor beside it.
  */
 export const COMPOSER_CONTROL_FOCUS_CLASS =
   "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[color-mix(in_oklab,var(--ib-fg)_60%,var(--ib-bg))]";

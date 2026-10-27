@@ -242,15 +242,18 @@ describe("VoiceInputButton", () => {
     expect(getByRole("button").className).not.toContain("text-activity-waiting");
   });
 
-  it("swaps the stop glyph for a spinner while reconnecting", () => {
+  it("holds the stop glyph and spins the wait ring, not the orbit, while reconnecting", () => {
     useVoiceRecordingStore.setState({
       isConfigured: true,
       status: "reconnecting",
       micSignal: "live",
       activeTarget: { panelId: "panel-1" } as never,
     });
-    const { getByRole } = render(<VoiceInputButton panelId="panel-1" />);
-    expect(getByRole("button").querySelector(".status-mark")).toBeNull();
+    const { container, getByRole } = render(<VoiceInputButton panelId="panel-1" />);
+    // A click still stops a reconnecting session, so the glyph stays Stop.
+    expect(getByRole("button").querySelector(".status-mark")).not.toBeNull();
+    expect(container.querySelector('[data-voice-ring="wait"]')).not.toBeNull();
+    expect(container.querySelector('[data-voice-ring="orbit"]')).toBeNull();
   });
 
   it("warns in the tooltip when the paused session is about to auto-stop", async () => {
