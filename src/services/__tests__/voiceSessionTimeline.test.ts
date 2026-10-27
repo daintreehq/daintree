@@ -200,6 +200,26 @@ describe("VoiceSessionTimeline", () => {
     });
   });
 
+  it("counts the chunks cleaned while the session ran apart from the stop-time pass", () => {
+    const t = timeline();
+    t.noteCorrectionChunk();
+    t.noteCorrectionChunk();
+    t.mark("stopRequested");
+    t.beginCorrection();
+    t.finish("user");
+    clock = 1_600;
+    t.endCorrection("applied");
+    t.noteCorrectionChunk();
+    expect(logged()).toMatchObject({ correctionChunks: 2, correctionMs: 600 });
+  });
+
+  it("reports no chunks for a session that never sent one", () => {
+    const t = timeline();
+    t.mark("stopRequested");
+    t.finish("user");
+    expect(logged()).toMatchObject({ correctionChunks: 0, correction: "none", correctionMs: null });
+  });
+
   it("splits the correction into main's preparation, the round trip and applying it", () => {
     const t = timeline();
     t.mark("stopRequested");

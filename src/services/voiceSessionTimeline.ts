@@ -63,6 +63,7 @@ export class VoiceSessionTimeline {
   private correctionApplyMs: number | null = null;
   private correction: "none" | VoiceCorrectionOutcome = "none";
   private correctionPassages: VoiceCorrectionPassages = countPassageFates([]);
+  private correctionChunks = 0;
   private droppedQueued = 0;
   private charsCommitted = 0;
   private heardSignal = false;
@@ -151,6 +152,11 @@ export class VoiceSessionTimeline {
     const parsed = VoiceSessionReportSchema.safeParse(report);
     this.backend = { state: "ended", reason, report: parsed.success ? parsed.data : null };
     this.tryLog();
+  }
+
+  /** A chunk of the dictation went to cleanup while it ran. */
+  noteCorrectionChunk(): void {
+    if (!this.done) this.correctionChunks++;
   }
 
   beginCorrection(): void {
@@ -281,6 +287,7 @@ export class VoiceSessionTimeline {
       correctionApplyMs: roundMs(this.correctionApplyMs),
       correction: this.correction,
       correctionPassages: this.correctionPassages,
+      correctionChunks: this.correctionChunks,
       droppedQueued: this.droppedQueued,
       charsCommitted: this.charsCommitted,
       audioNoText: this.heardSignal && this.charsCommitted === 0,

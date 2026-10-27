@@ -77,6 +77,7 @@ const summary: VoiceSessionSummary = {
     dropped: 0,
     unlanded: 0,
   },
+  correctionChunks: 2,
   droppedQueued: 0,
   charsCommitted: 42,
   audioNoText: false,
