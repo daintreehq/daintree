@@ -40,6 +40,15 @@ export interface VoiceRecordingTarget {
   worktreeLabel?: string;
   /** Set when this session records a rewrite instruction instead of dictation. */
   rewrite?: VoiceRewriteRequest;
+  /**
+   * Canopy's reply box, rather than a pane: `panelId` is the reply's own
+   * dictation id (`canopyReplyVoiceId`), with no project, and names no panel.
+   */
+  surface?: "canopy-reply";
+  /** The reply's terminal on this machine, for main to read context from; absent for another host's. */
+  terminalId?: string;
+  /** The reply types to a terminal on this host, not the window's. */
+  otherHostId?: string;
 }
 
 /**
@@ -815,6 +824,8 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
 
       recordRecentTarget: (target) =>
         set((state) => {
+          // The list recalls panes; a Canopy reply is one only while its row is selected.
+          if (target.surface === "canopy-reply") return state;
           const entry: RecentDictationTarget = {
             panelId: target.panelId,
             panelTitle: target.panelTitle,

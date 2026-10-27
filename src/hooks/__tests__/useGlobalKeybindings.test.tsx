@@ -209,6 +209,48 @@ describe("useGlobalKeybindings — isolated surfaces", () => {
       surface.remove();
     }
   });
+
+  function pressDictationIn(ownsDictation: boolean, html: string) {
+    mocks.keybindingService.getEffectiveCombo.mockImplementation((id: string) =>
+      id === "voiceInput.toggle" ? "Cmd+D" : undefined
+    );
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: { actionId: "voiceInput.toggle" },
+      chordPrefix: false,
+      shouldConsume: true,
+    });
+    render(<Host />);
+    const owner = document.createElement("section");
+    if (ownsDictation) owner.setAttribute("data-dictation-owner", "");
+    const surface = document.createElement("div");
+    surface.setAttribute("data-keybindings-isolated", "");
+    surface.innerHTML = html;
+    owner.appendChild(surface);
+    document.body.appendChild(owner);
+    try {
+      pressIn(surface.querySelector("textarea")!, { key: "d", code: "KeyD", metaKey: true });
+    } finally {
+      owner.remove();
+    }
+  }
+
+  it.each([
+    ["its live terminal", '<div class="xterm"><textarea></textarea></div>'],
+    ["its reply", '<div class="cm-editor"><textarea></textarea></div>'],
+  ])("lets the dictation key through from %s, for Canopy to route", (_where, html) => {
+    pressDictationIn(true, html);
+    expect(mocks.actionService.dispatch).toHaveBeenCalledWith(
+      "voiceInput.toggle",
+      undefined,
+      expect.anything()
+    );
+  });
+
+  it("keeps the dictation key out of an isolated surface that doesn't route it", () => {
+    pressDictationIn(false, '<div class="cm-editor"><textarea></textarea></div>');
+    expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+    expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+  });
 });
 
 describe("useGlobalKeybindings — Cmd+W in a surface that owns its close", () => {

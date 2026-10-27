@@ -9,3 +9,15 @@
 export function makeDraftKey(terminalId: string, projectId?: string): string {
   return projectId ? `${projectId}:${terminalId}` : terminalId;
 }
+
+const ISOLATED_COMPOSER_SCOPE = "isolated-composer";
+
+/**
+ * The draft and history scope of an isolated composer, apart from every
+ * project's; a terminal on another host keeps that host's apart from this one's.
+ */
+export function isolatedComposerScope(otherHostId?: string): string {
+  return otherHostId !== undefined
+    ? `${ISOLATED_COMPOSER_SCOPE}:${otherHostId}`
+    : ISOLATED_COMPOSER_SCOPE;
+}
