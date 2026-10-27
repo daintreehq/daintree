@@ -1886,15 +1886,13 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
   // which takes no commands. Telling needs no discovery scan. A host's pane
   // takes the commands the host found as the stop landed, or, when it didn't
   // answer, those found at the start.
-  const currentCommandTarget = async (
-    prep: CorrectionPrep,
-    terminalId: string | undefined
-  ): Promise<VoiceCommandTarget | null> => {
+  const currentCommandTarget = async (prep: CorrectionPrep): Promise<VoiceCommandTarget | null> => {
     const hostPane = hostPaneFor(prep.projectId, prep.outsideView);
     if (hostPane) {
       const [target, read] = await Promise.all([prep.commandTarget, readHostStop(prep, hostPane)]);
       return read ? read.commandTarget : target;
     }
+    const { terminalId } = resolveKeytermTarget(prep.projectId, prep.terminalId, deps.ptyClient);
     const [target, agentId] = await Promise.all([
       prep.commandTarget,
       readVoiceCommandAgent(deps.ptyClient, terminalId, COMMAND_TARGET_START_BUDGET_MS),
@@ -1984,15 +1982,10 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     let terminalOutput: string | null;
     let knownNames: string[];
     if (prep) {
-      const { terminalId } = resolveKeytermTarget(
-        ctx.projectId,
-        request.terminalId,
-        deps.ptyClient
-      );
       [projectInfo, vocabulary, commandTarget, terminalOutput] = await Promise.all([
         prep.projectInfo,
         prep.vocabulary,
-        currentCommandTarget(prep, terminalId),
+        currentCommandTarget(prep),
         prep.terminalOutput ?? readStopOutput(prep),
       ]);
       knownNames = outsideView ? [] : prep.names.names;

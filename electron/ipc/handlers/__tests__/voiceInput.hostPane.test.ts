@@ -27,6 +27,7 @@ const shared = vi.hoisted(() => ({
     settings: Record<string, unknown>;
   }>,
   rewriteCalls: [] as Array<Record<string, unknown>>,
+  warmCalls: [] as Array<Record<string, unknown>>,
   detected: [] as Array<{ description: string }>,
   projects: new Map<number, string>(),
 }));
@@ -67,6 +68,11 @@ vi.mock("../../../services/VoiceCorrectionService.js", () => ({
       return Promise.resolve({ status: "rewritten", text: "done" });
     };
     this.detectFileLinkTokens = () => Promise.resolve(shared.detected);
+    this.warm = (settings: Record<string, unknown>) => {
+      shared.warmCalls.push(settings);
+      return Promise.resolve();
+    };
+    this.preconnect = () => {};
   },
 }));
 
@@ -191,12 +197,20 @@ function getHandler(channel: string) {
 }
 
 let nextSession = 1;
-function start(sender: FakeSender, terminalId: string | undefined = TERMINAL) {
+function start(
+  sender: FakeSender,
+  terminalId: string | undefined = TERMINAL,
+  sessionId = `session-${nextSession++}`
+) {
   return getHandler(CHANNELS.VOICE_INPUT_START)(
     { sender },
-    `session-${nextSession++}`,
+    sessionId,
     terminalId ? { terminalId } : undefined
   );
+}
+
+function stop(sender: FakeSender, sessionId: string) {
+  return getHandler(CHANNELS.VOICE_INPUT_STOP)({ sender }, sessionId);
 }
 
 function emitComplete(text: string) {
@@ -256,6 +270,7 @@ describe("voiceInput — dictating into a host's pane", () => {
     shared.listeners = [];
     shared.correctCalls = [];
     shared.rewriteCalls = [];
+    shared.warmCalls = [];
     shared.detected = [];
     shared.projects.clear();
     view = makeSender();
@@ -338,6 +353,62 @@ describe("voiceInput — dictating into a host's pane", () => {
       knownNames: ["feature-voice-hosts"],
     });
     expect(settings.customDictionary).toEqual(expect.arrayContaining(["Zustand", "Wispr"]));
+    expectNoLocalReads();
+  });
+
+  it("cleans up a stopped dictation with what its host gave at the start and the stop", async () => {
+    await start(view, TERMINAL, "prepared");
+    await stop(view, "prepared");
+    const result = await getHandler(CHANNELS.VOICE_INPUT_CORRECT)(
+      { sender: view },
+      { rawText: "fix the zoo stand store", terminalId: TERMINAL, sessionId: "prepared" }
+    );
+    expect(result).toMatchObject({ action: "no_change" });
+    expect(reader.readProject).toHaveBeenCalledWith(HOST, PROJECT, expect.anything());
+    // Read once, as the stop landed, and not again for the passage.
+    expect(reader.readCorrection).toHaveBeenCalledTimes(1);
+    expect(reader.readCorrection).toHaveBeenCalledWith(
+      HOST,
+      { projectId: PROJECT, terminalId: TERMINAL },
+      expect.objectContaining({ timeoutMs: 1500 })
+    );
+    const [{ request, settings }] = shared.correctCalls;
+    expect(request.terminalOutput).toBe(CORRECTION.terminalOutput);
+    expect(settings).toMatchObject({
+      projectName: "Daintree",
+      projectPath: "/home/greg/daintree",
+      commandTarget: COMMAND_TARGET,
+      knownNames: ["feature-voice-hosts"],
+    });
+    expect(settings.customDictionary).toEqual(expect.arrayContaining(["Zustand", "Wispr"]));
+    // The prompt warmed while it ran is the one the passage sends.
+    expect(shared.warmCalls[0]).toEqual(settings);
+    expectNoLocalReads();
+  });
+
+  it("drops a prepared dictation's commands once the host's agent has gone by the stop", async () => {
+    reader.readCorrection.mockResolvedValueOnce({ ...CORRECTION, commandTarget: null });
+    await start(view, TERMINAL, "agent-gone");
+    await stop(view, "agent-gone");
+    await getHandler(CHANNELS.VOICE_INPUT_CORRECT)(
+      { sender: view },
+      { rawText: "compact it", terminalId: TERMINAL, sessionId: "agent-gone" }
+    );
+    expect(shared.correctCalls[0]?.settings.commandTarget).toBeUndefined();
+    expectNoLocalReads();
+  });
+
+  it("keeps a prepared dictation's start commands when the host doesn't answer at the stop", async () => {
+    reader.readCorrection.mockResolvedValueOnce(null);
+    await start(view, TERMINAL, "stop-unanswered");
+    await stop(view, "stop-unanswered");
+    await getHandler(CHANNELS.VOICE_INPUT_CORRECT)(
+      { sender: view },
+      { rawText: "compact it", terminalId: TERMINAL, sessionId: "stop-unanswered" }
+    );
+    const [{ request, settings }] = shared.correctCalls;
+    expect(settings.commandTarget).toEqual(COMMAND_TARGET);
+    expect(request.terminalOutput).toBeUndefined();
     expectNoLocalReads();
   });
 
