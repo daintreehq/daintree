@@ -442,21 +442,16 @@ export function useTokenResolution({
         const authored = options?.compose ? options.compose(text) : text;
         latest.addToHistory(latest.terminalId, authored, latest.projectId);
         // Apart from recall history, which reorders repeats: cleanup reads the
-        // sends to this terminal in the order they went, and only once the
-        // terminal has taken one.
+        // sends to this terminal in the order they went, so this one is noted
+        // as it goes and taken back if the terminal turns it down.
         const destination = latest.terminalId;
-        const sentAt = Date.now();
-        const recordSent = () =>
-          useTerminalInputStore.getState().recordSentPrompt(destination, authored, sentAt);
-        if (accepted instanceof Promise) {
-          void accepted.then(
-            (ok) => {
-              if (ok) recordSent();
-            },
-            () => {}
-          );
-        } else {
-          recordSent();
+        const seq = useTerminalInputStore.getState().recordSentPrompt(destination, authored);
+        if (seq !== null && accepted instanceof Promise) {
+          const retract = () =>
+            useTerminalInputStore.getState().retractSentPrompt(destination, seq);
+          void accepted.then((ok) => {
+            if (!ok) retract();
+          }, retract);
         }
         latest.resetHistoryIndex(latest.terminalId, latest.projectId);
         if (latest.projectId) {

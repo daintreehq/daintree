@@ -62,6 +62,18 @@ describe("terminalInputStore", () => {
       );
     });
 
+    it("takes back one send, leaving the rest and the count where they were", () => {
+      const store = useTerminalInputStore.getState();
+      const seqs = ["one", "two", "three"].map((text) => store.recordSentPrompt("term-1", text));
+      expect(seqs).toEqual([0, 1, 2]);
+      expect(store.recordSentPrompt("term-1", "   ")).toBeNull();
+
+      useTerminalInputStore.getState().retractSentPrompt("term-1", 1);
+      useTerminalInputStore.getState().retractSentPrompt("term-1", 9);
+      expect(texts("term-1")).toEqual(["one", "three"]);
+      expect(useTerminalInputStore.getState().recordSentPrompt("term-1", "four")).toBe(3);
+    });
+
     it("keeps only the opening of a long prompt, never half a surrogate pair", () => {
       const store = useTerminalInputStore.getState();
       const opening = "x".repeat(VOICE_RECENT_PROMPT_MAX_CHARS - 2);

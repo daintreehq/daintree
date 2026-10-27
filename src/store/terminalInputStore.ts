@@ -164,8 +164,13 @@ export interface TerminalInputState {
   popStashedEditorState: (terminalId: string, projectId?: string) => EditorState | undefined;
   hasStashedEditorState: (terminalId: string, projectId?: string) => boolean;
   addToHistory: (terminalId: string, command: string, projectId?: string) => void;
-  /** Notes a prompt sent to `terminalId`, as written, for its dictations' cleanup. */
-  recordSentPrompt: (terminalId: string, text: string, sentAt?: number) => void;
+  /**
+   * Notes a prompt sent to `terminalId`, as written, for its dictations'
+   * cleanup. Returns its place in the terminal's sends, null for a blank one.
+   */
+  recordSentPrompt: (terminalId: string, text: string, sentAt?: number) => number | null;
+  /** Takes back a send the terminal turned down. */
+  retractSentPrompt: (terminalId: string, seq: number) => void;
   getSentPrompts: (terminalId: string) => readonly SentPrompt[];
   navigateHistory: (
     terminalId: string,
@@ -371,13 +376,13 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
       };
     }),
 
-  recordSentPrompt: (terminalId, text, sentAt = Date.now()) =>
+  recordSentPrompt: (terminalId, text, sentAt = Date.now()) => {
+    const trimmed = text.trim();
+    if (trimmed === "") return null;
+    const key = sentPromptKey(terminalId);
+    const existing = get().sentPrompts.get(key) ?? [];
+    const seq = (existing[existing.length - 1]?.seq ?? -1) + 1;
     set((state) => {
-      const trimmed = text.trim();
-      if (trimmed === "") return state;
-      const key = sentPromptKey(terminalId);
-      const existing = state.sentPrompts.get(key) ?? [];
-      const seq = (existing[existing.length - 1]?.seq ?? -1) + 1;
       const next = new Map(state.sentPrompts);
       // Re-inserted, so the map's first key is the terminal sent to longest ago.
       next.delete(key);
@@ -388,6 +393,21 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
         )
       );
       if (next.size > MAX_SENT_PROMPT_TERMINALS) next.delete(next.keys().next().value!);
+      return { sentPrompts: next };
+    });
+    return seq;
+  },
+
+  retractSentPrompt: (terminalId, seq) =>
+    set((state) => {
+      const key = sentPromptKey(terminalId);
+      const existing = state.sentPrompts.get(key);
+      if (!existing?.some((prompt) => prompt.seq === seq)) return state;
+      const next = new Map(state.sentPrompts);
+      next.set(
+        key,
+        existing.filter((prompt) => prompt.seq !== seq)
+      );
       return { sentPrompts: next };
     }),
 

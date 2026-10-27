@@ -225,7 +225,13 @@ describe("executeFleetBroadcast", () => {
       };
       useFleetArmingStore.setState({
         crossHostTargets: [
-          { key: REMOTE, hostId: "host-2" as never, hostName: "Studio", terminalId: "t9", title: "t9" },
+          {
+            key: REMOTE,
+            hostId: "host-2" as never,
+            hostName: "Studio",
+            terminalId: "t9",
+            title: "t9",
+          },
         ],
       });
     });

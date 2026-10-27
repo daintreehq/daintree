@@ -293,9 +293,7 @@ export async function executeFleetBroadcast(
         // that makes the blue indicator render fleet-wide. Real payload
         // (not "") preserves Phase 2 escalation for large pastes — see #3565.
         for (const r of batch) noteUserInput(r.terminalId, r.payload);
-        const batchResults = await Promise.allSettled(
-          batch.map((r) => submitAndNote(r, retry))
-        );
+        const batchResults = await Promise.allSettled(batch.map((r) => submitAndNote(r, retry)));
         for (let j = 0; j < batchResults.length; j += 1) {
           const r = batchResults[j]!;
           results.push(r);
@@ -324,9 +322,7 @@ export async function executeFleetBroadcast(
       dispatchedCount = resolved.length;
       // Same ordering rule as the batched path — see comment above.
       for (const r of resolved) noteUserInput(r.terminalId, r.payload);
-      const all = await Promise.allSettled(
-        resolved.map((r) => submitAndNote(r, retry))
-      );
+      const all = await Promise.allSettled(resolved.map((r) => submitAndNote(r, retry)));
       for (let j = 0; j < all.length; j += 1) {
         const r = all[j]!;
         results.push(r);

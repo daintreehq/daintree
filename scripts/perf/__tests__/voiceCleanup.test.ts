@@ -1255,26 +1255,29 @@ describe("rescore", () => {
       usage: ReturnType<typeof billed>
     ) => ({ ...saved(variant, caseId, landed, "high", usage), repeat });
     const fixedZustand = "The Zustand selector in the worktree store needs useShallow.";
-    const file = writeRun(
-      "prompts.json",
-      [codex, zustand, prompted(codex), prompted(zustand)],
-      [
-        trial(TERRA, "codex", "Ask codecs to review the diff.", 1, billed(3_000, 2_944, 0.0003)),
-        trial(TERRA, "codex-prompts", codex.reference, 1, billed(3_100, 2_944, 0.0004)),
-        trial(TERRA, "zustand", zustand.raw, 1, billed(3_000, 2_944, 0.0003)),
-        trial(TERRA, "zustand-prompts", fixedZustand, 1, billed(3_100, 3_072, 0.0002)),
-        // A repeat only one side ran isn't compared.
-        trial(TERRA, "codex-prompts", codex.reference, 2, billed(3_100, 3_072, 0.0001)),
-        trial(LUNA, "codex", codex.reference, 1, billed(3_000, 2_944, 0.00003)),
-        trial(LUNA, "codex-prompts", codex.reference, 1, billed(3_100, 2_944, 0.00004)),
-      ]
-    );
-    const { run, corpus } = rescore(file, null, [
-      codex,
-      zustand,
-      prompted(codex),
-      prompted(zustand),
+    // Clean: kept as it was with the prompts, broken without them by a swap
+    // the guard lets through (a dropped negation it would refuse).
+    const merge = makeCase({
+      id: "merge",
+      raw: "Merge it into develop, not main.",
+      reference: "Merge it into develop, not main.",
+      fixes: {},
+      drops: [],
+    });
+    const passages = [codex, zustand, merge, prompted(codex), prompted(zustand), prompted(merge)];
+    const file = writeRun("prompts.json", passages, [
+      trial(TERRA, "merge", "Merge it into deploy, not main.", 1, billed(3_000, 2_944, 0.0003)),
+      trial(TERRA, "merge-prompts", merge.raw, 1, billed(3_000, 2_944, 0.0003)),
+      trial(TERRA, "codex", "Ask codecs to review the diff.", 1, billed(3_000, 2_944, 0.0003)),
+      trial(TERRA, "codex-prompts", codex.reference, 1, billed(3_100, 2_944, 0.0004)),
+      trial(TERRA, "zustand", zustand.raw, 1, billed(3_000, 2_944, 0.0003)),
+      trial(TERRA, "zustand-prompts", fixedZustand, 1, billed(3_100, 3_072, 0.0002)),
+      // A repeat only one side ran isn't compared.
+      trial(TERRA, "codex-prompts", codex.reference, 2, billed(3_100, 3_072, 0.0001)),
+      trial(LUNA, "codex", codex.reference, 1, billed(3_000, 2_944, 0.00003)),
+      trial(LUNA, "codex-prompts", codex.reference, 1, billed(3_100, 2_944, 0.00004)),
     ]);
+    const { run, corpus } = rescore(file, null, passages);
     const section = renderReport(run, corpus)
       .split("## With and without recent prompts")[1]!
       .split("\n## ")[0]!;
@@ -1286,23 +1289,23 @@ describe("rescore", () => {
         .slice(2);
     // Trials, misreads, clean kept, risky, mean input, cached, writes, per cleanup.
     expect(row(TERRA, "with")).toEqual([
-      "2",
+      "3",
       "100.0%",
-      "0/0",
+      "1/1",
       "0",
-      "3100",
-      "97.0%",
-      "184",
+      "3067",
+      "97.4%",
+      "240",
       "$0.00030 |",
     ]);
     expect(row(TERRA, "without")).toEqual([
-      "2",
+      "3",
       "0.0%",
-      "0/0",
-      "0",
+      "0/1",
+      "1",
       "3000",
       "98.1%",
-      "112",
+      "168",
       "$0.00030 |",
     ]);
     expect(row(LUNA, "with")?.slice(0, 2)).toEqual(["1", "100.0%"]);

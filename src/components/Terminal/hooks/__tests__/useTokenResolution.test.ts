@@ -553,7 +553,7 @@ describe("useTokenResolution.sendText — targeted submit", () => {
       useTerminalInputStore.setState({ sentPrompts: new Map() });
     });
 
-    it("records a send as written, composed, once the terminal takes it", async () => {
+    it("records a send as written, composed, as it goes", async () => {
       let take!: (ok: boolean) => void;
       const { sendText, onSend } = setup();
       onSend.mockReturnValue(new Promise<boolean>((resolve) => (take = resolve)));
@@ -561,22 +561,47 @@ describe("useTokenResolution.sendText — targeted submit", () => {
       await act(async () => {
         await sendText("review @diff for Terra", { compose: (draft) => `${draft} and log it` });
       });
-      expect(sent()).toEqual([]);
+      expect(sent()).toEqual(["review @diff for Terra and log it"]);
 
       await act(async () => take(true));
       expect(sent()).toEqual(["review @diff for Terra and log it"]);
     });
 
-    it("records nothing the terminal or a submit turned down", async () => {
+    it("keeps sends in the order they went, whichever the terminal answers first", async () => {
+      const takes: Array<(ok: boolean) => void> = [];
       const { sendText, onSend } = setup();
-      onSend.mockResolvedValueOnce(false).mockRejectedValueOnce(new Error("gone"));
+      onSend.mockImplementation(() => new Promise<boolean>((resolve) => takes.push(resolve)));
 
       await act(async () => {
-        await sendText("refused by the pane");
+        await sendText("first");
       });
       await act(async () => {
-        await sendText("lost on the way");
+        await sendText("second");
       });
+      await act(async () => takes[1]!(true));
+      await act(async () => takes[0]!(true));
+
+      expect(sent()).toEqual(["first", "second"]);
+      expect(
+        useTerminalInputStore
+          .getState()
+          .getSentPrompts("t1")
+          .map((prompt) => prompt.seq)
+      ).toEqual([0, 1]);
+    });
+
+    it("takes back what the terminal turned down, and never notes a refused submit", async () => {
+      const { sendText, onSend } = setup();
+      onSend
+        .mockResolvedValueOnce(true)
+        .mockResolvedValueOnce(false)
+        .mockRejectedValueOnce(new Error("gone"));
+
+      for (const text of ["landed", "refused by the pane", "lost on the way"]) {
+        await act(async () => {
+          await sendText(text);
+        });
+      }
       await act(async () => {
         await sendText("never went", { submit: vi.fn().mockResolvedValue(false) });
       });
@@ -584,7 +609,7 @@ describe("useTokenResolution.sendText — targeted submit", () => {
         await sendText("submitted", { submit: vi.fn().mockResolvedValue(true) });
       });
 
-      expect(sent()).toEqual(["submitted"]);
+      expect(sent()).toEqual(["landed", "submitted"]);
     });
 
     it("records a send whose handler says nothing about taking it", async () => {
