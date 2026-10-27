@@ -4044,6 +4044,7 @@ export interface GeneratedIpcInvokeMap {
             terminalId?: string | undefined;
             intent?: "rewrite" | "dictation" | undefined;
             outsideView?: true | undefined;
+            workspaceName?: string | undefined;
           }
         | undefined,
     ];
