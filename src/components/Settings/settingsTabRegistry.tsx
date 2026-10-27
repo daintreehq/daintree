@@ -1675,7 +1675,7 @@ export const SETTINGS_REGISTRY = [
         id: "voice-provider",
         section: "Speech-to-text",
         title: "Transcription provider",
-        description: "Choose OpenAI or Deepgram to transcribe your microphone audio",
+        description: "Choose which provider transcribes your microphone audio",
         keywords: ["provider", "openai", "deepgram", "stt", "privacy", "audio"],
         requiresEnabled: VOICE_REQUIRES_ENABLED,
       },
