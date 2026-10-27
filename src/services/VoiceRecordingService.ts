@@ -603,7 +603,8 @@ class VoiceRecordingService {
   private isStoppingSession = false;
   private stopPromise: Promise<void> | null = null;
   // The stop in flight is the user's own (the key, a second press), and
-  // nothing has joined it since: a "send it" its drain lands still sends.
+  // nothing has joined it or started since: a "send it" its drain lands still
+  // sends.
   private stopTakesSpokenSend = false;
   private levelRaf: number | null = null;
   private pendingLevel = 0;
@@ -1792,8 +1793,10 @@ class VoiceRecordingService {
   async start(target: VoiceRecordingTarget): Promise<void> {
     this.initialize();
     this.releasePendingCapture();
-    // A newer start in this view replaces one still under way.
+    // A newer start in this view replaces one still under way, and a send the
+    // dictation still finishing lands isn't the user's last word any more.
     this.attemptTimeline?.finish("retarget");
+    this.stopTakesSpokenSend = false;
     const startRequestId = ++this.startRequestId;
     const sessionId = crypto.randomUUID();
     const timeline = this.openTimeline(sessionId, target);
@@ -4360,15 +4363,16 @@ class VoiceRecordingService {
 
   // A stop is the surest end of speech there is, so a send its drain lands goes
   // through Enter's wait like one heard mid-dictation (#14803), when the stop
-  // is the user's own and no press has come since: Escape, a retarget, Enter or
-  // a timeout must not get a send nobody asked for, and joining the stop would
-  // cancel a newer start. A stopping session is never stopped a second time.
+  // is the user's own and nothing joined it or started since: Escape, a
+  // retarget, Enter or a timeout must not get a send nobody asked for, and
+  // joining the stop would cancel a newer start. A stopping session is never
+  // stopped a second time.
   private handleSpokenSend(panelId: string, projectId: string | undefined): void {
     const voiceState = useVoiceRecordingStore.getState();
     if (voiceState.activeTarget?.panelId !== panelId) return;
     const stopping = voiceState.status === "finishing";
     if (stopping) {
-      if (!this.stopTakesSpokenSend || voiceState.pendingTarget || this.liveStartup()) return;
+      if (!this.stopTakesSpokenSend) return;
     } else if (voiceState.status !== "recording") {
       return;
     }

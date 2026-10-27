@@ -308,32 +308,28 @@ describe("VoiceRecordingService — spoken send (#14633)", () => {
       await joined;
     });
 
-    it("ignores the send once a press has started the next dictation", async () => {
-      const { voiceRecordingService, useVoiceRecordingStore, stop, finish } =
-        await stopping("key_release");
-      const handler = vi.fn();
-      voiceRecordingService.onSpokenSend(PANEL_ID, undefined, handler);
-      useVoiceRecordingStore.getState().setArming({ panelId: PANEL_ID });
+    it.each([PANEL_ID, "panel-2"])(
+      "ignores the send once the next dictation has started, on %s",
+      async (panelId) => {
+        const { voiceRecordingService, stop, finish } = await stopping("key_release");
+        const handler = vi.fn();
+        voiceRecordingService.onSpokenSend(PANEL_ID, undefined, handler);
+        // Not awaited: the start waits on the stop, and this one can't finish.
+        void voiceRecordingService.start({ panelId }).catch(() => {});
+
+        complete("fix the login bug", "item-a", true);
+
+        expect(handler).not.toHaveBeenCalled();
+        expect(stop).not.toHaveBeenCalled();
+        await finish();
+      }
+    );
+
+    it("takes no send the stop's drain lands when no composer shows the panel", async () => {
+      const { stop, finish } = await stopping("key_release");
 
       complete("fix the login bug", "item-a", true);
 
-      expect(handler).not.toHaveBeenCalled();
-      expect(stop).not.toHaveBeenCalled();
-      await finish();
-    });
-
-    it("ignores the send once a retry has started the next dictation", async () => {
-      const { voiceRecordingService, stop, finish } = await stopping("key_release");
-      const handler = vi.fn();
-      voiceRecordingService.onSpokenSend(PANEL_ID, undefined, handler);
-      vi.spyOn(
-        voiceRecordingService as unknown as { liveStartup: () => unknown },
-        "liveStartup"
-      ).mockReturnValue({});
-
-      complete("fix the login bug", "item-a", true);
-
-      expect(handler).not.toHaveBeenCalled();
       expect(stop).not.toHaveBeenCalled();
       await finish();
     });
@@ -356,6 +352,21 @@ describe("VoiceRecordingService — spoken send (#14633)", () => {
       const handler = vi.fn();
       voiceRecordingService.onSpokenSend(PANEL_ID, undefined, handler);
       await finish();
+
+      complete("fix the login bug", "item-a", true);
+
+      expect(handler).not.toHaveBeenCalled();
+      expect(stop).not.toHaveBeenCalled();
+    });
+
+    it("leaves the next session's finishing without the last stop's say", async () => {
+      const { voiceRecordingService, useVoiceRecordingStore, stop, finish } =
+        await stopping("key_release");
+      const handler = vi.fn();
+      voiceRecordingService.onSpokenSend(PANEL_ID, undefined, handler);
+      await finish();
+      useVoiceRecordingStore.getState().beginSession({ panelId: PANEL_ID });
+      useVoiceRecordingStore.getState().setStatus("finishing");
 
       complete("fix the login bug", "item-a", true);
 

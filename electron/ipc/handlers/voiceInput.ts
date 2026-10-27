@@ -1596,8 +1596,11 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           releaseHeldSend(session, "literal");
           return;
         case "error":
-          // Ahead of the error itself, which ends the renderer's dictation.
-          if (voiceEvent.error.severity === "fatal") releaseHeldSend(session, "strip");
+          // Ahead of the error itself, which ends the renderer's dictation. A
+          // drain that reports one may not have heard the speaker out.
+          if (voiceEvent.error.severity === "fatal" || session.phase === "stopping") {
+            releaseHeldSend(session, "strip");
+          }
           return;
         case "status":
           // A stop's drain ending with the send still held confirms it; a
@@ -1624,7 +1627,10 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         session.flushUtterance?.("literal");
       } else if (voiceEvent.type === "paragraph_boundary") {
         session.flushUtterance?.("literal");
-      } else if (voiceEvent.type === "error" && voiceEvent.error.severity === "fatal") {
+      } else if (
+        voiceEvent.type === "error" &&
+        (voiceEvent.error.severity === "fatal" || session.phase === "stopping")
+      ) {
         session.flushUtterance?.("literal");
       } else if (voiceEvent.type === "status") {
         if (voiceEvent.status === "idle" && session.phase === "stopping") {
@@ -1706,6 +1712,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           {
             endOfSpeech: voiceEvent.endOfSpeech === true,
             endsAtPause: voiceEvent.endsAtPause === true,
+            // OpenAI retires its VAD at a stop, so what it drains can't end
+            // speech; a pause can still close a send.
+            stopping: session.phase === "stopping",
           },
           commandOptions()
         );

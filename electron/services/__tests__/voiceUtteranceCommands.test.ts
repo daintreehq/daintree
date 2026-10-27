@@ -13,6 +13,7 @@ import { getAgentConfig } from "../../../shared/config/agentRegistry.js";
 const CUT: UtteranceBoundary = { endOfSpeech: false, endsAtPause: false };
 const PAUSE: UtteranceBoundary = { endOfSpeech: false, endsAtPause: true };
 const END: UtteranceBoundary = { endOfSpeech: true, endsAtPause: false };
+const STOPPING_PAUSE: UtteranceBoundary = { ...PAUSE, stopping: true };
 
 const dictation: UtteranceOptions = { spokenCommands: true, vocabulary: null };
 const withCommands: UtteranceOptions = {
@@ -229,6 +230,21 @@ describe("UtteranceCommands — holding and releasing", () => {
       expect(shown(release?.emissions), sentence).toEqual([{ itemId: "i0", text: sentence }]);
       expect(release?.send, sentence).toBe(false);
     }
+  });
+
+  it("sends at a pause heard while a stop drains", () => {
+    const { releases } = feed([["Fix the login bug, send it.", STOPPING_PAUSE]]);
+    expect(shown(releases[0]?.emissions)).toEqual([{ itemId: "i0", text: "Fix the login bug" }]);
+    expect(releases[0]?.send).toBe(true);
+  });
+
+  it("reads a send after a pause heard while stopping with the clause it carries on", () => {
+    const { utterance, releases } = feed([
+      ["Where should the handler", STOPPING_PAUSE],
+      ["send it", CUT],
+    ]);
+    const stopped = [...releases, utterance.flush("stop", dictation)];
+    expect(written(stopped)).toBe("Where should the handler send it");
   });
 
   it("keeps a trailing 'send it' as words when the connection is lost", () => {

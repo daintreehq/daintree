@@ -15,13 +15,12 @@ vi.mock("@/services/VoiceRecordingService", () => ({
   },
 }));
 
+const voiceState = vi.hoisted(() => ({
+  activeTarget: { panelId: "test-panel" },
+  status: "recording",
+}));
 vi.mock("@/store", () => ({
-  useVoiceRecordingStore: {
-    getState: () => ({
-      activeTarget: { panelId: "test-panel" },
-      status: "recording",
-    }),
-  },
+  useVoiceRecordingStore: { getState: () => voiceState },
 }));
 
 vi.mock("@/store/projectStore", () => ({
@@ -83,6 +82,7 @@ describe("useVoiceWaitSubmit", () => {
     onSpokenSendMock.mockReturnValue(() => {});
     useTerminalInputStore.getState().clearDraftInput(PANEL_ID);
     panelState.focusedId = null;
+    voiceState.status = "recording";
     (document.activeElement as HTMLElement | null)?.blur();
   });
 
@@ -153,6 +153,44 @@ describe("useVoiceWaitSubmit", () => {
       expect(stopMock).toHaveBeenCalledTimes(1);
       expect(sendFromEditor).not.toHaveBeenCalled();
       expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(false);
+    });
+
+    it("joins a stop already finishing and sends once its correction lands (#14803)", async () => {
+      voiceState.status = "finishing";
+      useTerminalInputStore.getState().setDraftInput(PANEL_ID, "fix the login bug");
+      let endStop!: () => void;
+      stopMock.mockImplementation(
+        () =>
+          new Promise<void>((resolve) => {
+            endStop = resolve;
+          })
+      );
+      hasPendingMock.mockReturnValue(true);
+      let landCorrection!: (landed: boolean) => void;
+      waitMock.mockImplementation(
+        () =>
+          new Promise<boolean>((resolve) => {
+            landCorrection = resolve;
+          })
+      );
+      renderWaitSubmit();
+
+      await act(async () => {
+        spokenSendHandler()();
+      });
+      expect(stopMock).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ reason: "send" })
+      );
+      await act(async () => {
+        endStop();
+      });
+      expect(sendFromEditor).not.toHaveBeenCalled();
+
+      await act(async () => {
+        landCorrection(true);
+      });
+      expect(sendFromEditor).toHaveBeenCalledTimes(1);
     });
 
     it("rechecks the draft after the correction lands", async () => {

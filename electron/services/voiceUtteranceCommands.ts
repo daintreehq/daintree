@@ -34,10 +34,15 @@ export interface UtteranceSegment {
 }
 
 export interface UtteranceBoundary {
-  /** The speaker went quiet after it: the only boundary a send may end on. */
+  /** The speaker went quiet after it: a send may end here. */
   endOfSpeech: boolean;
   /** The provider closed it at a pause, though the speaker may have gone on since. */
   endsAtPause: boolean;
+  /**
+   * Heard while a stop drains: the speaker has finished, so a pause may end in
+   * a send too (#14803). Its clause still runs on into what the drain has left.
+   */
+  stopping?: boolean;
 }
 
 export interface UtteranceOptions {
@@ -111,7 +116,7 @@ export class UtteranceCommands {
       return this.release(
         this.held.length,
         {
-          send: boundary.endOfSpeech,
+          send: boundary.endOfSpeech || boundary.stopping === true,
           breaks: true,
           endsUtterance: boundary.endOfSpeech,
         },
