@@ -163,7 +163,12 @@ export function useVoiceWaitSubmit({
           if (isCurrentAttempt()) controller.abort();
         },
         cancel: () => {
-          if (isCurrentAttempt()) cancelVoiceWaitSubmit();
+          if (!isCurrentAttempt() || !cancelVoiceWaitSubmit()) return;
+          // The lock blurred the editor; with the keyboard still nowhere, it
+          // goes back to the text the user is now free to edit.
+          const view = editorViewRef.current;
+          const active = document.activeElement;
+          if (view && (active === null || active === document.body)) view.focus();
         },
       });
       activeWaitRef.current = { controller, releaseKeys };

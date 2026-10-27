@@ -24,11 +24,13 @@ const claims: VoiceWaitKeyClaim[] = [];
 const routed = new WeakSet<KeyboardEvent>();
 let listening = false;
 
-const MODAL_SELECTOR = '[role="dialog"][aria-modal="true"]';
+// A destructive AppDialog without a preview is an alertdialog.
+const MODAL_SELECTOR =
+  '[role="dialog"][aria-modal="true"], [role="alertdialog"][aria-modal="true"]';
 
 function isWaitKey(event: KeyboardEvent): boolean {
   if (event.key !== "Enter" && event.key !== "Escape") return false;
-  if (event.repeat || event.isComposing || event.keyCode === 229) return false;
+  if (event.isComposing || event.keyCode === 229) return false;
   return !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey;
 }
 
@@ -69,6 +71,10 @@ export function routeVoiceWaitKey(event: KeyboardEvent): boolean {
   routed.add(event);
   event.preventDefault();
   event.stopImmediatePropagation();
+  // The Enter that started the wait, held down, repeats at the page once the
+  // lock blurs the editor: it is still the composer's, and still not a second
+  // press, so it neither sends nor confirms a fleet action behind it.
+  if (event.repeat) return true;
   if (event.key === "Enter") claim.sendNow();
   else claim.cancel();
   return true;

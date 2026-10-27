@@ -783,9 +783,38 @@ describe("FleetArmingRibbon", () => {
 
     try {
       fireEvent.keyDown(document.body, { key: "Enter" });
+      // The Enter that started the wait, held down, repeats at the page.
+      fireEvent.keyDown(document.body, { key: "Enter", repeat: true });
 
       expect(sendNow).toHaveBeenCalledTimes(1);
       expect(dispatchSpy.mock.calls.find((c) => c[0] === "fleet.kill")).toBeUndefined();
+    } finally {
+      release();
+      dispatchSpy.mockRestore();
+    }
+  });
+
+  it("doesn't count an Escape that called off a waiting dictated send toward an interrupt", async () => {
+    seed([makeAgent("t1", "working"), makeAgent("t2", "working")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    const actionServiceModule = await import("@/services/ActionService");
+    const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
+    render(<FleetArmingRibbon />);
+    const { claimVoiceWaitKeys } = await import("@/lib/voiceWaitKeys");
+    // Calling the send off ends its wait, and its hold on the keys with it.
+    const release = claimVoiceWaitKeys({
+      holds: () => false,
+      editor: () => null,
+      isSelected: () => false,
+      sendNow: vi.fn(),
+      cancel: () => release(),
+    });
+
+    try {
+      fireEvent.keyDown(document.body, { key: "Escape" });
+      fireEvent.keyDown(document.body, { key: "Escape" });
+
+      expect(dispatchSpy.mock.calls.some((c) => c[0] === "fleet.interrupt")).toBe(false);
     } finally {
       release();
       dispatchSpy.mockRestore();

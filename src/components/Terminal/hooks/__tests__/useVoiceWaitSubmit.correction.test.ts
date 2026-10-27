@@ -394,9 +394,12 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611, #14780)", () =
       result.current.startVoiceWaitSubmit();
     });
     act(() => {
-      result.current.cancelVoiceWaitSubmit();
+      pressKey("Escape");
     });
     expect(isEditable()).toBe(true);
+    expect(result.current.voiceSubmitPhase).toBeNull();
+    // The keyboard was nowhere: it goes back to the unlocked editor.
+    expect(view.hasFocus).toBe(true);
     await act(async () => {
       pending.resolve({ action: "replace", correctedText: "Hello world." });
     });
