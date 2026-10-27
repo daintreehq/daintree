@@ -205,6 +205,8 @@ function joinLiveItems(items: VoiceLiveItem[]): string {
 export interface VoiceCorrectionRange {
   from: number;
   to: number;
+  /** The dictation session the passage came from; none for a selection rewrite. */
+  session?: string;
   /** The cleanup streamed so far: the draft from `from` to `rewrite.to` shows as `rewrite.text`. */
   rewrite?: { to: number; text: string };
 }

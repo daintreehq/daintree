@@ -4299,10 +4299,11 @@ class VoiceRecordingService {
           rewrite !== undefined &&
           introducesVoiceCommand(passage.text, rewrite.text) &&
           draft.slice(0, span.from).trim() !== "";
+        const range = correction.sessionId ? { ...span, session: correction.sessionId } : span;
         ranges.push(
           rewrite && !commandMoved
-            ? { ...span, rewrite: { to: span.from + rewrite.rawTo, text: rewrite.text } }
-            : span
+            ? { ...range, rewrite: { to: span.from + rewrite.rawTo, text: rewrite.text } }
+            : range
         );
       }
     }

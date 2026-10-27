@@ -47,9 +47,10 @@
   }
 
   /* A voice send's wait paints the shell itself, outside the states above: its
-     caption takes the stepped-up placeholder ink, and its progress trace the
-     full foreground, since the wash beside it is deliberately faint. */
-  [data-voice-submit-caption] {
+     caption, and the dictation status caption that shares its place, take the
+     stepped-up placeholder ink, and its progress bar the full foreground. */
+  [data-voice-submit-caption],
+  [data-voice-session-caption] {
     --ib-wait-caption: var(--ib-placeholder-more);
   }
 

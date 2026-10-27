@@ -40,7 +40,13 @@ export type VoiceSubmitPhase = "finishing" | "polishing";
  * past corrections say it should land (null: no estimate).
  */
 export type VoiceSubmitWait = { attempt: number; startedAt: number } & (
-  { phase: "finishing" } | { phase: "polishing"; expectedAt: number | null }
+  | { phase: "finishing" }
+  | {
+      phase: "polishing";
+      expectedAt: number | null;
+      /** The dictation sessions whose cleanup this send waits for. */
+      sessions: ReadonlySet<string>;
+    }
 );
 
 /**
@@ -333,6 +339,7 @@ export function useVoiceWaitSubmit({
               phase: "polishing",
               startedAt: performance.now(),
               expectedAt: voiceRecordingService.expectedCorrectionLanding(voiceId, sessions),
+              sessions,
             });
             await voiceRecordingService.waitForPendingCorrections(
               voiceId,
