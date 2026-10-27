@@ -452,7 +452,7 @@ class CorrectionRewriteWidget extends WidgetType {
   }
   toDOM(): HTMLElement {
     const span = document.createElement("span");
-    span.className = "cm-voice-pending-ai cm-voice-rewrite";
+    span.className = "cm-voice-rewrite";
     span.textContent = this.text;
     return span;
   }
