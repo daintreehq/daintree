@@ -1238,6 +1238,34 @@ describe("canopy IPC", () => {
         expect(await trash()).toEqual([]);
       });
 
+      it("lets only the view asked take up a resume, and only while Canopy waits", async () => {
+        journaled();
+        const view = projectView(1);
+        await trash();
+        const restoring = invoke(
+          CANOPY_METHOD_CHANNELS.restoreTrashed,
+          fakeSender(1),
+          "run-1",
+          target
+        );
+        await vi.waitFor(() => expect(view.send).toHaveBeenCalled());
+        const { requestId } = view.send.mock.calls[0]![1] as { requestId: string };
+        expect(await invoke(CANOPY_METHOD_CHANNELS.resumeStarted, fakeSender(2), requestId)).toBe(
+          false
+        );
+        expect(await invoke(CANOPY_METHOD_CHANNELS.resumeStarted, fakeSender(1), requestId)).toBe(
+          true
+        );
+        await invoke(CANOPY_METHOD_CHANNELS.resumeSettled, fakeSender(1), requestId, {
+          runId: "run-9",
+        });
+        expect(await restoring).toEqual({ runId: "run-9" });
+        // Settled: a view hearing it only now launches nothing.
+        expect(await invoke(CANOPY_METHOD_CHANNELS.resumeStarted, fakeSender(1), requestId)).toBe(
+          false
+        );
+      });
+
       it("keeps an ended run whose resume failed, saying why", async () => {
         journaled();
         const view = projectView(1);

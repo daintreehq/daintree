@@ -289,12 +289,11 @@ export interface CanopyRemoveRequest {
 
 /**
  * Canopy asks one view of a closed run's project to resume its session, the
- * way the Resume Sessions palette does, and to answer with `resumeSettled`.
+ * way the Resume Sessions palette does. The view claims it with
+ * `resumeStarted` before launching anything, and answers with `resumeSettled`.
  */
 export interface CanopyResumeRequest {
   requestId: string;
-  /** How long main waits for the answer: a request still unstarted after that is stale. */
-  answerWithinMs: number;
   session: import("./agentSessionHistory.js").AgentSessionRecord;
 }
 

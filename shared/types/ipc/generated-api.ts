@@ -121,6 +121,9 @@ export interface GeneratedElectronAPI {
     resumeSettled(
       ...args: IpcInvokeMap["canopy:resume-settled"]["args"]
     ): Promise<IpcInvokeMap["canopy:resume-settled"]["result"]>;
+    resumeStarted(
+      ...args: IpcInvokeMap["canopy:resume-started"]["args"]
+    ): Promise<IpcInvokeMap["canopy:resume-started"]["result"]>;
     retryModel(
       ...args: IpcInvokeMap["canopy:retry-model"]["args"]
     ): Promise<IpcInvokeMap["canopy:retry-model"]["result"]>;

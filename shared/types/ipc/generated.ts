@@ -396,6 +396,10 @@ export interface GeneratedIpcInvokeMap {
     args: [requestId: string, answer: import("./canopy.js").CanopyResumeAnswer];
     result: void;
   };
+  "canopy:resume-started": {
+    args: [requestId: string];
+    result: boolean;
+  };
   "canopy:retry-model": {
     args: [];
     result: import("./canopy.js").CanopySnapshot;

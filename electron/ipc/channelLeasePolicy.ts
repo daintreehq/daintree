@@ -99,6 +99,7 @@ export const CHANNEL_LEASE_POLICY = {
   "canopy:restore-requested": "free",
   "canopy:restore-trashed": "handler",
   "canopy:resume-settled": "handler",
+  "canopy:resume-started": "handler",
   "canopy:run-branch": "free",
   "canopy:search-screens": "free",
   "canopy:set-active": "free",

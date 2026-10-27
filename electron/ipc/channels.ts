@@ -282,6 +282,7 @@ export const CHANNELS = {
   CANOPY_RESTORE_TRASHED: "canopy:restore-trashed",
   CANOPY_REMOVE_TRASHED: "canopy:remove-trashed",
   CANOPY_EMPTY_TRASH: "canopy:empty-trash",
+  CANOPY_RESUME_STARTED: "canopy:resume-started",
   CANOPY_RESUME_SETTLED: "canopy:resume-settled",
   CANOPY_REREAD: "canopy:reread",
   CANOPY_SET_SHOWN: "canopy:set-shown",

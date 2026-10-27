@@ -147,6 +147,7 @@ export const CHANNEL_LOCALITY = {
   "canopy:restore-requested": "host",
   "canopy:restore-trashed": "host",
   "canopy:resume-settled": "host",
+  "canopy:resume-started": "host",
   "canopy:run-branch": "host",
   "canopy:search-screens": "host",
   "canopy:set-active": "host",

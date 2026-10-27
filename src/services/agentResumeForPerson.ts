@@ -63,13 +63,17 @@ export async function resumeSessionForPerson(
 
   // Switch BEFORE spawning so the resumed grid panel isn't backgrounded; this
   // callback only runs on the spawning path.
+  const selectedAtStart = activeWorktreeId;
   const resumed = await resumeSessionIntoPanel(session, target, {
     onBeforeSpawn: revealTargetWorktree,
   });
   // Again after the fact, because `onBeforeSpawn` is the STARTER's callback: a
   // person joining a resume an agent already started never reaches it, and
-  // would otherwise be left with the pane in another worktree. Selecting the
-  // worktree already active is a no-op.
-  revealTargetWorktree();
+  // would otherwise be left with the pane in another worktree. A selection
+  // moved elsewhere meanwhile is a newer choice, and stands.
+  const selectedNow = useWorktreeSelectionStore.getState().activeWorktreeId;
+  if (selectedNow === selectedAtStart || selectedNow === target.worktreeId) {
+    revealTargetWorktree();
+  }
   return resumed;
 }

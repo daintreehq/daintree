@@ -62,6 +62,31 @@ describe("resumeSessionForPerson", () => {
     expect(spawnedIn.worktreeId).toBe("/repo/feature");
   });
 
+  it("leaves a worktree chosen while the resume ran where it is", async () => {
+    resumeSessionIntoPanel.mockImplementationOnce(
+      async (_session: unknown, target: { worktreeId?: string }, options) => {
+        options?.onBeforeSpawn?.();
+        // A newer destination is chosen while the pane is still being added.
+        selection.activeWorktreeId = "/repo/other";
+        return { terminalId: "term-9", outcome: "created", worktreeId: target.worktreeId };
+      }
+    );
+    await resumeSessionForPerson(session, worktrees);
+    expect(selection.activeWorktreeId).toBe("/repo/other");
+    expect(selection.selectWorktree).toHaveBeenCalledTimes(1);
+  });
+
+  it("brings a resume it joined into its own worktree", async () => {
+    // Joined an in-flight resume: the starter's reveal never ran here.
+    resumeSessionIntoPanel.mockImplementationOnce(async () => ({
+      terminalId: "term-9",
+      outcome: "created",
+      worktreeId: "/repo/feature",
+    }));
+    await resumeSessionForPerson(session, worktrees);
+    expect(selection.activeWorktreeId).toBe("/repo/feature");
+  });
+
   it("trusts the session's own place where the view has no worktree list to check", async () => {
     await resumeSessionForPerson({ ...session, worktreeId: "/repo/elsewhere" }, null);
     expect(resumeSessionIntoPanel).toHaveBeenCalledWith(

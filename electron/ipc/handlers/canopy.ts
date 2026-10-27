@@ -1097,13 +1097,17 @@ function stillClosing(): AppError {
   });
 }
 
-/** How long the project's view is given to resume a session before Canopy gives up waiting. */
-const RESUME_ANSWER_MS = 30_000;
+/** How long the project's view is given to take up a resume before Canopy stops waiting. */
+const RESUME_START_MS = 30_000;
+/** How long a resume the view took up is given to land its pane. */
+const RESUME_LAUNCH_MS = 30_000;
 const MAX_PENDING_RESUMES = 20;
 
 interface PendingResume {
-  /** The view asked: only its answer counts. */
+  /** The view asked: only its word counts. */
   viewId: number;
+  /** The view took it up: it is launching, and is waited for. */
+  started: boolean;
   resolve: (answer: CanopyResumeAnswer) => void;
   timer: ReturnType<typeof setTimeout>;
 }
@@ -1111,6 +1115,25 @@ interface PendingResume {
 const pendingResumes = new Map<string, PendingResume>();
 /** One resume at a time per close: a second Restore joins the first. */
 const resumingCloses = new Map<string, Promise<CanopyRestoreOutcome>>();
+
+/**
+ * The view asked is about to launch: true while Canopy still waits, and the
+ * launch then has its own while to land. False once Canopy stopped waiting,
+ * so a view slow to hear never launches a resume nobody is told of.
+ */
+function startResume(requestId: string, viewId: number): boolean {
+  const pending = pendingResumes.get(requestId);
+  if (!pending || pending.viewId !== viewId) return false;
+  if (pending.started) return true;
+  pending.started = true;
+  clearTimeout(pending.timer);
+  pending.timer = setTimeout(
+    () => settleResume(requestId, { error: "The project didn't finish resuming it in time." }),
+    RESUME_LAUNCH_MS
+  );
+  pending.timer.unref?.();
+  return true;
+}
 
 function settleResume(requestId: string, answer: CanopyResumeAnswer): void {
   const pending = pendingResumes.get(requestId);
@@ -1128,7 +1151,7 @@ function settleResume(requestId: string, answer: CanopyResumeAnswer): void {
 function askViewToResume(
   ctx: IpcContext,
   workspaceId: string,
-  request: Omit<CanopyResumeRequest, "requestId" | "answerWithinMs">
+  request: Omit<CanopyResumeRequest, "requestId">
 ): Promise<CanopyResumeAnswer> | null {
   const views = getProjectPushTargets(workspaceId, CHANNELS.CANOPY_RESUME_REQUESTED).filter(
     (view) => !view.isDestroyed()
@@ -1154,15 +1177,14 @@ function askViewToResume(
   return new Promise<CanopyResumeAnswer>((resolve) => {
     const timer = setTimeout(
       () => settleResume(requestId, { error: "The project didn't answer in time." }),
-      RESUME_ANSWER_MS
+      RESUME_START_MS
     );
     timer.unref?.();
-    pendingResumes.set(requestId, { viewId: view.id, resolve, timer });
+    pendingResumes.set(requestId, { viewId: view.id, started: false, resolve, timer });
     const send = () => {
       try {
         view.send(CHANNELS.CANOPY_RESUME_REQUESTED, {
           requestId,
-          answerWithinMs: RESUME_ANSWER_MS,
           ...request,
         } satisfies CanopyResumeRequest);
       } catch {
@@ -1987,6 +2009,21 @@ export const canopyNamespace = defineIpcNamespace({
     ),
 
     /**
+     * A project's view is about to launch a resume Canopy asked of it: whether
+     * Canopy still waits for it. Only the view asked is heard.
+     */
+    resumeStarted: op(
+      CANOPY_METHOD_CHANNELS.resumeStarted,
+      async (ctx, requestId: string): Promise<boolean> => {
+        if (typeof requestId !== "string" || requestId.length === 0 || requestId.length > 64) {
+          throw new Error("Invalid resume request id");
+        }
+        return startResume(requestId, ctx.webContentsId);
+      },
+      { withContext: true }
+    ),
+
+    /**
      * A project's view answers a resume Canopy asked of it: the pane now
      * running the session, or why there is none. Only the view asked is heard.
      */
@@ -2390,8 +2427,7 @@ export function registerCanopyHandlers(): () => void {
       hasCanopyTrashRemoval({ id: entry.run.runId, spawnedAt: entry.run.spawnedAt }),
     // The incarnation's own record becomes the close when none of the close
     // lands: its agent had quit before the pane was closed, or that quit's own
-    // capture took the record first. Tried as the trash lets the run go, so a
-    // quit straight after keeps it, and again once the close had time to land.
+    // capture took the record first.
     onSettle: (entry) =>
       adoptCanopyTrashClose(
         { id: entry.run.runId, spawnedAt: entry.run.spawnedAt },

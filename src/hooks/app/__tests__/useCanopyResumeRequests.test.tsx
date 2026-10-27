@@ -3,22 +3,29 @@ import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CanopyResumeRequest } from "@shared/types/ipc/canopy";
 
-const { onResumeRequested, resumeSettled, resumeSessionForPerson, whenWorktreesKnown, view } =
-  vi.hoisted(() => ({
-    onResumeRequested: vi.fn(),
-    resumeSettled: vi.fn(async () => {}),
-    resumeSessionForPerson: vi.fn(),
-    whenWorktreesKnown: vi.fn(async () => true),
-    view: {
-      worktrees: new Map<string, { id: string; path: string }>(),
-      isInitialized: true,
-      isLoading: false,
-    },
-  }));
+const {
+  onResumeRequested,
+  resumeStarted,
+  resumeSettled,
+  resumeSessionForPerson,
+  whenWorktreesKnown,
+  view,
+} = vi.hoisted(() => ({
+  onResumeRequested: vi.fn(),
+  resumeStarted: vi.fn(async (_requestId: string) => true),
+  resumeSettled: vi.fn(async () => {}),
+  resumeSessionForPerson: vi.fn(),
+  whenWorktreesKnown: vi.fn(async () => true),
+  view: {
+    worktrees: new Map<string, { id: string; path: string }>(),
+    isInitialized: true,
+    isLoading: false,
+  },
+}));
 
 vi.stubGlobal("window", {
   ...globalThis.window,
-  electron: { canopy: { onResumeRequested, resumeSettled } },
+  electron: { canopy: { onResumeRequested, resumeStarted, resumeSettled } },
 });
 vi.mock("@/services/agentResumeForPerson", () => ({ resumeSessionForPerson }));
 vi.mock("@/services/worktreeLanding", () => ({ whenWorktreesKnown }));
@@ -38,8 +45,8 @@ const session = {
   savedAt: 1,
 };
 
-function asked(requestId: string, answerWithinMs = 30_000): CanopyResumeRequest {
-  return { requestId, answerWithinMs, session };
+function asked(requestId: string): CanopyResumeRequest {
+  return { requestId, session };
 }
 
 describe("useCanopyResumeRequests", () => {
@@ -48,11 +55,11 @@ describe("useCanopyResumeRequests", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.useRealTimers();
     view.worktrees = new Map([["/repo/wt", { id: "/repo/wt", path: "/repo/wt" }]]);
     view.isInitialized = true;
     view.isLoading = false;
     whenWorktreesKnown.mockResolvedValue(true);
+    resumeStarted.mockResolvedValue(true);
     resumeSessionForPerson.mockResolvedValue({
       terminalId: "term-9",
       outcome: "created",
@@ -119,19 +126,22 @@ describe("useCanopyResumeRequests", () => {
     );
   });
 
-  it("never starts a request main has stopped waiting for", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    const { rerender } = renderHook(({ loaded }) => useCanopyResumeRequests(loaded), {
-      initialProps: { loaded: false },
-    });
-    act(() => request(asked("r5", 30_000)));
-    vi.setSystemTime(Date.now() + 30_000);
-    rerender({ loaded: true });
+  it("claims each request before launching, and never starts one main has stopped waiting for", async () => {
+    resumeStarted.mockResolvedValueOnce(false);
+    renderHook(() => useCanopyResumeRequests(true));
+    act(() => request(asked("r5")));
+    await vi.waitFor(() => expect(resumeStarted).toHaveBeenCalledWith("r5"));
     await act(async () => {
       await Promise.resolve();
     });
     expect(resumeSessionForPerson).not.toHaveBeenCalled();
     expect(resumeSettled).not.toHaveBeenCalled();
+
+    act(() => request(asked("r6")));
+    await vi.waitFor(() => expect(resumeSettled).toHaveBeenCalledWith("r6", { runId: "term-9" }));
+    expect(resumeStarted.mock.invocationCallOrder.at(-1)!).toBeLessThan(
+      resumeSessionForPerson.mock.invocationCallOrder[0]!
+    );
   });
 
   it("stops listening when the view goes", () => {
