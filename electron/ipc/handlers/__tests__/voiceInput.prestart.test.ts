@@ -14,6 +14,18 @@ vi.mock("electron", () => ({
   BrowserWindow: { fromWebContents: vi.fn(() => null) },
 }));
 
+// The transcript read reaches the global pty client and Claude's store, so it
+// is stubbed at its boundary: a terminal it is given has the reply.
+const readAgentReply = vi.hoisted(() =>
+  vi.fn(async (_client: unknown, terminalId: string | undefined, _budgetMs: number) =>
+    terminalId ? agentReplyFixture.reply : null
+  )
+);
+const agentReplyFixture = vi.hoisted(() => ({ reply: null as Record<string, unknown> | null }));
+vi.mock("../../../services/voiceAgentReply.js", () => ({
+  readAgentReplyForCorrection: readAgentReply,
+}));
+
 vi.mock("../../../utils/logger.js", () => ({
   logDebug: vi.fn(),
   logInfo: vi.fn(),
@@ -82,6 +94,7 @@ const shared = vi.hoisted(() => ({
   warmSettings: [] as Array<Record<string, unknown>>,
   correctionWorktree: undefined as { name: string; titles: string[] } | undefined,
   correctionTerminalOutput: undefined as string | undefined,
+  correctionAgentReply: undefined as unknown,
   correctionRecentPrompts: undefined as string[] | undefined,
   correctionProjectName: undefined as string | undefined,
 }));
@@ -140,7 +153,12 @@ vi.mock("../../../services/VoiceCorrectionService.js", () => ({
     };
     this.preconnect = () => {};
     this.correct = async function (
-      request: { rawText: string; terminalOutput?: string; recentPrompts?: string[] },
+      request: {
+        rawText: string;
+        terminalOutput?: string;
+        agentReply?: unknown;
+        recentPrompts?: string[];
+      },
       settings: {
         customDictionary: string[];
         knownNames?: string[];
@@ -150,6 +168,7 @@ vi.mock("../../../services/VoiceCorrectionService.js", () => ({
       }
     ) {
       shared.correctionTerminalOutput = request.terminalOutput;
+      shared.correctionAgentReply = request.agentReply;
       shared.correctionRecentPrompts = request.recentPrompts;
       shared.correctionDictionary = settings.customDictionary;
       shared.correctionNames = settings.knownNames;
@@ -801,6 +820,8 @@ describe("voiceInput — keyterm target", () => {
     shared.correctionWorktree = undefined;
     shared.warmSettings = [];
     shared.correctionTerminalOutput = undefined;
+    shared.correctionAgentReply = undefined;
+    agentReplyFixture.reply = null;
     shared.correctionRecentPrompts = undefined;
     shared.correctionProjectName = undefined;
     shared.drainPromise = null;
@@ -1268,11 +1289,97 @@ describe("voiceInput — keyterm target", () => {
       expect(ptyClient.getTerminalSnapshot).toHaveBeenCalledTimes(1);
     });
 
+    describe("and the agent's last reply (#14900)", () => {
+      const REPLY = {
+        text: "Should I write a migration, or add a shim?",
+        truncated: false,
+        recordedAt: 1_800_000_000_000,
+        newerRecordsFollow: false,
+        observedState: { state: "waiting", lastStateChangeAt: 1_800_000_000_000 },
+      };
+
+      beforeEach(() => {
+        agentReplyFixture.reply = REPLY;
+      });
+
+      it("sends the reply beside the output, read from the same terminal", async () => {
+        await correct();
+        expect(readAgentReply).toHaveBeenCalledWith(ptyClient, "t-1", expect.any(Number));
+        expect(shared.correctionAgentReply).toEqual(REPLY);
+        expect(shared.correctionTerminalOutput).toBe("Migration or the shim?\n>");
+      });
+
+      it("sends exactly today's context when no reply can be read", async () => {
+        agentReplyFixture.reply = null;
+        await correct();
+        expect(shared.correctionAgentReply).toBeUndefined();
+        expect(shared.correctionTerminalOutput).toBe("Migration or the shim?\n>");
+      });
+
+      it("reads no reply from a terminal another project owns", async () => {
+        shared.viewProjectId = "proj-b";
+        await correct();
+        expect(readAgentReply).not.toHaveBeenCalledWith(
+          expect.anything(),
+          "t-1",
+          expect.anything()
+        );
+        expect(shared.correctionAgentReply).toBeUndefined();
+      });
+
+      it("reads it once with the output while the stop drains, for every passage after", async () => {
+        await startWith({ terminalId: "t-1" });
+        expect(readAgentReply).not.toHaveBeenCalled();
+        let finishDrain!: () => void;
+        shared.drainPromise = new Promise((resolve) => {
+          finishDrain = resolve;
+        });
+        const stopping = stop();
+        await vi.waitFor(() => expect(shared.calls).toContain("stopGracefully"));
+        expect(readAgentReply).toHaveBeenCalledTimes(1);
+        finishDrain();
+        await stopping;
+        agentReplyFixture.reply = { ...REPLY, text: "A later reply." };
+        for (const rawText of ["go with the shin", "and the second passage"]) {
+          await getHandler("voice-input:correct")(fakeEvent, {
+            rawText,
+            terminalId: "t-1",
+            sessionId: currentSessionId,
+          });
+          expect(shared.correctionAgentReply).toEqual(REPLY);
+        }
+        expect(readAgentReply).toHaveBeenCalledTimes(1);
+      });
+
+      it("reads it fresh for each chunk while the dictation runs, then keeps the stop's", async () => {
+        await startWith({ terminalId: "t-1" });
+        const correctChunk = (rawText: string) =>
+          getHandler("voice-input:correct")(fakeEvent, {
+            rawText,
+            terminalId: "t-1",
+            sessionId: currentSessionId,
+          });
+        await correctChunk("the first chunk");
+        expect(shared.correctionAgentReply).toEqual(REPLY);
+        const newer = { ...REPLY, text: "A newer reply." };
+        agentReplyFixture.reply = newer;
+        await correctChunk("the second chunk");
+        expect(shared.correctionAgentReply).toEqual(newer);
+        const atStop = { ...REPLY, text: "As it stopped." };
+        agentReplyFixture.reply = atStop;
+        await stop();
+        agentReplyFixture.reply = { ...REPLY, text: "Too late." };
+        await correctChunk("the rest");
+        expect(shared.correctionAgentReply).toEqual(atStop);
+      });
+    });
+
     it("reads none at the stop with cleanup off", async () => {
       shared.voiceInput = { correctionEnabled: false };
       await startWith({ terminalId: "t-1" });
       await stop();
       expect(ptyClient.getTerminalSnapshot).not.toHaveBeenCalled();
+      expect(readAgentReply).not.toHaveBeenCalled();
     });
 
     it("reads none at the stop once cleanup was turned off mid-dictation", async () => {
@@ -1280,6 +1387,7 @@ describe("voiceInput — keyterm target", () => {
       shared.voiceInput = { correctionEnabled: false };
       await stop();
       expect(ptyClient.getTerminalSnapshot).not.toHaveBeenCalled();
+      expect(readAgentReply).not.toHaveBeenCalled();
     });
   });
 

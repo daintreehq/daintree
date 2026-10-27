@@ -53,6 +53,8 @@ const SENSITIVE = new Set([
   "customInstructions",
   "recentContext",
   "recentPrompts",
+  "terminalOutput",
+  "agentReply",
   "uncertain",
   "heardUncertain",
   "commandUncertain",
@@ -239,6 +241,12 @@ describe("the log-call scan", () => {
     expect(scan("warn('a', { recentPrompts });")).not.toEqual([]);
     expect(scan("warn('a', { first: request.recentPrompts[0] });")).not.toEqual([]);
     expect(scan("warn('a', { n: request.recentPrompts.length });")).toEqual([]);
+  });
+
+  it("flags a terminal's output and its agent's reply, but not their lengths", () => {
+    expect(scan("warn('a', { terminalOutput });")).not.toEqual([]);
+    expect(scan("warn('a', { reply: request.agentReply });")).not.toEqual([]);
+    expect(scan("warn('a', { n: request.terminalOutput.length, agentReplyLen });")).toEqual([]);
   });
 
   it("flags microphone names", () => {

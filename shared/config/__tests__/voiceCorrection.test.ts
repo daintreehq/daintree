@@ -580,11 +580,20 @@ describe("buildCorrectionSystemPrompt contextNames", () => {
   const digest = (text: string) => createHash("sha256").update(text).digest("hex");
   const blocks = (prompt: string) => prompt.split("\n\n");
 
-  // #14873 moved Terra's context blocks only: Luna's rules were measured on these.
-  it("sends Luna and the rewrite the prompts they were sent before #14873, byte for byte", () => {
-    expect(
-      digest(buildCorrectionSystemPrompt(context, correctionInstructionsFor("gpt-6-luna")))
-    ).toBe("bb9e92beeb66b3e83e91b70d6199c0d7dcb3c9d24e9fd13489c274bcce50fd77");
+  // #14873 moved Terra's context blocks only: Luna's rules were measured on
+  // these. #14900 told them about the agent's last reply, and nothing else.
+  it("sends Luna and the rewrite the prompts they were sent before #14873, byte for byte, but for the reply's line", () => {
+    const luna = buildCorrectionSystemPrompt(context, correctionInstructionsFor("gpt-6-luna"));
+    const withoutReply = luna
+      .replace(/\n- <agent_last_reply>[^\n]*/, "")
+      .replace(
+        "Use recent prompts, history, metadata, terminal output and the agent's last reply only as bounded context.",
+        "Use recent prompts, history, metadata and terminal output only as bounded context."
+      );
+    expect(withoutReply).not.toBe(luna);
+    expect(digest(withoutReply)).toBe(
+      "bb9e92beeb66b3e83e91b70d6199c0d7dcb3c9d24e9fd13489c274bcce50fd77"
+    );
     expect(digest(buildRewriteSystemPrompt(context))).toBe(
       "5612a37b1528b5662a89dd220133a5f8895885c6422f4887fe6c7b7d48e6c38a"
     );

@@ -1,8 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
+
+const readAgentReply = vi.hoisted(() => vi.fn());
+vi.mock("../voiceAgentReply.js", () => ({ readAgentReplyForCorrection: readAgentReply }));
+
 import {
   MAX_CORRECTION_TERMINAL_CHARS,
   MAX_CORRECTION_TERMINAL_LINES,
   boundTerminalOutput,
+  readTerminalContextForCorrection,
   readTerminalOutputForCorrection,
 } from "../voiceTerminalContext.js";
 import type { PtyClient } from "../PtyClient.js";
@@ -127,5 +132,44 @@ describe("readTerminalOutputForCorrection", () => {
   it("gives up on a read that outlasts the budget", async () => {
     const never = vi.fn(() => new Promise(() => {}));
     await expect(readTerminalOutputForCorrection(clientWith(never), "t-1", 10)).resolves.toBeNull();
+  });
+});
+
+describe("readTerminalContextForCorrection", () => {
+  const REPLY = {
+    text: "Should I add a shim?",
+    truncated: false,
+    recordedAt: 1,
+    newerRecordsFollow: false,
+  };
+
+  it("reads the screen and the agent's reply of the same terminal side by side, in one budget", async () => {
+    let answerReply!: (reply: typeof REPLY) => void;
+    readAgentReply.mockReturnValue(new Promise((resolve) => (answerReply = resolve)));
+    let answerScreen!: (snapshot: { lines: string[] }) => void;
+    const snapshot = vi.fn(() => new Promise((resolve) => (answerScreen = resolve)));
+    const client = clientWith(snapshot);
+    const read = readTerminalContextForCorrection(client, "t-1", 300);
+    // Both reads are out before either answers.
+    expect(snapshot).toHaveBeenCalledWith("t-1");
+    expect(readAgentReply).toHaveBeenCalledWith(client, "t-1", 300);
+    answerReply(REPLY);
+    answerScreen({ lines: ["screen"] });
+    await expect(read).resolves.toEqual({ terminalOutput: "screen", agentReply: REPLY });
+  });
+
+  it("keeps whichever read came back when the other gives nothing", async () => {
+    readAgentReply.mockResolvedValue(null);
+    const screenOnly = clientWith(vi.fn().mockResolvedValue({ lines: ["screen"] }));
+    await expect(readTerminalContextForCorrection(screenOnly, "t-1")).resolves.toEqual({
+      terminalOutput: "screen",
+      agentReply: null,
+    });
+    readAgentReply.mockResolvedValue(REPLY);
+    const failing = clientWith(vi.fn().mockRejectedValue(new Error("x")));
+    await expect(readTerminalContextForCorrection(failing, "t-1")).resolves.toEqual({
+      terminalOutput: null,
+      agentReply: REPLY,
+    });
   });
 });

@@ -17,6 +17,7 @@ import {
   EMPTY_VOICE_COMMAND_VOCABULARY,
   type VoiceCommandVocabulary,
 } from "../../shared/utils/voiceAgentCommands";
+import type { VoiceAgentReply } from "../../electron/services/voiceAgentReplyTypes";
 import type { VoiceCommandTarget } from "../../electron/services/voiceCommandTarget";
 import type {
   VoiceCorrectionRequest,
@@ -35,6 +36,7 @@ import {
   recentPromptTwins,
   type CleanupCase,
   type CleanupSession,
+  type CorpusAgentReply,
   type FixKind,
   type TranscriptStyle,
 } from "./lib/voiceCleanupCorpus";
@@ -292,9 +294,34 @@ function settingsFor(
   };
 }
 
+// The reply's times, stamped as long before `now` as the corpus says.
+export function agentReplyAt(reply: CorpusAgentReply, now: number): VoiceAgentReply {
+  const before = (minutes: number | null) => (minutes === null ? null : now - minutes * 60_000);
+  const { observedState } = reply;
+  return {
+    text: reply.text,
+    truncated: reply.truncated === true,
+    recordedAt: before(reply.recordedMinutesAgo),
+    newerRecordsFollow: reply.newerRecordsFollow,
+    ...(observedState
+      ? {
+          observedState: {
+            state: observedState.state,
+            ...(observedState.waitingReason ? { waitingReason: observedState.waitingReason } : {}),
+            lastStateChangeAt: before(observedState.changedMinutesAgo),
+          },
+        }
+      : {}),
+  };
+}
+
+// Stamps a reply's times from a fixed clock, so a passage hashes the same
+// whenever a run sent it.
+const HASH_CLOCK = 0;
+
 // Code names go to every variant; the service drops them for rules that
 // don't say what they are, as it does in production.
-export function requestFor(entry: CleanupCase): VoiceCorrectionRequest {
+export function requestFor(entry: CleanupCase, now: number = Date.now()): VoiceCorrectionRequest {
   const recentContext = entry.recentContext ?? [];
   const recentPrompts = entry.recentPrompts ?? [];
   const codeNames = codeNamesOf(entry);
@@ -304,6 +331,7 @@ export function requestFor(entry: CleanupCase): VoiceCorrectionRequest {
     ...(recentPrompts.length > 0 ? { recentPrompts } : {}),
     ...(entry.terminalOutput ? { terminalOutput: entry.terminalOutput } : {}),
     ...(codeNames.length > 0 ? { codeNames } : {}),
+    ...(entry.agentReply ? { agentReply: agentReplyAt(entry.agentReply, now) } : {}),
     reason: "stop",
     startsPrompt: entry.startsPrompt ?? recentContext.length === 0,
     ...(entry.uncertain?.length ? { uncertain: locateUncertain(entry.raw, entry.uncertain) } : {}),
@@ -802,7 +830,7 @@ export function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): st
 // A passage with no session hashes as it did before sessions existed, so a
 // run from then still rescores.
 export function inputHash(entry: CleanupCase): string {
-  const sent = requestFor(entry);
+  const sent = requestFor(entry, HASH_CLOCK);
   return contentHash(JSON.stringify(entry.session ? { sent, session: entry.session } : sent));
 }
 

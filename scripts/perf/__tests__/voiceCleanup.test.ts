@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { REPLAY_CLIPS } from "../../../e2e/helpers/voiceReplayFixtures";
 import {
   buildCorrectionSystemPrompt,
@@ -14,6 +14,7 @@ import {
   recentPromptTwins,
   REPLAY_TRANSCRIPTS,
   type CleanupCase,
+  type CorpusAgentReply,
   type FixKind,
 } from "../lib/voiceCleanupCorpus";
 import { PROMPT_VARIANTS, revise } from "../lib/voiceCleanupPrompts";
@@ -32,7 +33,7 @@ import {
   type Disposition,
   type Trial,
 } from "../lib/voiceCleanupScore";
-import { inputHash, renderReport, requestFor, rescore } from "../voice-cleanup";
+import { agentReplyAt, inputHash, renderReport, requestFor, rescore } from "../voice-cleanup";
 
 // `raw` with the words that spell `name` written as the name, as a cleanup
 // that took them for it would.
@@ -277,6 +278,91 @@ describe("inputHash", () => {
         codebase: { files: ["src/store/worktreeStore.ts"], identifiers: ["useShallow"] },
       })
     ).toBe(inputHash(withName));
+  });
+
+  it("changes with the agent's reply it carries, and not with when the run sent it", () => {
+    const reply: CorpusAgentReply = {
+      text: "Should I write a migration, or add a shim?",
+      recordedMinutesAgo: 2,
+      newerRecordsFollow: false,
+      observedState: { state: "waiting", changedMinutesAgo: 0 },
+    };
+    vi.useFakeTimers({ now: 1_000, toFake: ["Date"] });
+    try {
+      const early = inputHash({ ...passage, agentReply: reply });
+      vi.setSystemTime(1_800_000_000_000);
+      expect(inputHash({ ...passage, agentReply: reply })).toBe(early);
+      const hashes = [
+        inputHash(passage),
+        early,
+        inputHash({ ...passage, agentReply: { ...reply, text: "Shim, or migration?" } }),
+        inputHash({ ...passage, agentReply: { ...reply, truncated: true } }),
+        inputHash({ ...passage, agentReply: { ...reply, newerRecordsFollow: true } }),
+        inputHash({ ...passage, agentReply: { ...reply, recordedMinutesAgo: 6 } }),
+        inputHash({
+          ...passage,
+          agentReply: { ...reply, observedState: { state: "working", changedMinutesAgo: 0 } },
+        }),
+        inputHash({
+          ...passage,
+          agentReply: {
+            ...reply,
+            observedState: { state: "waiting", waitingReason: "question", changedMinutesAgo: 0 },
+          },
+        }),
+        inputHash({
+          ...passage,
+          agentReply: { ...reply, observedState: { state: "waiting", changedMinutesAgo: 3 } },
+        }),
+      ];
+      expect(new Set(hashes).size).toBe(hashes.length);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stamps a reply's times as long before the request as the corpus says", () => {
+    const now = 1_800_000_000_000;
+    expect(
+      agentReplyAt(
+        {
+          text: "Shim or migration?",
+          recordedMinutesAgo: 6,
+          newerRecordsFollow: true,
+          observedState: { state: "waiting", waitingReason: "question", changedMinutesAgo: null },
+        },
+        now
+      )
+    ).toEqual({
+      text: "Shim or migration?",
+      truncated: false,
+      recordedAt: now - 6 * 60_000,
+      newerRecordsFollow: true,
+      observedState: { state: "waiting", waitingReason: "question", lastStateChangeAt: null },
+    });
+    expect(
+      agentReplyAt(
+        {
+          text: "Shim or migration?",
+          recordedMinutesAgo: null,
+          newerRecordsFollow: false,
+          observedState: { state: "idle", changedMinutesAgo: 3 },
+        },
+        now
+      )
+    ).toMatchObject({
+      recordedAt: null,
+      observedState: { state: "idle", lastStateChangeAt: now - 3 * 60_000 },
+    });
+  });
+
+  it("sends the short answer again with the screen alone, as its twin", () => {
+    const withReply = CLEANUP_CORPUS.find((entry) => entry.id === "context-reply-answer:deepgram");
+    const bare = CLEANUP_CORPUS.find((entry) => entry.id === "context-reply-answer-bare:deepgram");
+    const { id: _id, agentReply, ...rest } = withReply!;
+    const { id: _bareId, ...bareRest } = bare!;
+    expect(agentReply).toBeDefined();
+    expect(bareRest).toEqual(rest);
   });
 
   it("changes with anything its session tells cleanup, and only that", () => {
@@ -830,7 +916,7 @@ describe("prompt variants", () => {
     });
   });
 
-  it("sends Luna the frozen v11 rules told about recent prompts, and Terra the code names ones", () => {
+  it("sends Luna the frozen v11 rules told about recent prompts and the agent's reply, and Terra the agent reply ones", () => {
     // #14855 named <recent_prompts> in both models' rules, after the rounds that chose them.
     const withRecentPrompts = (instructions: CorrectionInstructions) =>
       revise(instructions, {
@@ -846,15 +932,19 @@ describe("prompt variants", () => {
         ],
       });
     const production = PROMPT_VARIANTS.production!;
-    expect(production.instructionsFor("gpt-6-luna")).toEqual(
+    // What Luna cleaned up with from #14855 until #14900.
+    expect(PROMPT_VARIANTS.luna!.instructionsFor("gpt-6-luna")).toEqual(
       withRecentPrompts(PROMPT_VARIANTS.v11!.instructionsFor("gpt-6-luna"))
+    );
+    expect(production.instructionsFor("gpt-6-luna")).toEqual(
+      PROMPT_VARIANTS["luna-reply"]!.instructionsFor("gpt-6-luna")
     );
     // What Terra cleaned up with from #14855 until #14873 chose names6 over it.
     expect(PROMPT_VARIANTS.v13!.instructionsFor("gpt-6.1-terra")).toEqual(
       withRecentPrompts(PROMPT_VARIANTS.final!.instructionsFor("gpt-6.1-terra"))
     );
     expect(production.instructionsFor("gpt-6.1-terra")).toEqual(
-      PROMPT_VARIANTS.codenames!.instructionsFor("gpt-6.1-terra")
+      PROMPT_VARIANTS.agentreply!.instructionsFor("gpt-6.1-terra")
     );
   });
 

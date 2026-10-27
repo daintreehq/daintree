@@ -9,6 +9,11 @@ import type { VoiceCommandTarget } from "../../services/voiceCommandTarget.js";
 import type { PaneKeytermReads } from "../../services/voiceContextKeyterms.js";
 import type { DictationNames } from "../../services/voiceContextNames.js";
 import { MAX_CORRECTION_TERMINAL_CHARS } from "../../services/voiceTerminalContext.js";
+import {
+  MAX_CORRECTION_REPLY_CHARS,
+  type VoiceAgentReply,
+} from "../../services/voiceAgentReplyTypes.js";
+import type { AgentState, WaitingReason } from "../../../shared/types/agent.js";
 import { FILE_LINK_CANDIDATE_LIMIT } from "../../services/VoiceFileLinkResolver.js";
 
 /**
@@ -119,6 +124,36 @@ export const VoicePaneStartResultSchema = z.object({
   commandTarget: CommandTargetSchema.nullable(),
 });
 
+const AGENT_STATES = [
+  "idle",
+  "working",
+  "waiting",
+  "directing",
+  "completed",
+  "exited",
+] as const satisfies readonly AgentState[];
+const WAITING_REASONS = [
+  "prompt",
+  "question",
+  "approval",
+  "error",
+] as const satisfies readonly WaitingReason[];
+const StampSchema = z.number().int().positive().nullable();
+
+const AgentReplySchema = z.object({
+  text: z.string().min(1).max(MAX_CORRECTION_REPLY_CHARS),
+  truncated: z.boolean(),
+  recordedAt: StampSchema,
+  newerRecordsFollow: z.boolean(),
+  observedState: z
+    .object({
+      state: z.enum(AGENT_STATES),
+      waitingReason: z.enum(WAITING_REASONS).optional(),
+      lastStateChangeAt: StampSchema,
+    })
+    .optional(),
+}) satisfies z.ZodType<VoiceAgentReply>;
+
 export const VoicePaneCorrectionResultSchema = z.object({
   project: ProjectInfoSchema,
   vocabulary: VocabularySchema,
@@ -128,6 +163,9 @@ export const VoicePaneCorrectionResultSchema = z.object({
     .string()
     .max(MAX_CORRECTION_TERMINAL_CHARS * 2)
     .nullable(),
+  // A host from before #14900 sends none, and one out of shape costs only
+  // itself, never the rest of the answer.
+  agentReply: AgentReplySchema.optional().catch(undefined),
 });
 
 export const VoicePaneFilesResultSchema = z.object({
