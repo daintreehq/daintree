@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useCanopyStore, type CanopyScope } from "@/store/canopyStore";
 import { CANOPY_URGENT_PRIORITY, type CanopySnapshot } from "@shared/types/ipc/canopy";
-import { itemPriority, itemPutAside, splitInbox, type CanopyItem } from "./canopyModel";
+import {
+  itemNeedsAttention,
+  itemPriority,
+  itemPutAside,
+  splitInbox,
+  type CanopyItem,
+} from "./canopyModel";
 import { CANOPY_REVEAL_MS, canopyReorderWaiting, nextCanopyOrder } from "./canopyOrder";
 import type { HostId } from "@shared/types/remoteHosts";
 
@@ -28,7 +34,8 @@ function isUrgentItem(item: CanopyItem): boolean {
  * The inbox in the order the user sees it: revealed as the open's readings
  * land, then moved only at moments they can expect (`nextCanopyOrder`). Owns
  * what holds the list still — a press in the panel, the pointer over the list,
- * a row's open menu — and takes the panel's requests to rank it now.
+ * a row's open menu — and takes the panel's requests to rank it now. The Needs
+ * you band is held with it, and never loses the run the panel has selected.
  */
 export function useCanopyInboxOrder({
   isOpen,
@@ -121,6 +128,13 @@ export function useCanopyInboxOrder({
   const rankRequestSeenRef = useRef(0);
   // A reorder the list is holding back, which the user can apply now.
   const [reorderWaiting, setReorderWaiting] = useState(false);
+  // The run the panel has selected, told by the panel: the selection is
+  // worked out from the list this orders.
+  const [selected, setSelected] = useState<string | null>(null);
+  const needsYou = useMemo(
+    () => baseItems.filter(itemNeedsAttention).map((item) => item.runId),
+    [baseItems]
+  );
   useLayoutEffect(() => {
     if (!isOpen) {
       openedRef.current = false;
@@ -145,6 +159,8 @@ export function useCanopyInboxOrder({
       fresh,
       priorities,
       urgent: baseItems.filter(isUrgentItem).map((item) => item.runId),
+      needsYou,
+      selected,
       refreshedAt,
       now,
       opening,
@@ -157,7 +173,9 @@ export function useCanopyInboxOrder({
     });
     // A run arriving or an ask promoted leaves the held reorder held: still waiting.
     const shown = step.kind !== "set" ? order : step.ranked ? null : step.order;
-    setReorderWaiting(canopyReorderWaiting(shown, { fresh, priorities, refreshedAt }));
+    setReorderWaiting(
+      canopyReorderWaiting(shown, { fresh, priorities, refreshedAt, needsYou, selected })
+    );
     if (step.kind === "set") {
       if (step.ranked) {
         lastRankRef.current = now;
@@ -176,6 +194,8 @@ export function useCanopyInboxOrder({
     hostId,
     orderKey,
     baseItems,
+    needsYou,
+    selected,
     order,
     setOrder,
     setHostOrder,
@@ -195,6 +215,13 @@ export function useCanopyInboxOrder({
       .map(({ item }) => item);
   }, [baseItems, order]);
   const inbox = useMemo(() => splitInbox(items), [items]);
+  // Who sits in the Needs you band: as held with the order, or before there is
+  // one, who needs the user now.
+  const heldBand = order?.band ?? null;
+  const band = useMemo<ReadonlySet<string>>(
+    () => new Set(heldBand ?? needsYou),
+    [heldBand, needsYou]
+  );
   const bodyRef = useRef<HTMLDivElement>(null);
   // Anything the user does in the panel holds the list still for a while, and
   // a press holds it until it is let go.
@@ -263,6 +290,7 @@ export function useCanopyInboxOrder({
   return {
     items,
     inbox,
+    band,
     owedOnOpen,
     revealed,
     reorderWaiting,
@@ -273,5 +301,6 @@ export function useCanopyInboxOrder({
     listHidden,
     menuOpenChanged,
     requestRank,
+    selectionChanged: setSelected,
   };
 }

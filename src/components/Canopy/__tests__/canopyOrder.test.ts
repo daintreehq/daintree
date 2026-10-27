@@ -19,6 +19,8 @@ function input(
     fresh,
     priorities: new Map(Object.entries(priorities)),
     urgent: [],
+    needsYou: [],
+    selected: null,
     refreshedAt: 2,
     now: NOW,
     opening: false,
@@ -32,7 +34,7 @@ function input(
 }
 
 function order(ids: string[], extra: Partial<CanopyOrder> = {}): CanopyOrder {
-  return { ids, rankedFor: 1, urgent: [], ...extra };
+  return { ids, rankedFor: 1, urgent: [], band: [], ...extra };
 }
 
 function idsOf(step: ReturnType<typeof nextCanopyOrder>): readonly string[] | null {
@@ -257,5 +259,111 @@ describe("nextCanopyOrder", () => {
     expect(canopyReorderWaiting(order(["b", "a"]), input({ a: 45, b: 40 }))).toBe(false);
     expect(canopyReorderWaiting(order(["a", "b"]), input({ a: 90, b: 40 }))).toBe(false);
     expect(canopyReorderWaiting(null, input({ a: 90, b: 40 }))).toBe(false);
+  });
+});
+
+describe("the Needs you band", () => {
+  const bandOf = (step: ReturnType<typeof nextCanopyOrder>) =>
+    step.kind === "set" ? [...step.order.band].sort() : null;
+
+  it("keeps who is in it through a reading that crosses the floor, until the list may re-rank", () => {
+    // No scan since the rank: b's reading moved over the floor, and c's under it.
+    const held = order(["a", "b", "c"], { rankedFor: 2, band: ["a", "c"] });
+    const now = { a: 90, b: 60, c: 50 };
+    const crossed = { needsYou: ["a", "b"] };
+    expect(
+      nextCanopyOrder(held, input(now, { ...crossed, lastInteractionAt: NOW - 1_000 }))
+    ).toEqual({ kind: "wait", ms: CANOPY_RANK_IDLE_MS - 1_000 });
+    expect(nextCanopyOrder(held, input(now, { ...crossed, pointerInList: true }))).toEqual({
+      kind: "hold",
+    });
+    // The held change is the reorder the panel offers, though no scan read anything.
+    expect(canopyReorderWaiting(held, input(now, crossed))).toBe(true);
+    // Once the user leaves the list alone, the band takes who needs them now.
+    expect(bandOf(nextCanopyOrder(held, input(now, crossed)))).toEqual(["a", "b"]);
+  });
+
+  it("leaves who is in it alone when a run arrives or leaves while the list holds", () => {
+    const held = order(["a", "gone", "b"], { rankedFor: 2, band: ["a", "gone"] });
+    const step = nextCanopyOrder(
+      held,
+      input({ a: 90, b: 60, c: 70 }, { needsYou: ["a", "b", "c"], pointerInList: true })
+    );
+    expect(idsOf(step)).toEqual(["a", "b", "c"]);
+    expect(bandOf(step)).toEqual(["a"]);
+  });
+
+  it("keeps a handled row in it while it is selected, and lets it go at a rank once it isn't", () => {
+    // a was replied to: it no longer needs the user, and ranks below b now.
+    const held = order(["a", "b"], { rankedFor: 2, band: ["a", "b"] });
+    const replied = { a: 0, b: 70 };
+    const onA = { needsYou: ["b"], selected: "a" };
+    expect(nextCanopyOrder(held, input(replied, onA))).toEqual({ kind: "hold" });
+    expect(canopyReorderWaiting(held, input(replied, onA))).toBe(false);
+    // A scan lands and the list re-ranks: a moves below b, but stays in the band.
+    const ranked = nextCanopyOrder(held, input(replied, { ...onA, refreshedAt: 3 }));
+    expect(idsOf(ranked)).toEqual(["b", "a"]);
+    expect(bandOf(ranked)).toEqual(["a", "b"]);
+
+    // The user moves to b: a is held in the band until the list may re-rank.
+    const settled = ranked.kind === "set" ? ranked.order : held;
+    const onB = { needsYou: ["b"], selected: "b", refreshedAt: 3 };
+    expect(
+      nextCanopyOrder(settled, input(replied, { ...onB, lastInteractionAt: NOW - 1_000 }))
+    ).toEqual({ kind: "wait", ms: CANOPY_RANK_IDLE_MS - 1_000 });
+    expect(canopyReorderWaiting(settled, input(replied, onB))).toBe(true);
+    expect(bandOf(nextCanopyOrder(settled, input(replied, onB)))).toEqual(["b"]);
+  });
+
+  it("never puts a selected run into it that wasn't there", () => {
+    const step = nextCanopyOrder(
+      order(["a", "b"], { band: ["a"] }),
+      input({ a: 90, b: 20 }, { needsYou: ["a"], selected: "b" })
+    );
+    expect(bandOf(step)).toEqual(["a"]);
+  });
+
+  it("keeps a replied urgent ask in it when it stops paging the user", () => {
+    const held = order(["b", "a"], { rankedFor: 2, urgent: ["b"], band: ["b"] });
+    const step = nextCanopyOrder(
+      held,
+      input({ a: 40, b: 0 }, { urgent: [], needsYou: [], pointerInList: true })
+    );
+    expect(step).toEqual({ kind: "set", order: { ...held, urgent: [] }, ranked: false });
+  });
+
+  it("takes an ask newly urgent at once, even under the pointer, but not under a press", () => {
+    const held = order(["a", "b"], { rankedFor: 2, band: ["a"] });
+    const paged = { urgent: ["b"], needsYou: ["a", "b"], pointerInList: true };
+    const step = nextCanopyOrder(held, input({ a: 70, b: 95 }, paged));
+    expect(idsOf(step)).toEqual(["b", "a"]);
+    expect(bandOf(step)).toEqual(["a", "b"]);
+    expect(nextCanopyOrder(held, input({ a: 70, b: 95 }, { ...paged, pressing: true }))).toEqual({
+      kind: "hold",
+    });
+  });
+
+  it("ranks who is in it afresh on an open, a Refresh and a reveal", () => {
+    const held = order(["a", "b"], { rankedFor: 2, band: ["a"] });
+    const now = { a: 90, b: 60 };
+    const needs = { needsYou: ["a", "b"], pointerInList: true };
+    expect(bandOf(nextCanopyOrder(held, input(now, { ...needs, opening: true })))).toEqual([
+      "a",
+      "b",
+    ]);
+    expect(bandOf(nextCanopyOrder(held, input(now, { ...needs, requested: true })))).toEqual([
+      "a",
+      "b",
+    ]);
+    expect(
+      bandOf(nextCanopyOrder(held, input(now, { needsYou: ["a", "b"], revealing: true })))
+    ).toEqual(["a", "b"]);
+    // With nothing changed, an open holds still.
+    expect(
+      nextCanopyOrder(
+        order(["a", "b"], { rankedFor: 2, band: ["a", "b"] }),
+        input(now, { ...needs, opening: true })
+      )
+    ).toEqual({ kind: "hold" });
   });
 });

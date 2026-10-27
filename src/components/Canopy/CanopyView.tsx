@@ -640,6 +640,7 @@ function CanopyInbox({
   const {
     items,
     inbox,
+    band,
     owedOnOpen,
     revealed,
     reorderWaiting,
@@ -650,6 +651,7 @@ function CanopyInbox({
     listHidden,
     menuOpenChanged,
     requestRank,
+    selectionChanged,
   } = useCanopyInboxOrder({
     isOpen,
     hostId,
@@ -714,6 +716,7 @@ function CanopyInbox({
     recoveries,
     fleet,
     inbox,
+    band,
     query,
     appliedQuery,
     terms,
@@ -791,6 +794,10 @@ function CanopyInbox({
   useLayoutEffect(() => {
     if (openedRunId !== null) acknowledgeOpened(openedRunId);
   }, [openedRunId, acknowledgeOpened]);
+  // The band never loses the selected run under the user: the order is told it.
+  useLayoutEffect(() => {
+    selectionChanged(isOpen ? openedRunId : null);
+  }, [isOpen, openedRunId, selectionChanged]);
   const { reserveUndo, undoReads, undoLine } = useCanopyInboxUndo({ hostId, api });
 
   // A held reorder is said once, not row by row as its scores land.
@@ -1152,15 +1159,16 @@ function CanopyInbox({
       readings.some((reading) => reading.canopy?.activated === true && reading.canopy.waiting));
   // The header's count moves to the first run in the band, first lifting whatever
   // keeps one of the band's runs out of the list.
+  const countedWorker = (item: CanopyItem) => band.has(item.runId) && itemNeedsAttention(item);
   const showNeedsYou = () => {
-    const first = inbox.inbox.find(itemNeedsAttention);
+    const first = inbox.inbox.find(countedWorker);
     // Workers lead the band; with none asking, the first assistant that is.
     const askingAssistant = assistantItems.find((item) => item.ask !== null);
     if (!first && !askingAssistant) return;
     const listedIds = new Set(listed.map((item) => item.runId));
     const shownIds = new Set(shownAssistants.map((item) => item.id));
     const hiddenWorker = inbox.inbox.some(
-      (item) => itemNeedsAttention(item) && !listedIds.has(item.runId)
+      (item) => countedWorker(item) && !listedIds.has(item.runId)
     );
     const hiddenAssistant = assistantItems.some(
       (item) => item.ask !== null && !shownIds.has(item.id)

@@ -29,6 +29,8 @@ export interface CanopyInboxProjectionInput {
   ownHostId: HostId;
   /** Every worker in the inbox, archived ones aside, whatever the filters show. */
   workers: readonly CanopyItem[];
+  /** The workers in the Needs you band, by run id: held with the order, not read afresh. */
+  band: ReadonlySet<string>;
   /** Every assistant, whatever the filters show. */
   assistants: readonly CanopyAssistantItem[];
   /** The workers listed, in the order shown. */
@@ -46,7 +48,11 @@ export interface CanopyInboxProjectionInput {
 export interface CanopyInboxProjection {
   /** Everything in the inbox, workers then assistants, unfiltered. */
   inbox: CanopyInboxEntry[];
-  /** What needs the user, in inbox order: what the header counts and the band holds. */
+  /**
+   * What needs the user, in inbox order: what the header counts. A worker is
+   * counted while it is in the band and still needs the user, so one held
+   * there after a reply isn't, and one newly over the floor waits for the band.
+   */
   needsYou: CanopyInboxEntry[];
   /**
    * What the keyboard walks, top to bottom as drawn: the band's workers, the
@@ -103,12 +109,15 @@ export function projectCanopyInbox(input: CanopyInboxProjectionInput): CanopyInb
     return entry;
   };
   const inbox = [...input.workers.map(worker), ...input.assistants.map(assistant)];
-  const bandWorkers = input.listedWorkers.filter(itemNeedsAttention);
-  const restWorkers = input.listedWorkers.filter((item) => !itemNeedsAttention(item));
+  const inBand = (item: CanopyItem) => input.band.has(item.runId);
+  const bandWorkers = input.listedWorkers.filter(inBand);
+  const restWorkers = input.listedWorkers.filter((item) => !inBand(item));
   const asking = (item: CanopyAssistantItem) => input.askingAssistantsInBand && item.ask !== null;
   return {
     inbox,
-    needsYou: inbox.filter(entryNeedsYou),
+    needsYou: inbox.filter(
+      (entry) => entryNeedsYou(entry) && (entry.role === "assistant" || inBand(entry.item))
+    ),
     navigation: [
       ...bandWorkers.map(worker),
       ...input.shownAssistants.filter(asking).map(assistant),
