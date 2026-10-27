@@ -1080,10 +1080,7 @@ describe("voiceInput — spoken send on Deepgram's short endpoint", () => {
     await (handleStop as SessionHandler)(fakeEvent, currentSessionId);
     vi.advanceTimersByTime(5000);
 
-    expect(toRenderer()).toEqual([
-      stopRequested,
-      completion("Fix the login bug", { send: true }),
-    ]);
+    expect(toRenderer()).toEqual([stopRequested, completion("Fix the login bug", { send: true })]);
   });
 
   it("drops a held send, and sends nothing, when Escape cancels inside the window", async () => {
