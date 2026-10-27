@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VoiceRecordingTarget } from "@/store/voiceRecordingStore";
-import type { VoiceInputError } from "@shared/types";
+import { VOICE_STOP_AUDIO_LOST_CODE, type VoiceInputError } from "@shared/types";
 import { TRANSCRIPTION_ITEM_FAILED_CODE } from "@shared/types/voice";
 
 type VoiceStatusCallback = (payload: { sessionId: string; status: string }) => void;
@@ -1606,6 +1606,43 @@ describe("VoiceRecordingService adversarial", () => {
     expect(runtime.voiceFns.announce).toHaveBeenCalledTimes(1);
     // The error is dropped while stopping, so the structured error never reaches
     // the store — lastError stays whatever it was before the graceful stop.
+    expect(runtime.voiceFns.setLastError).not.toHaveBeenCalled();
+  });
+
+  it("tells the user about speech a stop couldn't send, without disturbing the stop", async () => {
+    const stopDeferred = deferred<void>();
+    runtime.stopQueue.push(stopDeferred.promise);
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const { notify } = await import("@/lib/notify");
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Panel One" });
+    runtime.voiceState.activeTarget = { panelId: "panel-1", panelTitle: "Panel One" };
+    runtime.voiceState.status = "reconnecting";
+    runtime.voiceState.panelBuffers["panel-1"] = createPanelBuffer({ liveText: "" });
+
+    const stopPromise = voiceRecordingService.stop("Dictation stopped.");
+    await vi.waitFor(() => {
+      expect(runtime.voiceFns.setStatus).toHaveBeenCalledWith("finishing");
+    });
+    vi.mocked(notify).mockClear();
+    const lost: VoiceInputError = {
+      severity: "transient",
+      code: VOICE_STOP_AUDIO_LOST_CODE,
+      message: "up to 3 seconds at the end may be missing.",
+    };
+    emitError(lost);
+    emitStatus("idle");
+    stopDeferred.resolve();
+    await stopPromise;
+
+    expect(vi.mocked(notify)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(notify).mock.calls[0]![0]).toMatchObject({
+      type: "warning",
+      message: lost.message,
+      context: { eventKind: "connectivity" },
+    });
+    expect(runtime.voiceInput.stop).toHaveBeenCalledTimes(1);
+    expect(runtime.voiceFns.finishSession).toHaveBeenCalledTimes(1);
     expect(runtime.voiceFns.setLastError).not.toHaveBeenCalled();
   });
 

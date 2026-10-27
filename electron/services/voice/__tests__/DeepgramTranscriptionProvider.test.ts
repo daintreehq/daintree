@@ -151,6 +151,7 @@ vi.mock("../../../utils/logger.js", () => ({
 const { DeepgramTranscriptionProvider, estimateKeytermTokens } =
   await import("../DeepgramTranscriptionProvider.js");
 const { AUDIO_BUFFER_MAX_CHUNKS } = await import("../TranscriptionProvider.js");
+const { VOICE_STOP_AUDIO_LOST_CODE } = await import("../../../../shared/types/voice.js");
 const { logInfo } = await import("../../../utils/logger.js");
 type DeepgramTranscriptionProviderInstance = InstanceType<typeof DeepgramTranscriptionProvider>;
 type VoiceTranscriptionEvent = import("../TranscriptionProvider.js").VoiceTranscriptionEvent;
@@ -1176,8 +1177,12 @@ describe("DeepgramTranscriptionProvider", () => {
   it("stopGracefully while connecting gives up after the connect wait if the socket never opens", async () => {
     const provider = new DeepgramTranscriptionProvider();
     const statuses: string[] = [];
+    const lossReports: string[] = [];
     provider.onEvent((e) => {
       if (e.type === "status") statuses.push(e.status);
+      if (e.type === "error" && e.error.code === VOICE_STOP_AUDIO_LOST_CODE) {
+        lossReports.push(e.error.message);
+      }
     });
 
     const startPromise = provider.start(BASE_SETTINGS, "session-1");
@@ -1193,6 +1198,7 @@ describe("DeepgramTranscriptionProvider", () => {
     expect(socket.closeCalls).toBe(1);
     await expect(startPromise).resolves.toMatchObject({ ok: false });
     expect(socket.binaryFrames()).toHaveLength(0);
+    expect(lossReports).toEqual([expect.stringMatching(/up to 1 second at the end/)]);
   });
 
   it("stopGracefully while connecting with no buffered audio stops immediately", async () => {
@@ -1622,7 +1628,8 @@ describe("DeepgramTranscriptionProvider", () => {
     const stopPromise = provider.stopGracefully();
     expect(statuses.at(-1)).toBe("finishing");
 
-    vi.advanceTimersToNextTimer();
+    // The stop makes the scheduled attempt itself.
+    expect(instances).toHaveLength(2);
     const reconnect = latestInstance();
     reconnect.simulateOpen();
     expect(reconnect.binaryFrames().map((b) => [...b])).toEqual([
@@ -1643,6 +1650,159 @@ describe("DeepgramTranscriptionProvider", () => {
     expect(completes).toEqual(["said in the gap"]);
     expect(statuses.at(-1)).toBe("idle");
     expect(statuses.slice(statuses.indexOf("finishing"))).not.toContain("recording");
+  });
+
+  it("stopGracefully during a reconnect backoff tries straight away and flushes once the network is back", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    provider.onEvent((e) => events.push(e));
+
+    const { socket } = await bringSessionReady(provider);
+    provider.sendAudioChunk(new Uint8Array([1, 1]).buffer);
+    socket.simulateClose(1006);
+    // The outage outlasts a few attempts, so the backoff has grown to the
+    // length of the stop's own wait for a socket.
+    for (let i = 0; i < 4; i++) {
+      vi.advanceTimersToNextTimer();
+      latestInstance().simulateClose(1006);
+    }
+    provider.sendAudioChunk(new Uint8Array([2, 2]).buffer);
+    const attemptsBeforeStop = instances.length;
+
+    const stopPromise = provider.stopGracefully();
+    expect(instances).toHaveLength(attemptsBeforeStop + 1);
+    const reconnect = latestInstance();
+    reconnect.simulateOpen();
+    expect(reconnect.binaryFrames().map((b) => [...b])).toEqual([
+      [1, 1],
+      [2, 2],
+    ]);
+    expect(reconnect.textFrames().map((f) => f.type)).toEqual(["CloseStream"]);
+    reconnect.simulateClose(1000);
+    await stopPromise;
+
+    const statuses = statusesOf(events);
+    expect(statuses.at(-1)).toBe("idle");
+    expect(statuses.slice(statuses.indexOf("finishing"))).not.toContain("reconnecting");
+    expect(events.filter((e) => e.type === "error")).toEqual([]);
+    // The backoff timer the stop pre-empted doesn't make a second attempt.
+    vi.advanceTimersByTime(60_000);
+    expect(instances).toHaveLength(attemptsBeforeStop + 1);
+  });
+
+  describe("a stop that can't send what it holds", () => {
+    // 4,800 bytes is 100ms of linear16 @ 24kHz.
+    const CHUNK_BYTES = 4_800;
+
+    function lossReportsOf(events: VoiceTranscriptionEvent[]): string[] {
+      return events.flatMap((e) =>
+        e.type === "error" && e.error.code === VOICE_STOP_AUDIO_LOST_CODE ? [e.error.message] : []
+      );
+    }
+
+    /** One second sent and never confirmed, then two seconds said during the outage. */
+    async function stopDuringBackoff(): Promise<{
+      provider: DeepgramTranscriptionProviderInstance;
+      events: VoiceTranscriptionEvent[];
+      stopPromise: Promise<void>;
+    }> {
+      const provider = new DeepgramTranscriptionProvider();
+      const events: VoiceTranscriptionEvent[] = [];
+      provider.onEvent((e) => events.push(e));
+      const { socket } = await bringSessionReady(provider);
+      for (let i = 0; i < 10; i++) provider.sendAudioChunk(new ArrayBuffer(CHUNK_BYTES));
+      socket.simulateClose(1006);
+      for (let i = 0; i < 20; i++) provider.sendAudioChunk(new ArrayBuffer(CHUNK_BYTES));
+      const stopPromise = provider.stopGracefully();
+      return { provider, events, stopPromise };
+    }
+
+    function expectOneLossReportBeforeIdle(events: VoiceTranscriptionEvent[]): void {
+      const reports = lossReportsOf(events);
+      expect(reports).toHaveLength(1);
+      expect(reports[0]).toMatch(/up to 3 seconds/);
+      const reportAt = events.findIndex(
+        (e) => e.type === "error" && e.error.code === VOICE_STOP_AUDIO_LOST_CODE
+      );
+      const idleAt = events.findIndex((e) => e.type === "status" && e.status === "idle");
+      expect(reportAt).toBeGreaterThan(-1);
+      expect(reportAt).toBeLessThan(idleAt);
+    }
+
+    it("reports it when the network is still down", async () => {
+      const { events, stopPromise } = await stopDuringBackoff();
+      latestInstance().simulateClose(1006);
+      await stopPromise;
+      expectOneLossReportBeforeIdle(events);
+      const attempts = instances.length;
+      vi.advanceTimersByTime(60_000);
+      expect(instances).toHaveLength(attempts);
+    });
+
+    it("reports it after a transport error on the stop's attempt", async () => {
+      const { events, stopPromise } = await stopDuringBackoff();
+      const attempt = latestInstance();
+      attempt.simulateError(new Error("ENETUNREACH"));
+      attempt.simulateClose(1006);
+      await stopPromise;
+      expectOneLossReportBeforeIdle(events);
+    });
+
+    it("reports it when the stop's attempt can't construct a socket", async () => {
+      const provider = new DeepgramTranscriptionProvider();
+      const events: VoiceTranscriptionEvent[] = [];
+      provider.onEvent((e) => events.push(e));
+      const { socket } = await bringSessionReady(provider);
+      for (let i = 0; i < 10; i++) provider.sendAudioChunk(new ArrayBuffer(CHUNK_BYTES));
+      socket.simulateClose(1006);
+      for (let i = 0; i < 20; i++) provider.sendAudioChunk(new ArrayBuffer(CHUNK_BYTES));
+      throwOnConstruct = true;
+      await provider.stopGracefully();
+      expectOneLossReportBeforeIdle(events);
+    });
+
+    it("reports it when the stop's attempt never opens", async () => {
+      const { events, stopPromise } = await stopDuringBackoff();
+      vi.advanceTimersByTime(3_000);
+      await stopPromise;
+      expectOneLossReportBeforeIdle(events);
+    });
+
+    it("reports what it held even when a fatal rejection discards it first", async () => {
+      const { events, stopPromise } = await stopDuringBackoff();
+      latestInstance().simulateUnexpectedResponse(401);
+      await stopPromise;
+      expectOneLossReportBeforeIdle(events);
+    });
+
+    it("reports once however many times the stop is asked for", async () => {
+      const { provider, events, stopPromise } = await stopDuringBackoff();
+      const attempts = instances.length;
+      const again = provider.stopGracefully();
+      expect(instances).toHaveLength(attempts);
+      vi.advanceTimersByTime(3_000);
+      await Promise.all([stopPromise, again]);
+      expectOneLossReportBeforeIdle(events);
+    });
+
+    it("stays quiet when a hard stop cuts the wait short", async () => {
+      const { provider, events, stopPromise } = await stopDuringBackoff();
+      provider.stop();
+      await stopPromise;
+      vi.advanceTimersByTime(60_000);
+      expect(lossReportsOf(events)).toEqual([]);
+    });
+
+    it("stays quiet once the held audio went out, even if the final results never come", async () => {
+      const { events, stopPromise } = await stopDuringBackoff();
+      const attempt = latestInstance();
+      attempt.simulateOpen();
+      expect(attempt.binaryFrames()).toHaveLength(30);
+      vi.advanceTimersByTime(3_000);
+      await stopPromise;
+      expect(lossReportsOf(events)).toEqual([]);
+      expect(statusesOf(events).at(-1)).toBe("idle");
+    });
   });
 
   it("stopGracefully while a reconnect attempt is connecting waits to resend unconfirmed audio", async () => {
@@ -1675,8 +1835,12 @@ describe("DeepgramTranscriptionProvider", () => {
   it("a failed reconnect attempt settles a waiting stop instead of retrying", async () => {
     const provider = new DeepgramTranscriptionProvider();
     const statuses: string[] = [];
+    const lossReports: string[] = [];
     provider.onEvent((e) => {
       if (e.type === "status") statuses.push(e.status);
+      if (e.type === "error" && e.error.code === VOICE_STOP_AUDIO_LOST_CODE) {
+        lossReports.push(e.error.message);
+      }
     });
 
     const { socket } = await bringSessionReady(provider);
@@ -1684,11 +1848,11 @@ describe("DeepgramTranscriptionProvider", () => {
     socket.simulateClose(1006);
     const stopPromise = provider.stopGracefully();
 
-    vi.advanceTimersToNextTimer();
     // A rejected upgrade fires no close, so nothing else would settle the stop.
     latestInstance().simulateUnexpectedResponse(503);
     await stopPromise;
     expect(statuses.at(-1)).toBe("idle");
+    expect(lossReports).toHaveLength(1);
 
     const attempts = instances.length;
     vi.advanceTimersByTime(60_000);

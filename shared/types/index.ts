@@ -574,7 +574,11 @@ export type {
   VoiceStartOutcome,
   VoiceTranscriptPhase,
 } from "./voice.js";
-export { isActiveVoiceSession, MAX_RECENT_DICTATIONS } from "./voice.js";
+export {
+  isActiveVoiceSession,
+  MAX_RECENT_DICTATIONS,
+  VOICE_STOP_AUDIO_LOST_CODE,
+} from "./voice.js";
 
 // Workspace Host types - IPC protocol for workspace management
 export type {

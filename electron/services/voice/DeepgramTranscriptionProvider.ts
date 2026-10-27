@@ -1,11 +1,13 @@
 import WebSocket from "ws";
 import type { VoiceInputError, VoiceInputSettings } from "../../../shared/types/ipc/api.js";
+import { VOICE_STOP_AUDIO_LOST_CODE } from "../../../shared/types/voice.js";
 import {
   normalizeVoiceLanguage,
   VOICE_LANGUAGE_AUTO,
 } from "../../../shared/config/voiceLanguages.js";
 import { MAX_KEYTERMS } from "../../../shared/config/voiceKeyterms.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { pluralize } from "../../../shared/utils/pluralize.js";
 import { logDebug, logInfo, logWarn, logError } from "../../utils/logger.js";
 import { voiceErrorLogFields, voicePayloadShape } from "../../../shared/utils/voiceLogFields.js";
 import {
@@ -37,7 +39,8 @@ const CONNECT_TIMEOUT_MS = 10_000;
 // the stop through after this long rather than hanging.
 const DRAIN_TIMEOUT_MS = 3_000;
 // How long a graceful stop that lands before the socket opens waits for it, so
-// the buffered audio can still be transcribed. Past this it's discarded.
+// the buffered audio can still be transcribed. Past this it's discarded, and
+// the user is told.
 const STOP_CONNECT_TIMEOUT_MS = 3_000;
 // Deepgram drops an idle connection after ~10s of no audio with a NET-0001
 // error. A periodic KeepAlive text frame resets that timer; well under 10s
@@ -253,6 +256,9 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
   // Reconnect state. Survives per-connection teardown (cleanupConnection) and
   // is reset by a successful open or a full session reset.
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  // The attempt `reconnectTimer` will make, so a stop can make it now instead
+  // of waiting out the backoff.
+  private reconnectNow: (() => void) | null = null;
   private reconnectAttempt = 0;
   private isReconnecting = false;
   // performance.now() past which this recovery gives up. Monotonic, so time
@@ -284,6 +290,9 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
   // A graceful stop arrived before the socket opened; the drain is waiting on
   // `open` to flush the buffered audio and send CloseStream (#13108).
   private stopPendingReady = false;
+  // What that stop was holding, taken when it landed: a fatal error discards
+  // the audio before the drain settles and reports the loss.
+  private stopHeldBytes = 0;
 
   private audioChunkCount = 0;
   // Session-summary counts. They outlive the drain's cleanup and reset only
@@ -698,6 +707,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    this.reconnectNow = null;
   }
 
   /**
@@ -736,17 +746,19 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       remainingMs: Math.round(remainingMs),
       lastCode: this.lastReconnectError?.code,
     });
-    this.emit({ type: "status", status: "reconnecting" });
-
     this.clearReconnectTimer();
-    this.reconnectTimer = setTimeout(() => {
-      this.reconnectTimer = null;
+    const reconnectNow = (): void => {
+      if (this.reconnectNow !== reconnectNow) return;
+      this.clearReconnectTimer();
       if (this.sessionId !== mySessionId) return;
       logInfo(`${P} Reconnecting`, { attempt: this.reconnectAttempt });
       this.reconnectCount++;
       this.cleanupConnection();
       this.connect(mySessionId, settings);
-    }, delay);
+    };
+    this.reconnectNow = reconnectNow;
+    this.reconnectTimer = setTimeout(reconnectNow, delay);
+    this.emit({ type: "status", status: "reconnecting" });
   }
 
   /**
@@ -1078,6 +1090,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     this.isExpectedClose = false;
     this.isDraining = false;
     this.stopPendingReady = false;
+    this.stopHeldBytes = 0;
     if (this.drainResolve) {
       this.drainResolve();
       this.drainResolve = null;
@@ -1104,18 +1117,42 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
   }
 
   private settleDrain(reason: string): void {
+    const resolve = this.drainResolve;
+    // Still waiting on a socket: what the stop was holding never went out.
+    const lostBytes = resolve && this.stopPendingReady ? this.stopHeldBytes : 0;
     this.clearDrainTimeout();
     this.isDraining = false;
     this.stopPendingReady = false;
+    this.stopHeldBytes = 0;
     this.drainPromise = null;
-    if (this.drainResolve) {
-      logInfo(`${P} Drain completed`, { reason });
-      const resolve = this.drainResolve;
-      this.drainResolve = null;
-      resolve();
-    } else {
+    this.drainResolve = null;
+    if (!resolve) {
       logDebug(`${P} settleDrain called with no pending drain`, { reason });
+      return;
     }
+    if (lostBytes > 0) this.reportStopAudioLost(lostBytes, reason);
+    logInfo(`${P} Drain completed`, { reason });
+    resolve();
+  }
+
+  /**
+   * Tells the user a stop gave up on audio it was holding. Sent before the
+   * drain resolves, so it still reaches the session's owner. The held audio is
+   * the dictation's tail, and it may include silence or words an interim
+   * result already showed, hence "up to".
+   */
+  private reportStopAudioLost(lostBytes: number, reason: string): void {
+    const seconds = Math.max(1, Math.ceil(lostBytes / AUDIO_BYTES_PER_SECOND));
+    logWarn(`${P} Stop discarded held audio`, { reason, lostBytes, seconds });
+    const lost = pluralize(seconds, "second");
+    this.emit({
+      type: "error",
+      error: {
+        severity: "transient",
+        code: VOICE_STOP_AUDIO_LOST_CODE,
+        message: `Deepgram wasn't connected when dictation stopped, so up to ${lost} at the end may be missing.`,
+      },
+    });
   }
 
   // No delay tier: its turn detection is `endpointing`, a separate setting.
@@ -1144,8 +1181,8 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
 
     // Audio held while (re)connecting — captured in the gap, or sent but never
     // confirmed before a drop — goes out once a socket opens. If a live
-    // attempt or a scheduled reconnect can still get there, wait for it rather
-    // than discarding what the user already said.
+    // attempt or a scheduled reconnect can still get there, make it and wait
+    // for it rather than discarding what the user already said.
     const heldBytes = this.preConnectBufferBytes + this.unconfirmedBytes;
     if (!this.isReady && (this.connection || this.reconnectTimer) && heldBytes > 0) {
       return this.stopAfterConnect();
@@ -1199,8 +1236,10 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
    * Graceful stop before the socket opens. The drain promise first waits
    * (bounded by STOP_CONNECT_TIMEOUT_MS) for `open`, which flushes the buffer
    * and calls `closeStreamAfterLateReady()`; from there it's the normal
-   * CloseStream drain. Connect failures settle the drain via the close/fatal
-   * paths. Audio arriving meanwhile is dropped by `sendAudioChunk`.
+   * CloseStream drain. A reconnect waiting out its backoff is made now, and
+   * only once: a failure settles the drain via the close/fatal paths rather
+   * than retrying past the stop. Audio arriving meanwhile is dropped by
+   * `sendAudioChunk`.
    */
   private async stopAfterConnect(): Promise<void> {
     logInfo(`${P} Stop before socket open — waiting to flush buffered audio`, {
@@ -1211,10 +1250,11 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     });
     this.isDraining = true;
     this.stopPendingReady = true;
+    this.stopHeldBytes = this.preConnectBufferBytes + this.unconfirmedBytes;
     this.emit({ type: "status", status: "finishing" });
 
     const sessionIdBeforeDrain = this.sessionId;
-    this.drainPromise = new Promise<void>((resolve) => {
+    const drainPromise = new Promise<void>((resolve) => {
       this.drainResolve = resolve;
       this.drainTimeout = setTimeout(() => {
         logWarn(
@@ -1224,7 +1264,11 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
         this.settleDrain("connect-timeout");
       }, STOP_CONNECT_TIMEOUT_MS);
     });
-    await this.drainPromise;
+    this.drainPromise = drainPromise;
+    // An attempt that can't even construct its socket settles the drain
+    // before this returns, hence awaiting the local promise.
+    this.reconnectNow?.();
+    await drainPromise;
 
     if (this.sessionId === sessionIdBeforeDrain) {
       this.cleanupPreviousSession();
@@ -1239,6 +1283,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
    */
   private closeStreamAfterLateReady(): void {
     this.stopPendingReady = false;
+    this.stopHeldBytes = 0;
     this.clearDrainTimeout();
     try {
       this.connection?.send(JSON.stringify({ type: "CloseStream" }));
