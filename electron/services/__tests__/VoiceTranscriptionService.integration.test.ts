@@ -44,6 +44,7 @@ describe("VoiceTranscriptionService integration", () => {
           paragraphingStrategy: "spoken-command",
           resolveFileLinks: true,
           deviceId: "",
+          deviceLabel: "",
           organizationId: "",
           projectId: "",
           recordingMode: "toggle",

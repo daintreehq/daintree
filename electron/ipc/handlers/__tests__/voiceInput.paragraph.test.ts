@@ -1827,6 +1827,7 @@ describe("voiceInput — context keyterms wiring", () => {
       paragraphingStrategy: "spoken-command",
       resolveFileLinks: true,
       deviceId: "",
+      deviceLabel: "",
       organizationId: "",
       projectId: "",
       recordingMode: "toggle",
