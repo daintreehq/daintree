@@ -22,6 +22,7 @@ import {
   type DictatedSpan,
   type DictationDraftTarget,
   type DictationRecord,
+  type DictationUtterance,
   type DictationTextSpan,
 } from "@/store/dictationRangeStore";
 import { minimalDocChange, type TextChange, type TrackedTextRange } from "@/lib/textRangeMapping";
@@ -91,7 +92,12 @@ import {
   summarizeOpeningChunks,
   type PcmChunkStats,
 } from "@/services/voiceStartDiagnostics";
-import { recordCorrectionLanded, type LandedCorrection } from "@/services/voiceCorrectionLanding";
+import {
+  recordCorrectionLanded,
+  type CorrectionBaseline,
+  type LandedCorrection,
+} from "@/services/voiceCorrectionLanding";
+import { chunkFollowUpDecides, mayCutChunk } from "@/services/voiceCleanupChunks";
 import { CorrectionStreamAligner, type StreamedRewrite } from "@/services/voiceCorrectionStream";
 import {
   isHeldBackSession,
@@ -354,17 +360,19 @@ interface WarmAudio {
   retired: boolean;
 }
 
-/** A finished passage's post-stop AI correction, still on its way. */
+/**
+ * One pass of a dictation's AI cleanup, still on its way: a chunk sent while
+ * the session ran (#14772), or the pass at stop over whatever came after the
+ * last one.
+ */
 interface PendingCorrection {
+  kind: "chunk" | "stop";
+  /** The dictation's cleanup as a whole, which this pass is part of. */
+  cleanup: DictationCleanup;
   panelId: string;
   projectId?: string;
-  /** Taken at the stop: a later session's target is not this one's. */
+  /** Taken as the pass was sent: a later session's target is not this one's. */
   context: VoiceContext;
-  /**
-   * The recent-dictations entry this pass cleans up, when its passages hold
-   * every word the session heard; null when they hold only part of it.
-   */
-  historyId: string | null;
   /** The dictation (`dictationRangeStore`) its passages belong to. */
   dictationId: string;
   /** The session that heard them, whose cleanup context main read while it ran. */
@@ -375,19 +383,59 @@ interface PendingCorrection {
   live: Set<CorrectionPassage>;
   /** What each passage's cleanup has streamed over it so far; drawn, never written. */
   rewrites: Map<CorrectionPassage, StreamedRewrite>;
-  /** The learning baseline this pass seeded. */
-  seed: string | null;
   /** Applied or dropped; either way it will never touch the draft again. */
   done: boolean;
   /** Resolves when the correction is done. */
   settled: Promise<void>;
   settle: () => void;
-  /** The summary of the session that dictated the passages. */
+  /** The summary of the session that dictated the passages; the stop-time pass only. */
   timeline: VoiceSessionTimeline | null;
   /** `performance.now()` when the request went out. */
   startedAt: number;
   /** How long this machine's corrections of passages this long have taken. */
   expectedMs: number;
+}
+
+/**
+ * Everything one dictation's cleanup did, across its chunks and the pass at
+ * stop, for what reads the dictation as a whole: recent dictations, which keep
+ * the cleaned text only when every word went through cleanup, and the
+ * learning baseline. Kept until the session has stopped and every pass has
+ * its reply.
+ */
+interface DictationCleanup {
+  sessionId: string;
+  panelId: string;
+  projectId?: string;
+  /** Utterances a chunk took; later passes leave them alone. */
+  claimed: Set<string>;
+  /** Every pass, in the order sent. */
+  passes: PendingCorrection[];
+  /** Each passage's cleaned text once its reply is in; null where it stays as dictated. */
+  results: Map<CorrectionPassage, string | null>;
+  /** Chunk passages that couldn't land and gave their words back to a later pass. */
+  released: Set<CorrectionPassage>;
+  /** The heard-as rerun's rewrites of chunks, in draft order, for the transcript. */
+  rewrites: PassageRewrite[];
+  stopped: boolean;
+  /** The recent-dictations entry and every passage that covers its words, set at stop. */
+  history: { id: string; passages: CorrectionPassage[] } | null;
+  /**
+   * The learning baseline written at stop, and where in it each passage still
+   * on its way sits, so its cleaned text can take its place.
+   */
+  baseline: { text: string; spans: Map<CorrectionPassage, { from: number; to: number }> } | null;
+}
+
+/** Where the live session may cut its next chunk, waiting on what's said after it. */
+interface ChunkBreak {
+  sessionId: string;
+  /** The last utterance before the break. */
+  utteranceId: string;
+  /** A spoken paragraph break rather than a pause. */
+  paragraph: boolean;
+  /** What has been said since. */
+  after: string;
 }
 
 function longestPassage(passages: CorrectionPassage[]): number {
@@ -697,6 +745,12 @@ class VoiceRecordingService {
   // ~200ms of speech-level audio during a hold before its release stops it,
   // so a click or a cough while a thumb lingers on Cmd doesn't count.
   private static readonly HOLD_SPEECH_CHUNKS = 2;
+  // A dictation shorter than this keeps its one cleanup pass at stop.
+  private static readonly CHUNK_MIN_CHARS = 600;
+  // Quiet between one utterance's words landing and the next one's first text.
+  private static readonly CHUNK_PAUSE_MS = 1_500;
+  // Past main's 6s file-link job timeout.
+  private static readonly FILE_LINK_SETTLE_MS = 6_500;
   private micSilenceTimeoutId: ReturnType<typeof setTimeout> | null = null;
   // Owner of the silence countdown, so resume can re-arm it for the same
   // capture after a pause cancelled it.
@@ -714,9 +768,21 @@ class VoiceRecordingService {
     string,
     { correction: PendingCorrection; passage: CorrectionPassage; aligner: CorrectionStreamAligner }
   >();
-  // The correction whose seed each panel's learning baseline holds. Text alone
-  // can't tell two passages dictated with the same words apart.
-  private baselineOwners = new Map<string, PendingCorrection>();
+  // The dictation whose cleanup each panel's learning baseline holds. Text
+  // alone can't tell two passages dictated with the same words apart.
+  private baselineOwners = new Map<string, DictationCleanup>();
+  // Each dictation's cleanup across its chunks and the stop-time pass, by
+  // session id, until it has stopped and every pass has its reply (#14772).
+  private cleanups = new Map<string, DictationCleanup>();
+  // Where the live session may cut its next chunk.
+  private chunkBreak: ChunkBreak | null = null;
+  // performance.now() when the live session's last words landed: a long gap
+  // before its next ones is a pause to cut at.
+  private lastWordsAt: number | null = null;
+  // When each of the live session's transcripts that may name a file has had
+  // time for its links to land, by transcript id. A chunk waits for them: a
+  // link that resolves after cleanup rewrote its words has nowhere to go.
+  private fileLinksDue = new Map<string, number>();
   private unfollowBaselines: (() => void) | null = null;
   private writingShiftedDraft = false;
   // The composer showing each panel's draft, which owns its send, keyed by
@@ -778,6 +844,7 @@ class VoiceRecordingService {
               .getState()
               .getDraftInput(target.panelId, target.projectId);
             resolveVoiceAnchor(target.panelId, target.projectId, buffer?.dictationSessionId, draft);
+            this.noteNextWords(sessionId);
           }
           // Interim deltas accumulate in liveText only — the ghost-widget
           // decoration renders them outside the doc model so the editor's
@@ -828,10 +895,18 @@ class VoiceRecordingService {
             // the user hasn't seen, and a spoken send fires with no key press.
             if (spoken && isScratchCommand(spoken)) {
               // Recent dictations keep what landed, so scratched words leave the
-              // session's transcript with the draft (#14637).
-              if (this.scratchLastUtterance(panelId, projectId, buffer?.dictationSessionId)) {
+              // session's transcript with the draft (#14637), every segment a
+              // cleaned chunk ran together included.
+              const sources = this.scratchLastUtterance(
+                panelId,
+                projectId,
+                buffer?.dictationSessionId
+              );
+              for (let i = 0; i < sources; i++) {
                 useVoiceRecordingStore.getState().dropLastCompletedSegment(panelId);
               }
+              // What a waiting chunk break was judged on is gone.
+              this.chunkBreak = null;
               useVoiceRecordingStore.getState().completeSegment("", itemId, { discard: true });
               return;
             }
@@ -851,6 +926,8 @@ class VoiceRecordingService {
             }
             const finalText = completedText.trim();
             if (finalText) {
+              // A segment that finalised with no preview starts here.
+              if (!buffer?.liveText) this.noteNextWords(sessionId);
               // Unsure words are measured against the strings main sent, untrimmed.
               const lead = completedText.length - completedText.trimStart().length;
               const heardLead = (heard?.length ?? 0) - (heard?.trimStart().length ?? 0);
@@ -879,6 +956,14 @@ class VoiceRecordingService {
               const timeline = this.timelines.get(sessionId);
               timeline?.addCommitted(finalText.length);
               timeline?.markNextFrame("firstText");
+              if (transcriptId) {
+                this.fileLinksDue.set(
+                  transcriptId,
+                  performance.now() + VoiceRecordingService.FILE_LINK_SETTLE_MS
+                );
+              }
+              this.lastWordsAt = performance.now();
+              if (!send) this.followChunkBreak(sessionId, finalText);
             }
           }
           // What landed, so recent dictations hold a command written as one,
@@ -895,49 +980,59 @@ class VoiceRecordingService {
       voiceInput.onFileTokenResolved(({ sessionId, transcriptId, references }) => {
         if (this.discardedSessionIds.has(sessionId)) return;
         logDebug(`${LOG_PREFIX} Received file references`, { count: references.length });
-        // Routed by the session that spoke them, not the active target: the
-        // final utterance's references arrive as its session stops, by which
-        // point another panel may be dictating.
-        const record = useDictationRangeStore
-          .getState()
-          .listSessionDictations(sessionId)
-          .find((r) => r.utterances.some((u) => u.transcriptId === transcriptId));
-        if (!record) {
-          logDebug(`${LOG_PREFIX} File references' dictation is gone, discarding`);
-          return;
-        }
+        this.fileLinksDue.delete(transcriptId);
+        try {
+          // Routed by the session that spoke them, not the active target: the
+          // final utterance's references arrive as its session stops, by which
+          // point another panel may be dictating.
+          const record = useDictationRangeStore
+            .getState()
+            .listSessionDictations(sessionId)
+            .find((r) => r.utterances.some((u) => u.transcriptId === transcriptId));
+          if (!record) {
+            logDebug(`${LOG_PREFIX} File references' dictation is gone, discarding`);
+            return;
+          }
 
-        const { panelId, projectId } = record;
-        const inputStore = useTerminalInputStore.getState();
-        const draft = inputStore.getDraftInput(panelId, projectId);
-        const edits = planFileReferenceEdits(record, transcriptId, references, draft);
-        if (edits.length === 0) {
-          logDebug(`${LOG_PREFIX} File references not found in their words, discarding`, {
-            count: references.length,
-          });
-          return;
+          const { panelId, projectId } = record;
+          const inputStore = useTerminalInputStore.getState();
+          const draft = inputStore.getDraftInput(panelId, projectId);
+          const edits = planFileReferenceEdits(record, transcriptId, references, draft);
+          if (edits.length === 0) {
+            logDebug(`${LOG_PREFIX} File references not found in their words, discarding`, {
+              count: references.length,
+            });
+            return;
+          }
+          // An utterance still being dictated on the panel sliced its start from
+          // the draft before the swap; its offsets move with the new lengths.
+          const voiceStore = useVoiceRecordingStore.getState();
+          for (let i = edits.length - 1; i >= 0; i--) {
+            const edit = edits[i]!;
+            voiceStore.shiftDraftOffsets(
+              panelId,
+              edit.to,
+              edit.text.length - (edit.to - edit.from)
+            );
+          }
+          // The words were dictated, and still are: the link is theirs, not an edit.
+          useDictationRangeStore.getState().rewriteWords(
+            record.id,
+            edits,
+            (next) => {
+              // Spelled out, so words between two swaps aren't taken as rewritten.
+              useDictationRangeStore
+                .getState()
+                .expectDraftChange(panelId, projectId, draft, next, draftChanges(draft, edits));
+              this.writeShiftedDraft(panelId, next, projectId);
+            },
+            planHeardSwaps(record, edits, draft, this.heardAsRules)
+          );
+          inputStore.bumpExternalDraftRevision({ keepsSelection: true });
+        } finally {
+          // A chunk held back for these links can go now.
+          this.settleChunkBreak(false);
         }
-        // An utterance still being dictated on the panel sliced its start from
-        // the draft before the swap; its offsets move with the new lengths.
-        const voiceStore = useVoiceRecordingStore.getState();
-        for (let i = edits.length - 1; i >= 0; i--) {
-          const edit = edits[i]!;
-          voiceStore.shiftDraftOffsets(panelId, edit.to, edit.text.length - (edit.to - edit.from));
-        }
-        // The words were dictated, and still are: the link is theirs, not an edit.
-        useDictationRangeStore.getState().rewriteWords(
-          record.id,
-          edits,
-          (next) => {
-            // Spelled out, so words between two swaps aren't taken as rewritten.
-            useDictationRangeStore
-              .getState()
-              .expectDraftChange(panelId, projectId, draft, next, draftChanges(draft, edits));
-            this.writeShiftedDraft(panelId, next, projectId);
-          },
-          planHeardSwaps(record, edits, draft, this.heardAsRules)
-        );
-        inputStore.bumpExternalDraftRevision({ keepsSelection: true });
       })
     );
 
@@ -970,6 +1065,7 @@ class VoiceRecordingService {
         );
 
         voiceState.resetParagraphState(panelId);
+        this.proposeChunkBreak(sessionId, true);
       })
     );
 
@@ -1481,6 +1577,16 @@ class VoiceRecordingService {
     const sessionId = this.sessionId;
     if (sessionId && sessionId !== this.lastEndedSessionId) {
       this.discardedSessionIds.add(sessionId);
+    }
+    // Nothing of the dictation is kept, so no chunk of it lands or is recorded.
+    this.resetChunking();
+    const dictationId =
+      useVoiceRecordingStore.getState().panelBuffers[target.panelId]?.dictationSessionId;
+    const cleanup = dictationId ? this.cleanups.get(dictationId) : undefined;
+    if (cleanup) {
+      cleanup.stopped = true;
+      cleanup.history = null;
+      this.cleanups.delete(cleanup.sessionId);
     }
     // A rewrite's timeline was disposed at its start, so only a dictation's is found.
     const timeline = sessionId ? this.timelines.get(sessionId) : undefined;
@@ -2686,6 +2792,8 @@ class VoiceRecordingService {
       });
 
       this.clearTimers();
+      // The drain's words are the stop-time pass's: no chunk is cut from them.
+      this.resetChunking();
       if (!skipRemoteStop) {
         // Finishing from here: backend errors and start-up ticks that land
         // while the tail drains belong to the session being stopped.
@@ -2805,12 +2913,22 @@ class VoiceRecordingService {
       // Every word the transcription will give is in the draft by now.
       stopTimeline?.mark("settled");
 
+      // Chunks cleaned while it ran are settled; what's left is the stop's.
+      const cleanup = stoppedSessionId ? this.cleanups.get(stoppedSessionId) : undefined;
+      if (cleanup) cleanup.stopped = true;
+      const unclaimed = cleanup
+        ? (utterance: DictationUtterance) => !cleanup.claimed.has(utterance.id)
+        : undefined;
       // Each utterance met the heard-as rules as it landed; with the whole
       // dictation in, a phrase split across two of them is caught too. Every
       // stop that keeps the text gets this, whether or not correction runs.
-      // A rewrite's instruction goes to the model as spoken.
+      // A rewrite's instruction goes to the model as spoken. A chunk had its
+      // own rerun before its cleanup, which nothing reruns over.
       if (stoppedTarget && !stoppedTarget.rewrite && this.heardAsRules) {
-        const rewrites = this.applyHeardAsRules(stoppedTarget, stoppedSessionId, this.heardAsRules);
+        const rewrites = [
+          ...(cleanup?.rewrites ?? []),
+          ...this.applyHeardAsRules(stoppedTarget, stoppedSessionId, this.heardAsRules, unclaimed),
+        ];
         // The history holds what landed, and a cleanup only counts for it when
         // it covered the same words.
         if (finished && rewrites.length > 0) {
@@ -2835,26 +2953,18 @@ class VoiceRecordingService {
           stoppedTarget.rewrite.selection.release();
         }
       } else if (graceful && stoppedTarget) {
-        if (correctionEnabled) {
-          this.runCorrection(stoppedTarget, stoppedSessionId, finished, stopTimeline ?? null);
-        } else {
-          // No AI correction pass will run, so capture the raw dictated text as
-          // the learning baseline directly; manual corrections to it can still
-          // be detected at send time (#9749).
-          const { panelId, projectId } = stoppedTarget;
-          // This passage's baseline isn't any earlier correction's to replace.
-          this.baselineOwners.delete(panelId);
-          const record = findDictation(stoppedTarget, stoppedSessionId);
-          const passages = record
-            ? collectCorrectionPassages(
-                record,
-                useTerminalInputStore.getState().getDraftInput(panelId, projectId)
-              )
-            : [];
-          const baseline = joinPassageTexts(passages.map((p) => p.text));
-          useVoiceRecordingStore.getState().setSessionCorrectedText(panelId, baseline);
-          if (baseline) this.followLearningBaselines();
-        }
+        // With correction off, the dictated text as it stands is the learning
+        // baseline, and manual corrections to it can still be detected at send
+        // time (#9749).
+        this.finishDictationCleanup(
+          stoppedTarget,
+          stoppedSessionId,
+          finished,
+          stopTimeline ?? null,
+          correctionEnabled
+        );
+      } else if (cleanup) {
+        this.keepCleanedHistory(cleanup);
       }
       // After the correction is registered, so the summary waits for it.
       stopTimeline?.finish(reason);
@@ -2882,7 +2992,9 @@ class VoiceRecordingService {
   private applyHeardAsRules(
     target: VoiceRecordingTarget,
     sessionId: string | null,
-    rewrite: HeardAsRewriter
+    rewrite: HeardAsRewriter,
+    include?: (utterance: DictationUtterance) => boolean,
+    keepUtterances = false
   ): PassageRewrite[] {
     const record = findDictation(target, sessionId);
     if (!record) return [];
@@ -2891,7 +3003,7 @@ class VoiceRecordingService {
     const draft = inputStore.getDraftInput(panelId, projectId);
     const draftKey = makeDraftKey(panelId, projectId);
     const rewrites: PassageRewrite[] = [];
-    for (const passage of collectCorrectionPassages(record, draft)) {
+    for (const passage of collectCorrectionPassages(record, draft, include)) {
       const transcribed = transcribedPassage(record, passage, draft);
       const heard = transcribed.text;
       // The draft either side is context, so a phrase that runs on into text
@@ -2916,12 +3028,18 @@ class VoiceRecordingService {
       const current = useTerminalInputStore.getState().getDraftInput(panelId, projectId);
       const pending = peekPendingComposerSelection(draftKey, current);
       const caret = pending ?? readComposerSelection(draftKey, current);
-      const span = useDictationRangeStore
-        .getState()
-        .rewritePassage(record.id, passage, text, heard, {
-          text: uncertain,
-          heard: transcribed.uncertain,
-        });
+      // A chunk cut while the dictation runs keeps its utterances apart, so a
+      // scratch still takes just the last of them.
+      const span = keepUtterances
+        ? (useDictationRangeStore
+            .getState()
+            .rewriteUtterances(record.id, [{ passage, text, heard: { uncertain } }], (next) =>
+              useTerminalInputStore.getState().setDraftInput(panelId, next, projectId)
+            )?.[0] ?? null)
+        : useDictationRangeStore.getState().rewritePassage(record.id, passage, text, heard, {
+            text: uncertain,
+            heard: transcribed.uncertain,
+          });
       if (!span) continue;
       const delta = text.length - (span.to - span.from);
       // A caret that followed the words, or sits in them, stays with them, and
@@ -2946,60 +3064,133 @@ class VoiceRecordingService {
   }
 
   /**
-   * Post-stop AI cleanup over the session's dictated passages: marks each with
-   * the `cm-voice-pending-ai` decoration, sends each with the draft text before
-   * it as context, and swaps each cleaned result into its own range only if
-   * that range still holds what was sent. Text typed or pasted around or
-   * between the passages is never sent or rewritten. Best-effort — any failure
-   * leaves the raw text. Registered synchronously, before the requests go out.
+   * The end of a dictation's cleanup, at a graceful stop: the learning
+   * baseline and the recent-dictations entry over all of it, then the
+   * stop-time pass over whatever no chunk took (#14772). That pass marks each
+   * passage with the `cm-voice-pending-ai` decoration, sends each with the
+   * draft text before it as context, and swaps each cleaned result into its
+   * own range only if that range still holds what was sent. Text typed or
+   * pasted around or between the passages is never sent or rewritten.
+   * Best-effort — any failure leaves the raw text. Registered synchronously,
+   * before the requests go out.
    */
-  private runCorrection(
+  private finishDictationCleanup(
     target: VoiceRecordingTarget,
     sessionId: string | null,
     transcript: FinishedTranscript | null,
-    timeline: VoiceSessionTimeline | null
+    timeline: VoiceSessionTimeline | null,
+    correctionEnabled: boolean
   ): void {
     const { panelId, projectId } = target;
     const record = findDictation(target, sessionId);
     if (!record) return;
+    const cleanup =
+      this.cleanups.get(record.sessionId) ?? this.openCleanup(target, record.sessionId);
+    cleanup.stopped = true;
+    const draft = useTerminalInputStore.getState().getDraftInput(panelId, projectId);
+    // Every word the draft still holds as dictated, chunks already cleaned included.
+    const dictated = collectCorrectionPassages(record, draft);
+    const tail = correctionEnabled
+      ? collectCorrectionPassages(record, draft, (u) => !cleanup.claimed.has(u.id))
+      : [];
+    const seed = joinPassageTexts(dictated.map((p) => p.text));
 
-    const inputStore = useTerminalInputStore.getState();
-    const passages = collectCorrectionPassages(
-      record,
-      inputStore.getDraftInput(panelId, projectId)
-    );
-    if (passages.length === 0) return;
+    if (seed !== null || !correctionEnabled) {
+      // Seeded before any reply, so the panel keeps a usable baseline even if
+      // no cleanup ever lands (#9749). Each passage still on its way has its
+      // place in it, for its cleaned text to take.
+      const spans = new Map<CorrectionPassage, { from: number; to: number }>();
+      const starts: number[] = [];
+      dictated.reduce((at, run) => (starts.push(at), at + run.text.length + 1), 0);
+      const place = (passage: CorrectionPassage, at: { from: number; to: number }) => {
+        const i = dictated.findIndex((run) => run.from <= at.from && at.to <= run.to);
+        if (i < 0) return;
+        const start = starts[i]! - dictated[i]!.from;
+        spans.set(passage, { from: start + at.from, to: start + at.to });
+      };
+      for (const pass of cleanup.passes) {
+        if (pass.done) continue;
+        for (const [passage, at] of this.locateLivePassages(pass)) place(passage, at);
+      }
+      for (const passage of tail) place(passage, passage);
+      cleanup.baseline = seed === null ? null : { text: seed, spans };
+      this.baselineOwners.set(panelId, cleanup);
+      useVoiceRecordingStore.getState().setSessionCorrectedText(panelId, seed);
+      if (seed) this.followLearningBaselines();
+    }
 
-    // Seed the learning baseline with the raw transcription synchronously, before
-    // the async correction call, so the panel keeps a usable baseline even if
-    // the correction never lands (#9749).
-    const seed = joinPassageTexts(passages.map((p) => p.text));
-    useVoiceRecordingStore.getState().setSessionCorrectedText(panelId, seed);
-    if (seed) this.followLearningBaselines();
+    // Cleanup over part of the session (an edit or a send got there first)
+    // would stand in for all of it, so only passes over every word count.
+    if (transcript) {
+      const order = new Map(record.utterances.map((u, i) => [u.id, i]));
+      const at = (passage: CorrectionPassage) =>
+        Math.min(...passage.utteranceIds.map((id) => order.get(id) ?? Infinity));
+      const passages = [
+        ...cleanup.passes
+          .flatMap((pass) => pass.passages)
+          .filter((passage) => !cleanup.released.has(passage)),
+        ...tail,
+      ].sort((a, b) => at(a) - at(b));
+      if (
+        passages.length > 0 &&
+        sameDictatedWords(passages.map((p) => p.text).join(" "), transcript.rawText)
+      ) {
+        cleanup.history = { id: transcript.id, passages };
+      }
+    }
 
-    logDebug(`${LOG_PREFIX} Running correction`, {
-      panelId,
-      passages: passages.length,
-      rawLength: passages.reduce((sum, p) => sum + p.text.length, 0),
-    });
+    if (tail.length > 0) {
+      logDebug(`${LOG_PREFIX} Running correction`, {
+        panelId,
+        passages: tail.length,
+        chunks: cleanup.passes.length,
+        rawLength: tail.reduce((sum, p) => sum + p.text.length, 0),
+      });
+      this.registerCorrection("stop", cleanup, target, record.id, tail, timeline);
+    }
+    this.keepCleanedHistory(cleanup);
+  }
 
+  private openCleanup(target: VoiceRecordingTarget, sessionId: string): DictationCleanup {
+    const cleanup: DictationCleanup = {
+      sessionId,
+      panelId: target.panelId,
+      projectId: target.projectId,
+      claimed: new Set(),
+      passes: [],
+      results: new Map(),
+      released: new Set(),
+      rewrites: [],
+      stopped: false,
+      history: null,
+      baseline: null,
+    };
+    this.cleanups.set(sessionId, cleanup);
+    return cleanup;
+  }
+
+  /** Registers a pass over `passages` and sends it. */
+  private registerCorrection(
+    kind: PendingCorrection["kind"],
+    cleanup: DictationCleanup,
+    target: VoiceRecordingTarget,
+    dictationId: string,
+    passages: CorrectionPassage[],
+    timeline: VoiceSessionTimeline | null
+  ): void {
+    const { panelId, projectId } = target;
     let settle!: () => void;
     const correction: PendingCorrection = {
+      kind,
+      cleanup,
       panelId,
       projectId,
       context: voiceContext(target),
-      // Cleanup over part of the session (an edit or a send got there first)
-      // would stand in for all of it, so only a pass over every word counts.
-      historyId:
-        transcript && seed !== null && sameDictatedWords(seed, transcript.rawText)
-          ? transcript.id
-          : null,
-      dictationId: record.id,
-      sessionId,
+      dictationId,
+      sessionId: cleanup.sessionId,
       passages,
       live: new Set(passages),
       rewrites: new Map(),
-      seed,
       done: false,
       settled: new Promise<void>((resolve) => {
         settle = resolve;
@@ -3009,19 +3200,206 @@ class VoiceRecordingService {
       startedAt: performance.now(),
       expectedMs: estimateCorrectionMs(longestPassage(passages)),
     };
+    cleanup.passes.push(correction);
     timeline?.beginCorrection();
     this.pendingCorrections.add(correction);
-    this.baselineOwners.set(panelId, correction);
     this.watchCorrectionDrafts();
 
     // Show the dotted-underline "correcting" decoration over each passage.
     this.syncCorrectionRange(panelId);
-    inputStore.bumpExternalDraftRevision({ keepsSelection: true });
+    useTerminalInputStore.getState().bumpExternalDraftRevision({ keepsSelection: true });
 
     void this.requestCorrection(correction);
   }
 
+  /**
+   * The live session's next words begin: after a long enough quiet since its
+   * last ones landed, the end of those is a pause a chunk may be cut at.
+   */
+  private noteNextWords(sessionId: string): void {
+    if (this.lastWordsAt === null) return;
+    if (performance.now() - this.lastWordsAt < VoiceRecordingService.CHUNK_PAUSE_MS) return;
+    this.proposeChunkBreak(sessionId, false);
+  }
+
+  /**
+   * Marks the end of the live session's latest words as a place to cut a
+   * chunk for cleanup, to be judged on what is said next.
+   */
+  private proposeChunkBreak(sessionId: string, paragraph: boolean): void {
+    // A break still waiting is judged on whatever was said after it.
+    this.settleChunkBreak(true);
+    const target = this.chunkingTarget(sessionId);
+    if (!target) return;
+    const last = findDictation(target, sessionId)?.utterances.at(-1);
+    if (!last || this.cleanups.get(sessionId)?.claimed.has(last.id)) return;
+    this.chunkBreak = { sessionId, utteranceId: last.id, paragraph, after: "" };
+  }
+
+  /** Words said after the waiting break, from the session they belong to. */
+  private followChunkBreak(sessionId: string, text: string): void {
+    const pending = this.chunkBreak;
+    if (!pending || pending.sessionId !== sessionId) return;
+    pending.after = pending.after ? `${pending.after} ${text}` : text;
+    this.settleChunkBreak(false);
+  }
+
+  /**
+   * Judges the waiting break once enough was said after it to tell, or at
+   * once when `force`d by a newer one: cuts a chunk there, or lets the
+   * dictation run on past it. A chunk still waiting on file links keeps its
+   * break for the next try, unless a newer break replaces it.
+   */
+  private settleChunkBreak(force: boolean): void {
+    const pending = this.chunkBreak;
+    if (!pending || (!force && !chunkFollowUpDecides(pending.after))) return;
+    if (this.cutChunk(pending) !== "wait" || force) {
+      if (this.chunkBreak === pending) this.chunkBreak = null;
+    }
+  }
+
+  /** The live dictation's target, while its words may still be cut into chunks. */
+  private chunkingTarget(sessionId: string): VoiceRecordingTarget | null {
+    const state = useVoiceRecordingStore.getState();
+    const target = state.activeTarget;
+    if (!target || target.rewrite || !state.correctionEnabled) return null;
+    if (state.status === "finishing" || this.stopPromise || this.isStoppingSession) return null;
+    return state.panelBuffers[target.panelId]?.dictationSessionId === sessionId ? target : null;
+  }
+
+  /**
+   * Sends the dictation up to `at` for cleanup while it goes on: every word
+   * no earlier chunk took, once there are enough of them and what was said
+   * after the break shows the speaker isn't reaching back over it.
+   */
+  private cutChunk(at: ChunkBreak): "cut" | "no" | "wait" {
+    const target = this.chunkingTarget(at.sessionId);
+    const record = target ? findDictation(target, at.sessionId) : null;
+    const end = record ? record.utterances.findIndex((u) => u.id === at.utteranceId) : -1;
+    if (!target || !record || end < 0) return "no";
+    const { panelId, projectId } = target;
+    const draft = () => useTerminalInputStore.getState().getDraftInput(panelId, projectId);
+    const cleanup = this.cleanups.get(at.sessionId);
+    const upTo = new Set(record.utterances.slice(0, end + 1).map((u) => u.id));
+    const include = (u: DictationUtterance) => upTo.has(u.id) && !cleanup?.claimed.has(u.id);
+    const passages = collectCorrectionPassages(record, draft(), include);
+    const last = passages[passages.length - 1];
+    if (
+      !last ||
+      last.utteranceIds[last.utteranceIds.length - 1] !== at.utteranceId ||
+      passages.reduce((sum, p) => sum + p.text.length, 0) < VoiceRecordingService.CHUNK_MIN_CHARS ||
+      !mayCutChunk(last.text, at.after, at.paragraph)
+    ) {
+      return "no";
+    }
+    const now = performance.now();
+    const linksDue = passages.some((passage) =>
+      passage.utteranceIds.some((id) => {
+        const transcriptId = record.utterances.find((u) => u.id === id)?.transcriptId;
+        return transcriptId !== undefined && (this.fileLinksDue.get(transcriptId) ?? 0) > now;
+      })
+    );
+    if (linksDue) return "wait";
+
+    const owner = cleanup ?? this.openCleanup(target, at.sessionId);
+    // As at stop, a phrase split between two of its utterances is caught first.
+    if (this.heardAsRules) {
+      owner.rewrites.push(
+        ...this.applyHeardAsRules(target, at.sessionId, this.heardAsRules, include, true)
+      );
+    }
+    const current = findDictation(target, at.sessionId);
+    const chunk = current ? collectCorrectionPassages(current, draft(), include) : [];
+    if (!current || chunk.length === 0) return "no";
+    for (const passage of chunk) {
+      for (const id of passage.utteranceIds) owner.claimed.add(id);
+    }
+    this.timelines.get(at.sessionId)?.noteCorrectionChunk();
+    logDebug(`${LOG_PREFIX} Cleaning up a chunk`, {
+      panelId,
+      passages: chunk.length,
+      rawLength: chunk.reduce((sum, p) => sum + p.text.length, 0),
+    });
+    this.registerCorrection("chunk", owner, target, current.id, chunk, null);
+    return "cut";
+  }
+
+  /**
+   * A chunk passage that couldn't land while its dictation runs gives its
+   * words back, for the next chunk or the stop-time pass to clean.
+   */
+  private releaseChunkPassage(correction: PendingCorrection, passage: CorrectionPassage): void {
+    const { cleanup } = correction;
+    if (correction.kind !== "chunk" || cleanup.stopped || cleanup.released.has(passage)) return;
+    cleanup.released.add(passage);
+    for (const id of passage.utteranceIds) cleanup.claimed.delete(id);
+  }
+
+  /**
+   * Gives the recent-dictations entry the cleaned text once the dictation has
+   * stopped and every pass over it has its reply, and lets the cleanup go.
+   */
+  private keepCleanedHistory(cleanup: DictationCleanup): void {
+    if (!cleanup.stopped) return;
+    if (cleanup.passes.some((pass) => pass.passages.some((p) => !cleanup.results.has(p)))) return;
+    if (this.cleanups.get(cleanup.sessionId) === cleanup) this.cleanups.delete(cleanup.sessionId);
+    const history = cleanup.history;
+    cleanup.history = null;
+    if (!history) return;
+    const texts = history.passages.map((passage) => cleanup.results.get(passage) ?? null);
+    if (texts.every((text) => text === null)) return;
+    keepRecentDictationCorrection(
+      history.id,
+      history.passages.map((passage, i) => texts[i] ?? passage.text).join(" ")
+    );
+  }
+
+  /**
+   * Puts a pass's settled passages into the learning baseline written at
+   * stop, while it is still the one the panel holds. Returns the baseline on
+   * either side, or null when it didn't move. A chunk that landed before the
+   * stop needs none: the stop read its words from the draft.
+   */
+  private foldIntoBaseline(
+    cleanup: DictationCleanup,
+    settled: ReadonlyMap<CorrectionPassage, string>
+  ): CorrectionBaseline | null {
+    const baseline = cleanup.baseline;
+    const store = useVoiceRecordingStore.getState();
+    if (
+      !baseline ||
+      this.baselineOwners.get(cleanup.panelId) !== cleanup ||
+      store.panelBuffers[cleanup.panelId]?.sessionCorrectedText !== baseline.text
+    ) {
+      return null;
+    }
+    const pieces = [...settled]
+      .flatMap(([passage, text]) => {
+        const span = baseline.spans.get(passage);
+        baseline.spans.delete(passage);
+        return span ? [{ ...span, text }] : [];
+      })
+      .sort((a, b) => b.from - a.from);
+    const raw = baseline.text;
+    let text = raw;
+    for (const piece of pieces) {
+      text = text.slice(0, piece.from) + piece.text + text.slice(piece.to);
+      const delta = piece.text.length - (piece.to - piece.from);
+      for (const span of baseline.spans.values()) {
+        if (span.from >= piece.to) {
+          span.from += delta;
+          span.to += delta;
+        }
+      }
+    }
+    if (text === raw) return null;
+    baseline.text = text;
+    store.setSessionCorrectedText(cleanup.panelId, text);
+    return { raw, corrected: text };
+  }
+
   private async requestCorrection(correction: PendingCorrection): Promise<void> {
+    const { cleanup } = correction;
     const { results, lastTiming } = await settlePassageReplies(
       correction.passages.map((passage) => this.requestPassageCorrection(passage, correction))
     );
@@ -3034,20 +3412,20 @@ class VoiceRecordingService {
         performance.now() - correction.startedAt
       );
     }
+    correction.passages.forEach((passage, i) => {
+      cleanup.results.set(passage, results[i]?.text ?? null);
+      // A chunk the model couldn't clean gives its words to the next pass.
+      if (results[i]?.failed) this.releaseChunkPassage(correction, passage);
+    });
 
     // The history keeps the cleaned text even when the draft it was meant for
     // was sent or edited first: that is when it's worth recovering.
-    if (correction.historyId && results.some((result) => result.text !== null)) {
-      keepRecentDictationCorrection(
-        correction.historyId,
-        correction.passages.map((passage, i) => results[i]?.text ?? passage.text).join(" ")
-      );
-    }
+    this.keepCleanedHistory(cleanup);
 
     const { panelId, projectId } = correction;
     if (correction.done) {
       logDebug(`${LOG_PREFIX} Correction result stale (draft sent or edited), discarding`);
-      this.releaseBaseline(correction);
+      this.releaseBaseline(cleanup);
       correction.timeline?.endCorrection(
         "discarded",
         countPassageFates(correction.passages.map(() => "dropped"))
@@ -3063,16 +3441,16 @@ class VoiceRecordingService {
     const inputStore = useTerminalInputStore.getState();
     const voiceStore = useVoiceRecordingStore.getState();
     const draftNow = inputStore.getDraftInput(panelId, projectId);
-    const edits: Array<{ from: number; to: number; text: string }> = [];
+    const edits: Array<{ from: number; to: number; text: string; passage: CorrectionPassage }> = [];
     let skipped = 0;
     const fates: PassageFate[] = [];
-    const settled = correction.passages.map((passage, index) => {
+    correction.passages.forEach((passage, index) => {
       const corrected = results[index]?.text;
       if (!corrected || corrected === passage.text) {
         const reply = results[index];
         const verdict = reply?.verdict ?? (reply?.failed ? "failed" : "unchanged");
         fates.push(verdict === "replaced" ? "unchanged" : verdict);
-        return passage.text;
+        return;
       }
       const span = spans.get(passage);
       // A command correction wrote for the start of the prompt is no longer at
@@ -3084,11 +3462,10 @@ class VoiceRecordingService {
       if (!span || commandMoved) {
         skipped++;
         fates.push("unlanded");
-        return passage.text;
+        return;
       }
       fates.push("applied");
-      edits.push({ ...span, text: corrected });
-      return corrected;
+      edits.push({ ...span, text: corrected, passage });
     });
 
     let swapped: Omit<LandedCorrection, "baseline"> | null = null;
@@ -3096,55 +3473,66 @@ class VoiceRecordingService {
       const before = inputStore.getDraftInput(panelId, projectId);
       const changes = draftChanges(before, edits);
       let next = before;
-      for (const edit of edits.reverse()) {
-        // A session restarted on this panel is dictating after the passage;
-        // its offsets move with the passage's new length.
-        voiceStore.shiftDraftOffsets(panelId, edit.to, edit.text.length - (edit.to - edit.from));
+      for (let i = edits.length - 1; i >= 0; i--) {
+        const edit = edits[i]!;
         next = next.slice(0, edit.from) + edit.text + next.slice(edit.to);
       }
-      // Spelled out, so the text between passages, and a session dictating
-      // there, isn't taken as rewritten along with them.
-      useDictationRangeStore
-        .getState()
-        .expectDraftChange(panelId, projectId, before, next, changes);
-      this.writeShiftedDraft(panelId, next, projectId);
-      // One span from the first rewritten passage to the last, so restoring it
-      // puts every passage back and leaves text typed between them as it is.
-      const from = Math.min(...edits.map((edit) => edit.from));
-      const to = Math.max(...edits.map((edit) => edit.to));
-      swapped = {
-        from,
-        rawText: before.slice(from, to),
-        correctedText: next.slice(from, to + next.length - before.length),
-        write: { before, after: next, changes },
+      // A session dictating on this panel, this pass's own included, writes
+      // after the passages; its offsets move with their new lengths.
+      const shiftOffsets = () => {
+        for (let i = edits.length - 1; i >= 0; i--) {
+          const edit = edits[i]!;
+          voiceStore.shiftDraftOffsets(panelId, edit.to, edit.text.length - (edit.to - edit.from));
+        }
       };
+      let written = true;
+      if (correction.kind === "chunk") {
+        // Still the session's words, each utterance its own, so a scratch, a
+        // cancel and the passes after this one see them as dictated.
+        written =
+          useDictationRangeStore.getState().rewriteUtterances(
+            correction.dictationId,
+            edits.map(({ passage, text }) => ({ passage, text })),
+            (draft) => this.writeShiftedDraft(panelId, draft, projectId)
+          ) !== null;
+        if (written) shiftOffsets();
+      } else {
+        shiftOffsets();
+        // Spelled out, so the text between passages, and a session dictating
+        // there, isn't taken as rewritten along with them.
+        useDictationRangeStore
+          .getState()
+          .expectDraftChange(panelId, projectId, before, next, changes);
+        this.writeShiftedDraft(panelId, next, projectId);
+      }
+      if (written) {
+        // One span from the first rewritten passage to the last, so restoring
+        // it puts every passage back and leaves text typed between them as it is.
+        const from = Math.min(...edits.map((edit) => edit.from));
+        const to = Math.max(...edits.map((edit) => edit.to));
+        swapped = {
+          from,
+          rawText: before.slice(from, to),
+          correctedText: next.slice(from, to + next.length - before.length),
+          write: { before, after: next, changes },
+        };
+      } else {
+        skipped += edits.length;
+        edits.length = 0;
+      }
     }
     logDebug(`${LOG_PREFIX} Correction settled`, { panelId, applied: edits.length, skipped });
 
-    // Record the settled dictated text as the learning baseline. Manual edits
-    // the user makes before sending are diffed against this to detect words
-    // worth suggesting for the custom dictionary (#9749). Only over the seed
-    // this pass wrote: a send consumes it, and a newer session on the panel
-    // replaces it with its own. A result that wasn't applied never reached the
-    // draft, so it stays out.
-    const store = useVoiceRecordingStore.getState();
-    if (
-      this.baselineOwners.get(panelId) === correction &&
-      store.panelBuffers[panelId]?.sessionCorrectedText === correction.seed
-    ) {
-      store.setSessionCorrectedText(panelId, joinPassageTexts(settled));
-    }
-    this.releaseBaseline(correction);
-    if (swapped) {
-      const corrected = joinPassageTexts(settled);
-      recordCorrectionLanded(panelId, projectId, {
-        ...swapped,
-        baseline:
-          correction.seed === null || corrected === null
-            ? null
-            : { raw: correction.seed, corrected },
-      });
-    }
+    // The settled dictated text goes into the learning baseline. Manual edits
+    // the user makes before sending are diffed against it to detect words
+    // worth suggesting for the custom dictionary (#9749). A result that wasn't
+    // applied never reached the draft, so it stays out.
+    const baseline = this.foldIntoBaseline(
+      cleanup,
+      new Map(edits.map(({ passage, text }) => [passage, text]))
+    );
+    this.releaseBaseline(cleanup);
+    if (swapped) recordCorrectionLanded(panelId, projectId, { ...swapped, baseline });
 
     this.syncCorrectionRange(panelId);
     inputStore.bumpExternalDraftRevision({ keepsSelection: true });
@@ -3574,9 +3962,11 @@ class VoiceRecordingService {
     return now.kept;
   }
 
-  private releaseBaseline(correction: PendingCorrection): void {
-    if (this.baselineOwners.get(correction.panelId) === correction) {
-      this.baselineOwners.delete(correction.panelId);
+  /** Lets the panel's baseline go once every pass of the dictation that owns it is done. */
+  private releaseBaseline(cleanup: DictationCleanup): void {
+    if (!cleanup.stopped || cleanup.passes.some((pass) => !pass.done)) return;
+    if (this.baselineOwners.get(cleanup.panelId) === cleanup) {
+      this.baselineOwners.delete(cleanup.panelId);
     }
   }
 
@@ -3593,20 +3983,25 @@ class VoiceRecordingService {
 
   /**
    * Removes the session's latest dictated utterance from the draft. Returns
-   * whether it did; there may be none left to remove, or only an edited one.
+   * how many of the transcriber's segments it held: none when there was none
+   * left to remove, or only an edited one, and more than one when a chunk's
+   * cleanup ran several together.
    */
   private scratchLastUtterance(
     panelId: string,
     projectId: string | undefined,
     sessionId: string | null | undefined
-  ): boolean {
-    if (!sessionId) return false;
+  ): number {
+    if (!sessionId) return 0;
     const inputStore = useTerminalInputStore.getState();
     const draft = inputStore.getDraftInput(panelId, projectId);
-    const span = useDictationRangeStore
-      .getState()
-      .takeLastUtterance({ sessionId, panelId, projectId }, draft);
-    if (!span) return false;
+    const ranges = useDictationRangeStore.getState();
+    const last = ranges
+      .listDictations(panelId, projectId)
+      .find((record) => record.sessionId === sessionId)
+      ?.utterances.at(-1);
+    const span = ranges.takeLastUtterance({ sessionId, panelId, projectId }, draft);
+    if (!span) return 0;
     const next = draft.slice(0, span.from) + draft.slice(span.to);
     // A caret that followed the words stays where they were. The composer's
     // own diff could slide it along a run the removal shares with the text
@@ -3627,7 +4022,7 @@ class VoiceRecordingService {
     recordScratchLanded(panelId, projectId, next);
     // Like the words it removes, it leaves the caret to the user.
     inputStore.bumpExternalDraftRevision({ keepsSelection: true });
-    return true;
+    return last?.sources ?? 1;
   }
 
   /**
@@ -3646,8 +4041,12 @@ class VoiceRecordingService {
     const spans = new Map<CorrectionPassage, { from: number; to: number }>();
     for (const passage of correction.live) {
       const span = locatePassage(record, passage, draft);
-      if (span) spans.set(passage, span);
-      else correction.live.delete(passage);
+      if (span) {
+        spans.set(passage, span);
+      } else {
+        correction.live.delete(passage);
+        this.releaseChunkPassage(correction, passage);
+      }
     }
     return spans;
   }
@@ -4572,6 +4971,13 @@ class VoiceRecordingService {
     this.micSilenceSession = null;
   }
 
+  /** Forgets where the live session might cut its next chunk. */
+  private resetChunking(): void {
+    this.chunkBreak = null;
+    this.lastWordsAt = null;
+    this.fileLinksDue.clear();
+  }
+
   private clearTimers(): void {
     this.clearElapsedTimer();
     this.clearPauseTimeout();
@@ -4756,6 +5162,8 @@ class VoiceRecordingService {
     }
     for (const panelId of correctedPanels) this.syncCorrectionRange(panelId);
     this.correctionStreams.clear();
+    this.cleanups.clear();
+    this.resetChunking();
     this.baselineOwners.clear();
     this.unfollowLearningBaselines();
     this.spokenSendHandlers.clear();
