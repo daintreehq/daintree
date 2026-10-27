@@ -468,7 +468,9 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611, #14780)", () =
       dictate(PANEL_ID, "the nxt prompt");
       await voiceRecordingService.stop();
     });
-    expect(correct).toHaveBeenLastCalledWith(expect.objectContaining({ rawText: "the nxt prompt" }));
+    expect(correct).toHaveBeenLastCalledWith(
+      expect.objectContaining({ rawText: "the nxt prompt" })
+    );
 
     await act(async () => {
       pending.resolve({ action: "replace", correctedText: "Hello world." });

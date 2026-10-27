@@ -818,11 +818,7 @@ describe("useVoiceWaitSubmit submitFromEditor", () => {
     });
 
     expect(stopMock).not.toHaveBeenCalled();
-    expect(waitMock).toHaveBeenCalledWith(
-      "other-panel",
-      expect.any(AbortSignal),
-      sessionsTaken()
-    );
+    expect(waitMock).toHaveBeenCalledWith("other-panel", expect.any(AbortSignal), sessionsTaken());
     expect(sendFromEditor).not.toHaveBeenCalled();
 
     await act(async () => {

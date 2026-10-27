@@ -23,7 +23,9 @@ function dictation(
     panelId: TARGET.panelId,
     projectId: TARGET.projectId,
     range: { from, to, edited: false },
-    utterances: [{ id: `utterance-${sessionId}`, range: words, insertion: { from, to, edited: false } }],
+    utterances: [
+      { id: `utterance-${sessionId}`, range: words, insertion: { from, to, edited: false } },
+    ],
     breaks: [],
     learningSpan: learning ?? { from: wordsFrom, to },
   };

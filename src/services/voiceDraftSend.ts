@@ -81,7 +81,8 @@ export function planVoiceDraftSend(
     at = span.to;
   }
   text += draft.slice(at);
-  if (held.length > 0 && at < draft.length) changes.push({ from: at, to: draft.length, insert: "" });
+  if (held.length > 0 && at < draft.length)
+    changes.push({ from: at, to: draft.length, insert: "" });
 
   return { ...target, sessions, draft, text, kept, changes, leadingSpace };
 }
