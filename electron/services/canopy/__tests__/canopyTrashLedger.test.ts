@@ -185,7 +185,10 @@ describe("CanopyTrashLedger", () => {
     vi.advanceTimersByTime(CANOPY_TRASH_SETTLE_MS);
     await vi.waitFor(() => expect(ledger.get("a")).toBeUndefined());
     expect(onSettle).toHaveBeenCalledWith(
-      expect.objectContaining({ expiresAt: NOW + 20_000, run: expect.objectContaining({ runId: "a" }) })
+      expect.objectContaining({
+        expiresAt: NOW + 20_000,
+        run: expect.objectContaining({ runId: "a" }),
+      })
     );
     expect(onChange).toHaveBeenCalledTimes(1);
   });

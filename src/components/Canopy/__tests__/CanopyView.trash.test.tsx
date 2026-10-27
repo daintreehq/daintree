@@ -541,9 +541,9 @@ describe("CanopyView Trash", () => {
       fireEvent.click(trashBar()!);
       const row = trashRows()[0]!;
       expect(row.textContent).toContain("Worktree removed");
-      expect(
-        row.querySelector<HTMLButtonElement>("[data-canopy-trash-restore]")!.disabled
-      ).toBe(true);
+      expect(row.querySelector<HTMLButtonElement>("[data-canopy-trash-restore]")!.disabled).toBe(
+        true
+      );
       fireEvent.keyDown(trashBar()!, { key: "ArrowDown" });
       await act(async () => {
         fireEvent.keyDown(trashRows()[0]!, { key: "Enter" });

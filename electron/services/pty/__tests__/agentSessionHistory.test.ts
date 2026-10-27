@@ -1169,9 +1169,7 @@ describe("removeFromCanopyTrash", () => {
     const removed = await removeFromCanopyTrash([{ id: "t1", spawnedAt: 100 }], userDataDir);
 
     expect(removed).toBe(1);
-    const records = new Map(
-      listAgentSessions(undefined, userDataDir).map((r) => [r.sessionId, r])
-    );
+    const records = new Map(listAgentSessions(undefined, userDataDir).map((r) => [r.sessionId, r]));
     expect([...records.keys()].sort()).toEqual(["a", "b", "c"]);
     expect(typeof records.get("a")?.trash?.removedAt).toBe("number");
     expect(records.get("b")?.trash?.removedAt).toBeUndefined();
@@ -1211,11 +1209,19 @@ describe("removeFromCanopyTrash", () => {
     );
     const trash = { expiresAt: 150, closedAt: 130 };
 
-    expect(await adoptCanopyTrashClose({ id: "t1", spawnedAt: 100 }, trash, userDataDir)).toBe(true);
+    expect(await adoptCanopyTrashClose({ id: "t1", spawnedAt: 100 }, trash, userDataDir)).toBe(
+      true
+    );
     // Another incarnation of the terminal, or a close already claimed, adopts nothing.
-    expect(await adoptCanopyTrashClose({ id: "t1", spawnedAt: 99 }, trash, userDataDir)).toBe(false);
+    expect(await adoptCanopyTrashClose({ id: "t1", spawnedAt: 99 }, trash, userDataDir)).toBe(
+      false
+    );
     expect(
-      await adoptCanopyTrashClose({ id: "t1", spawnedAt: 100 }, { ...trash, closedAt: 1 }, userDataDir)
+      await adoptCanopyTrashClose(
+        { id: "t1", spawnedAt: 100 },
+        { ...trash, closedAt: 1 },
+        userDataDir
+      )
     ).toBe(false);
 
     const [record] = listAgentSessions(undefined, userDataDir);
@@ -1239,7 +1245,14 @@ describe("removeFromCanopyTrash", () => {
   it("never carries an older close's trash onto a newer record of the same session", async () => {
     await persistAgentSession(userClose("a", "t1", 100), userDataDir);
     await persistAgentSession(
-      { sessionId: "a", agentId: "claude", worktreeId: null, title: null, projectId: "p1", closedBy: "shutdown" },
+      {
+        sessionId: "a",
+        agentId: "claude",
+        worktreeId: null,
+        title: null,
+        projectId: "p1",
+        closedBy: "shutdown",
+      },
       userDataDir
     );
 

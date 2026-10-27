@@ -17,7 +17,12 @@ describe("attributeClose", () => {
       expect(attributeClose(trashed, cause, 20_000)).toEqual({
         closedBy: "user",
         terminal: { id: "t1", spawnedAt: 1_000 },
-        trash: { expiresAt: 41_000, closedAt: 21_000, titleMode: "user", agentPresetColor: "#ff0000" },
+        trash: {
+          expiresAt: 41_000,
+          closedAt: 21_000,
+          titleMode: "user",
+          agentPresetColor: "#ff0000",
+        },
       });
     }
   );

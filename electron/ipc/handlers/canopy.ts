@@ -36,10 +36,7 @@ import { getFleetSnapshotService, getRunHandBackService } from "./projectCrud/in
 import { readPluginTerminalScreen } from "../../services/plugin/pluginTerminalScreenRead.js";
 import { CANOPY_HISTORY_ROWS, CanopyService } from "../../services/canopy/CanopyService.js";
 import { CanopyTrashLedger } from "../../services/canopy/canopyTrashLedger.js";
-import {
-  CanopyClosedTrash,
-  mergeCanopyTrash,
-} from "../../services/canopy/canopyClosedTrash.js";
+import { CanopyClosedTrash, mergeCanopyTrash } from "../../services/canopy/canopyClosedTrash.js";
 import {
   adoptCanopyTrashClose,
   listAgentSessions,
@@ -917,9 +914,7 @@ function closedWorkspaceOf(runId: string, target: CanopyTrashTarget): string | u
 function isEndingTrash(runId: string, target: CanopyTrashTarget): boolean {
   const held = trashLedger?.get(runId);
   return (
-    !!held?.ended &&
-    held.run.spawnedAt === target.spawnedAt &&
-    held.expiresAt === target.expiresAt
+    !!held?.ended && held.run.spawnedAt === target.spawnedAt && held.expiresAt === target.expiresAt
   );
 }
 
@@ -2055,7 +2050,13 @@ export const canopyNamespace = defineIpcNamespace({
         const held = targets.flatMap((target) => {
           if (isLiveTrash(target.runId, target)) {
             try {
-              return [{ target, live: true, workspaceId: heldTrash(target.runId, target).run.workspaceId }];
+              return [
+                {
+                  target,
+                  live: true,
+                  workspaceId: heldTrash(target.runId, target).run.workspaceId,
+                },
+              ];
             } catch {
               return [];
             }
@@ -2070,7 +2071,9 @@ export const canopyNamespace = defineIpcNamespace({
         for (const { target, live } of held) {
           try {
             if (live) {
-              await removeTrashedRun(target.runId, target, (project) => drivesProject(ctx, project));
+              await removeTrashedRun(target.runId, target, (project) =>
+                drivesProject(ctx, project)
+              );
             } else {
               await dismissClosedRun(target.runId, target);
             }

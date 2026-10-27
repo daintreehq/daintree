@@ -87,7 +87,9 @@ vi.mock("electron", () => ({
 vi.mock("../../../window/serviceRefs.js", () => ({ getPtyClient: () => ptyClient }));
 /** The session journal as Canopy reads it: its records, and who hears it written. */
 const history = vi.hoisted(() => ({
-  records: [] as Array<import("../../../../shared/types/ipc/agentSessionHistory.js").AgentSessionRecord>,
+  records: [] as Array<
+    import("../../../../shared/types/ipc/agentSessionHistory.js").AgentSessionRecord
+  >,
   listeners: new Set<() => void>(),
   written(): void {
     for (const listener of [...this.listeners]) listener();

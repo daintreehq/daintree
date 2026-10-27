@@ -61,9 +61,7 @@ describe("useCanopyResumeRequests", () => {
     expect(resumeSessionForPerson).not.toHaveBeenCalled();
 
     rerender({ loaded: true });
-    await vi.waitFor(() =>
-      expect(resumeSettled).toHaveBeenCalledWith("r1", { runId: "term-9" })
-    );
+    await vi.waitFor(() => expect(resumeSettled).toHaveBeenCalledWith("r1", { runId: "term-9" }));
     // Resumed against this view's own worktrees, by id and path.
     expect(resumeSessionForPerson).toHaveBeenCalledWith(
       session,
@@ -72,7 +70,9 @@ describe("useCanopyResumeRequests", () => {
   });
 
   it("answers why when the resume fails", async () => {
-    resumeSessionForPerson.mockRejectedValue(new Error("That session's worktree has been removed."));
+    resumeSessionForPerson.mockRejectedValue(
+      new Error("That session's worktree has been removed.")
+    );
     renderHook(() => useCanopyResumeRequests(true));
     act(() => request({ requestId: "r2", session }));
     await vi.waitFor(() =>

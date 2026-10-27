@@ -90,13 +90,7 @@ export interface AgentSessionRecord {
  * cause ended a pane the user had not closed.
  */
 export type AgentSessionCloseCause =
-  | "user"
-  | "kill"
-  | "restart"
-  | "shutdown"
-  | "sleep"
-  | "exit"
-  | "bookmark";
+  "user" | "kill" | "restart" | "shutdown" | "sleep" | "exit" | "bookmark";
 
 /** One incarnation of one terminal: a restart keeps the id and moves `spawnedAt`. */
 export interface AgentSessionTerminal {

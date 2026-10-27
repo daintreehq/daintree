@@ -42,9 +42,7 @@ export function endedEntryOf(
       cwd: record.cwd ?? record.worktreeId ?? "",
       launchAgentId: record.agentId,
       everDetectedAgent: true,
-      ...(trash.agentPresetColor !== undefined
-        ? { agentPresetColor: trash.agentPresetColor }
-        : {}),
+      ...(trash.agentPresetColor !== undefined ? { agentPresetColor: trash.agentPresetColor } : {}),
     },
     trashedAt: trash.closedAt,
     expiresAt: trash.expiresAt,
