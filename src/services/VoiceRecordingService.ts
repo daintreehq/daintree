@@ -4,6 +4,7 @@ import { isScratchWorkspaceId } from "@shared/utils/workspaceIds";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
+import { hasCleanupKey, hasTranscriptionKey } from "@shared/config/voiceProviders";
 import { introducesVoiceCommand } from "@shared/utils/voiceAgentCommands";
 import { shouldShowHybridInputBar } from "@/components/Terminal/terminalFocus";
 import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
@@ -1105,16 +1106,13 @@ class VoiceRecordingService {
 
   async refreshConfiguration(): Promise<boolean> {
     const settings = await window.electron.voiceInput.getSettings();
-    // "Configured" means the selected provider has its own API key — Deepgram
-    // uses deepgramApiKey, every other provider uses openaiApiKey.
-    const hasProviderKey =
-      settings.transcriptionProvider === "deepgram"
-        ? !!settings.deepgramApiKey
-        : !!settings.openaiApiKey;
+    // "Configured" means the selected provider has its own API key. The OpenAI key is a
+    // separate matter: it only gates cleanup and rewrite.
+    const hasProviderKey = hasTranscriptionKey(settings);
     const isConfigured = settings.enabled && hasProviderKey;
     this.selectedDeviceId = settings.deviceId ?? "";
     this.recordingMode = settings.recordingMode ?? "tap-or-hold";
-    this.hasOpenAIKey = !!settings.openaiApiKey;
+    this.hasOpenAIKey = hasCleanupKey(settings);
     this.transcriptionProvider = settings.transcriptionProvider;
     this.heardAsRules = createHeardAsRewriter(collectHeardAsRules(settings.dictionary ?? []));
     logDebug(`${LOG_PREFIX} refreshConfiguration`, {
@@ -1128,7 +1126,7 @@ class VoiceRecordingService {
     // Keep correction state in sync for live-segment dimming
     useVoiceRecordingStore
       .getState()
-      .setCorrectionEnabled(!!(settings.correctionEnabled && settings.openaiApiKey));
+      .setCorrectionEnabled(!!(settings.correctionEnabled && hasCleanupKey(settings)));
     useVoiceRecordingStore
       .getState()
       .setLearnFromCorrections(settings.learnFromCorrections !== false);
