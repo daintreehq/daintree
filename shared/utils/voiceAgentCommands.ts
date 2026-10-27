@@ -640,41 +640,85 @@ function bareToken(word: string): string {
   return word.replace(TOKEN_WRAPPER_RE, "");
 }
 
-// Words weigh 4 in the alignment and commands 5, so of two alignments that
-// keep as many words, the one that lines up more commands wins.
+// A word lined up weighs 4. A command weighs 4 for each word it replaced plus
+// 1, so writing it where it was named beats leaving those words, and writing
+// it anywhere else loses the words between.
 const ALIGNED_WORD = 4;
-const ALIGNED_COMMAND = 5;
+// Past this many cells the alignment costs main too much time and memory, and
+// the commands are counted instead of placed.
+const MAX_ALIGNMENT_CELLS = 2_000_000;
 
 type AlignedUnit = { word: string } | { token: string };
 
-function sameUnit(a: AlignedUnit, b: AlignedUnit): number {
-  if ("token" in a) return "token" in b && a.token === b.token ? ALIGNED_COMMAND : 0;
-  return "word" in b && a.word === b.word ? ALIGNED_WORD : 0;
+function sameUnit(a: AlignedUnit, b: AlignedUnit): boolean {
+  return "token" in a ? "token" in b && a.token === b.token : "word" in b && a.word === b.word;
+}
+
+function unitWeight(unit: AlignedUnit): number {
+  return "token" in unit ? ALIGNED_WORD + 1 : ALIGNED_WORD;
+}
+
+/** A command `raw` named in so many words: its token, the unit after its name, and its weight. */
+interface NamedSpan {
+  token: string;
+  next: number;
+  weight: number;
 }
 
 /**
- * `raw` as words, with each listed command it typed or named as one standing
- * as a single unit for its token.
+ * `raw` as words, each listed command it typed one unit, and where each one it
+ * named as a command starts. A typed `/hmm` is a command, never a hesitation.
  */
-function rawUnits(raw: string, vocabulary: VoiceCommandVocabulary): AlignedUnit[] {
-  const spans = wordSpans(raw, 0).filter((span) => !HESITATIONS.has(span.word));
-  const references = new Map(
-    spokenReferences(raw, spans, vocabulary).map((reference) => [reference.first, reference])
-  );
+function rawUnits(
+  raw: string,
+  vocabulary: VoiceCommandVocabulary
+): { units: AlignedUnit[]; named: Map<number, NamedSpan> } {
+  const spans = wordSpans(raw, 0).filter((span) => span.symbolic || !HESITATIONS.has(span.word));
+  const units = spans.map((span): AlignedUnit => {
+    const token = bareToken(raw.slice(span.start, span.end));
+    return knownToken(token, vocabulary) ? { token } : { word: span.word };
+  });
+  const named = new Map<number, NamedSpan>();
+  for (const { entry, first, last } of spokenReferences(raw, spans, vocabulary)) {
+    const words = last - first + 1;
+    named.set(first, { token: entry.token, next: last + 1, weight: words * ALIGNED_WORD + 1 });
+  }
+  return { units, named };
+}
+
+function writtenUnits(corrected: string, vocabulary: VoiceCommandVocabulary): AlignedUnit[] {
   const units: AlignedUnit[] = [];
-  for (let at = 0; at < spans.length; at++) {
-    const reference = references.get(at);
-    if (reference) {
-      units.push({ token: reference.entry.token });
-      at = reference.last;
+  for (const word of corrected.split(/\s+/u)) {
+    const token = bareToken(word);
+    if (knownToken(token, vocabulary)) {
+      units.push({ token });
       continue;
     }
-    const span = spans[at]!;
-    const token = bareToken(raw.slice(span.start, span.end));
-    if (knownToken(token, vocabulary)) units.push({ token });
-    else if (span.word) units.push({ word: span.word });
+    const key = toKey(word);
+    if (key && !HESITATIONS.has(key)) units.push({ word: key });
   }
   return units;
+}
+
+/** How many of `written`'s commands `raw` typed or named, counted rather than placed. */
+function countedCommands(
+  said: readonly AlignedUnit[],
+  named: ReadonlyMap<number, NamedSpan>,
+  written: readonly AlignedUnit[]
+): number {
+  const left = new Map<string, number>();
+  const credit = (token: string) => left.set(token, (left.get(token) ?? 0) + 1);
+  for (const unit of said) if ("token" in unit) credit(unit.token);
+  for (const span of named.values()) credit(span.token);
+  let counted = 0;
+  for (const unit of written) {
+    if (!("token" in unit)) continue;
+    const available = left.get(unit.token) ?? 0;
+    if (available === 0) continue;
+    left.set(unit.token, available - 1);
+    counted++;
+  }
+  return counted;
 }
 
 /**
@@ -691,42 +735,83 @@ function writesUnnamedCommand(
   corrected: string,
   vocabulary: VoiceCommandVocabulary
 ): boolean {
-  const written: AlignedUnit[] = [];
-  let commands = 0;
-  for (const word of corrected.split(/\s+/u)) {
-    const token = bareToken(word);
-    if (knownToken(token, vocabulary)) {
-      written.push({ token });
-      commands++;
+  const written = writtenUnits(corrected, vocabulary);
+  const commands = written.filter((unit) => "token" in unit).length;
+  if (commands === 0) return false;
+  const { units: said, named } = rawUnits(raw, vocabulary);
+  const inName = new Set<number>();
+  for (const [first, span] of named) for (let at = first; at < span.next; at++) inName.add(at);
+
+  // What both sides share at either end lines up as it stands, so only the
+  // middle, where cleanup changed something, is aligned.
+  let lined = 0;
+  let head = 0;
+  while (
+    head < said.length &&
+    head < written.length &&
+    !inName.has(head) &&
+    sameUnit(said[head]!, written[head]!)
+  ) {
+    if ("token" in written[head]!) lined++;
+    head++;
+  }
+  let saidEnd = said.length;
+  let writtenEnd = written.length;
+  while (
+    saidEnd > head &&
+    writtenEnd > head &&
+    !inName.has(saidEnd - 1) &&
+    sameUnit(said[saidEnd - 1]!, written[writtenEnd - 1]!)
+  ) {
+    if ("token" in written[writtenEnd - 1]!) lined++;
+    saidEnd--;
+    writtenEnd--;
+  }
+
+  const rows = saidEnd - head;
+  const columns = writtenEnd - head;
+  if ((rows + 1) * (columns + 1) > MAX_ALIGNMENT_CELLS) {
+    return countedCommands(said, named, written) < commands;
+  }
+  // A weighted longest common subsequence over the middle, walked back to
+  // count the written commands it lines up.
+  const width = columns + 1;
+  const best = new Int32Array((rows + 1) * width);
+  const at = (i: number, j: number) => best[(i - head) * width + (j - head)]!;
+  const pairWeight = (i: number, j: number) =>
+    sameUnit(said[i]!, written[j]!) ? unitWeight(written[j]!) : 0;
+  const namedWeight = (i: number, j: number) => {
+    const span = named.get(i);
+    const unit = written[j]!;
+    return span && span.next <= saidEnd && "token" in unit && unit.token === span.token
+      ? span
+      : null;
+  };
+  for (let i = saidEnd - 1; i >= head; i--) {
+    for (let j = writtenEnd - 1; j >= head; j--) {
+      let value = Math.max(at(i + 1, j), at(i, j + 1));
+      const pair = pairWeight(i, j);
+      if (pair > 0) value = Math.max(value, pair + at(i + 1, j + 1));
+      const span = namedWeight(i, j);
+      if (span) value = Math.max(value, span.weight + at(span.next, j + 1));
+      best[(i - head) * width + (j - head)] = value;
+    }
+  }
+  for (let i = head, j = head; i < saidEnd && j < writtenEnd;) {
+    const value = at(i, j);
+    const span = namedWeight(i, j);
+    if (span && value === span.weight + at(span.next, j + 1)) {
+      lined++;
+      i = span.next;
+      j++;
       continue;
     }
-    const key = toKey(word);
-    if (key && !HESITATIONS.has(key)) written.push({ word: key });
-  }
-  if (commands === 0) return false;
-  const said = rawUnits(raw, vocabulary);
-  // A weighted longest common subsequence, walked back to count the written
-  // commands it lines up.
-  const width = written.length + 1;
-  const best = new Int32Array((said.length + 1) * width);
-  for (let i = said.length - 1; i >= 0; i--) {
-    for (let j = written.length - 1; j >= 0; j--) {
-      const match = sameUnit(said[i]!, written[j]!);
-      best[i * width + j] = Math.max(
-        best[(i + 1) * width + j]!,
-        best[i * width + j + 1]!,
-        match > 0 ? match + best[(i + 1) * width + j + 1]! : 0
-      );
-    }
-  }
-  let lined = 0;
-  for (let i = 0, j = 0; i < said.length && j < written.length;) {
-    const match = sameUnit(said[i]!, written[j]!);
-    if (match > 0 && best[i * width + j] === match + best[(i + 1) * width + j + 1]!) {
+    const pair = pairWeight(i, j);
+    if (pair > 0 && value === pair + at(i + 1, j + 1)) {
       if ("token" in written[j]!) lined++;
       i++;
       j++;
-    } else if (best[(i + 1) * width + j] === best[i * width + j]) {
+    } else if (value === at(i + 1, j)) {
       i++;
     } else {
       j++;

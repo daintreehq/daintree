@@ -632,6 +632,22 @@ describe("checkVoiceCommandEdit for a command named partway into the prompt", ()
     expect(
       checkVoiceCommandEdit(raw, "Check the review skill, then /review the header.", skills, false)
     ).toBe("unprompted_command");
+    expect(
+      checkVoiceCommandEdit(
+        "Check the review skill. Review it.",
+        "Check the review skill. /review it.",
+        skills,
+        false
+      )
+    ).toBe("unprompted_command");
+    expect(
+      checkVoiceCommandEdit(
+        "Check the review skill. Review it.",
+        "Check the /review skill. Review it.",
+        skills,
+        false
+      )
+    ).toBeNull();
     // Words shared by both mentions don't say which one was meant.
     expect(
       checkVoiceCommandEdit(
@@ -690,6 +706,28 @@ describe("checkVoiceCommandEdit for a command named partway into the prompt", ()
         false
       )
     ).toBeNull();
+  });
+
+  it("never reads a typed command as a hesitation", () => {
+    const hmm = buildVoiceCommandVocabulary([custom("claude", "/hmm")], sourcesOf("claude"));
+    expect(checkVoiceCommandEdit("then /hmm", "Then /hmm.", hmm, false)).toBeNull();
+  });
+
+  it("counts the commands of a passage too long to align", () => {
+    const filler = "and the header ".repeat(1200);
+    const raw = `Use the design review skill ${filler}then stop.`;
+    expect(raw.length).toBeLessThan(20_000);
+    expect(
+      checkVoiceCommandEdit(raw, `Use the /design-review skill ${filler}then stop`, skills, true)
+    ).toBeNull();
+    expect(
+      checkVoiceCommandEdit(
+        raw,
+        `Use the /design-review skill ${filler}then /design-review`,
+        skills,
+        true
+      )
+    ).toBe("unprompted_command");
   });
 
   it('takes a handoff with "with" for an installed skill', () => {
