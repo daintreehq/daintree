@@ -542,6 +542,28 @@ describe("useTokenResolution.sendText — targeted submit", () => {
     expect(addToHistory).toHaveBeenCalledWith("t1", "check @diff\n\nAND THIS", undefined);
   });
 
+  it("records each send to the terminal as written, composed, for its dictations' cleanup", async () => {
+    useTerminalInputStore.setState({ sentPrompts: new Map() });
+    const { sendText } = setup();
+
+    await act(async () => {
+      await sendText("review @diff for Terra");
+    });
+    await act(async () => {
+      await sendText("never went", { submit: vi.fn().mockResolvedValue(false) });
+    });
+    await act(async () => {
+      await sendText("check", { compose: (draft) => `${draft} and log it` });
+    });
+
+    expect(
+      useTerminalInputStore
+        .getState()
+        .getSentPrompts("t1")
+        .map((prompt) => prompt.text)
+    ).toEqual(["review @diff for Terra", "check and log it"]);
+  });
+
   it("sends a composed instruction even when the draft is empty", async () => {
     const submit = vi.fn().mockResolvedValue(true);
     const { sendText } = setup();

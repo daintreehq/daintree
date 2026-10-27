@@ -6,6 +6,7 @@ import { terminalClient } from "@/clients";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
+import { useTerminalInputStore } from "@/store/terminalInputStore";
 import type { PtyPanelData, PanelInstance } from "@shared/types/panel";
 
 import type { RecipeContext } from "@/utils/recipeVariables";
@@ -97,6 +98,7 @@ function reset() {
     armOrder: [],
     armOrderById: {},
     lastArmedId: null,
+    crossHostTargets: [],
   });
   usePanelStore.setState({ panelsById: {}, panelIds: [] });
 }
@@ -202,6 +204,41 @@ describe("executeFleetBroadcast", () => {
     await executeFleetBroadcast("default", ["a", "b"], { b: "custom-for-b" });
     expect(submitMock).toHaveBeenCalledWith("a", "default");
     expect(submitMock).toHaveBeenCalledWith("b", "custom-for-b");
+  });
+
+  it("records what each target it landed on was sent, as written, for that terminal's dictations", async () => {
+    useTerminalInputStore.setState({ sentPrompts: new Map() });
+    buildFleetBroadcastRecipeContextMock.mockReturnValue({ branchName: "feature/terra" });
+    submitMock.mockImplementation(async (id: string) => {
+      if (id === "dead") throw new Error("EPIPE");
+    });
+    useFleetArmingStore.setState({
+      crossHostTargets: [
+        {
+          key: "host-2:t9",
+          hostId: "host-2" as never,
+          hostName: "Studio",
+          terminalId: "t9",
+          title: "t9",
+        },
+      ],
+    });
+    seedPanels([makeAgent("a"), makeAgent("b"), makeAgent("dead")]);
+
+    await executeFleetBroadcast("check {{branch_name}}", ["a", "b", "dead", "host-2:t9"], {
+      b: "custom for b",
+    });
+
+    expect(submitMock).toHaveBeenCalledWith("a", "check feature/terra");
+    const sent = (id: string) =>
+      useTerminalInputStore
+        .getState()
+        .getSentPrompts(id)
+        .map((prompt) => prompt.text);
+    expect(sent("a")).toEqual(["check {{branch_name}}"]);
+    expect(sent("b")).toEqual(["custom for b"]);
+    expect(sent("dead")).toEqual([]);
+    expect([...useTerminalInputStore.getState().sentPrompts.keys()]).toEqual(["a", "b"]);
   });
 
   it("does NOT batch when target count is within the batch size (even at threshold)", async () => {

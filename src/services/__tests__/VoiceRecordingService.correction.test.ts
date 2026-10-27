@@ -85,6 +85,7 @@ const correct =
     (request: {
       rawText: string;
       recentContext?: string[];
+      recentPrompts?: string[];
       terminalId?: string;
       sessionId?: string;
       uncertain?: Span[];
@@ -274,6 +275,31 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
 
     expect(draft("panel-1")).toBe("Fix the bug in the parser.");
     expect(draft("panel-2")).toBe("second thought");
+  });
+
+  // #14855: a send empties the draft, so what was sent is the conversation the
+  // next dictation into that terminal continues.
+  it("sends the prompts last sent to the dictated terminal, read as the request goes", async () => {
+    const { service, dictate, inputStore } = await setup();
+    correct.mockResolvedValue({ action: "no_change", correctedText: "" });
+    inputStore.getState().recordSentPrompt("panel-1", "Measure gpt-6.1-terra against Luna");
+    inputStore.getState().recordSentPrompt("panel-2", "Somewhere else entirely");
+
+    dictate("panel-1", "run the tara benchmark");
+    inputStore.getState().recordSentPrompt("panel-1", "Then compare Wispr Flow");
+    await service.stop();
+    expect(correct).toHaveBeenLastCalledWith({
+      sessionId: expect.any(String),
+      rawText: "run the tara benchmark",
+      recentPrompts: ["Measure gpt-6.1-terra against Luna", "Then compare Wispr Flow"],
+      startsPrompt: true,
+      terminalId: "panel-1",
+      streamId: expect.any(String),
+    });
+
+    dictate("panel-3", "a terminal with nothing sent");
+    await service.stop();
+    expect(correct.mock.calls.at(-1)![0]).not.toHaveProperty("recentPrompts");
   });
 
   it("lands the finished passage's correction while dictation restarts on the same panel", async () => {

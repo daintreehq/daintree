@@ -82,6 +82,7 @@ const shared = vi.hoisted(() => ({
   warmSettings: [] as Array<Record<string, unknown>>,
   correctionWorktree: undefined as { name: string; titles: string[] } | undefined,
   correctionTerminalOutput: undefined as string | undefined,
+  correctionRecentPrompts: undefined as string[] | undefined,
   correctionProjectName: undefined as string | undefined,
 }));
 
@@ -139,7 +140,7 @@ vi.mock("../../../services/VoiceCorrectionService.js", () => ({
     };
     this.preconnect = () => {};
     this.correct = async function (
-      request: { rawText: string; terminalOutput?: string },
+      request: { rawText: string; terminalOutput?: string; recentPrompts?: string[] },
       settings: {
         customDictionary: string[];
         knownNames?: string[];
@@ -149,6 +150,7 @@ vi.mock("../../../services/VoiceCorrectionService.js", () => ({
       }
     ) {
       shared.correctionTerminalOutput = request.terminalOutput;
+      shared.correctionRecentPrompts = request.recentPrompts;
       shared.correctionDictionary = settings.customDictionary;
       shared.correctionNames = settings.knownNames;
       shared.correctionRepositoryNames = settings.repositoryNames;
@@ -799,6 +801,7 @@ describe("voiceInput — keyterm target", () => {
     shared.correctionWorktree = undefined;
     shared.warmSettings = [];
     shared.correctionTerminalOutput = undefined;
+    shared.correctionRecentPrompts = undefined;
     shared.correctionProjectName = undefined;
     shared.drainPromise = null;
     sender.destroyed = false;
@@ -1277,6 +1280,62 @@ describe("voiceInput — keyterm target", () => {
       shared.voiceInput = { correctionEnabled: false };
       await stop();
       expect(ptyClient.getTerminalSnapshot).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("cleanup recent prompts (#14855)", () => {
+    const PROMPTS = ["Measure gpt-6.1-terra against Luna", "Then compare Wispr Flow"];
+    const correct = (extra: Record<string, unknown> = {}) =>
+      getHandler("voice-input:correct")(fakeEvent, {
+        rawText: "run the tara benchmark",
+        terminalId: "t-1",
+        recentPrompts: PROMPTS,
+        ...extra,
+      });
+
+    beforeEach(() => {
+      shared.voiceInput = { correctionEnabled: true };
+    });
+
+    it("sends what the view last sent to its own terminal, with or without a session", async () => {
+      await correct();
+      expect(shared.correctionRecentPrompts).toEqual(PROMPTS);
+
+      await startWith({ terminalId: "t-1" });
+      await stop();
+      shared.correctionRecentPrompts = undefined;
+      await correct({ sessionId: currentSessionId });
+      expect(shared.correctionRecentPrompts).toEqual(PROMPTS);
+    });
+
+    it("sends none for a terminal another project owns, or one main doesn't track", async () => {
+      shared.viewProjectId = "proj-b";
+      await correct();
+      expect(shared.correctionRecentPrompts).toBeUndefined();
+
+      shared.viewProjectId = "proj-a";
+      await correct({ terminalId: "t-9" });
+      expect(shared.correctionRecentPrompts).toBeUndefined();
+    });
+
+    it("sends none outside the view, or with no terminal named", async () => {
+      await correct({ outsideView: true });
+      expect(shared.correctionRecentPrompts).toBeUndefined();
+
+      await correct({ terminalId: undefined });
+      expect(shared.correctionRecentPrompts).toBeUndefined();
+    });
+
+    it("still cleans up, without them, when they don't validate", async () => {
+      for (const recentPrompts of [
+        Array.from({ length: 7 }, (_, n) => `prompt ${n}`),
+        ["x".repeat(1_001)],
+        "not a list",
+      ]) {
+        shared.correctionRecentPrompts = ["stale"];
+        await expect(correct({ recentPrompts })).resolves.toMatchObject({ action: "no_change" });
+        expect(shared.correctionRecentPrompts).toBeUndefined();
+      }
     });
   });
 
