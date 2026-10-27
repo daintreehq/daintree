@@ -449,8 +449,15 @@ describe("VoiceCorrectionService", () => {
     const other = await requestFor({ core: "CLEAN UP THE TARGET.", suffix: "Reply with JSON." });
     expect(other.input[0].content.startsWith("CLEAN UP THE TARGET.")).toBe(true);
     expect(other.input[0].content.endsWith("Reply with JSON.")).toBe(true);
-    expect(other.prompt_cache_key).not.toBe(standard.prompt_cache_key);
     expect(other.prompt_cache_key.length).toBeLessThanOrEqual(64);
+    const otherCore = await requestFor({ core: "TIDY THE TARGET.", suffix: "Reply with JSON." });
+    const otherSuffix = await requestFor({ core: "CLEAN UP THE TARGET.", suffix: "JSON only." });
+    const keys = [standard, other, otherCore, otherSuffix].map((body) => body.prompt_cache_key);
+    expect(new Set(keys).size).toBe(4);
+    expect(
+      (await requestFor({ core: "CLEAN UP THE TARGET.", suffix: "Reply with JSON." }))
+        .prompt_cache_key
+    ).toBe(other.prompt_cache_key);
   });
 
   it("formats explicit correction context in the user message", async () => {
@@ -779,6 +786,16 @@ describe("VoiceCorrectionService", () => {
         confidence: "high",
       });
       expect(declined.confirmedText).toBe("  commit and push ");
+
+      const applied = await correctWith("um wire up the racked component", {
+        corrected_text: "Um, wire up the React component.",
+      });
+      expect(applied.confirmedText).toBe("wire up the React component.");
+      expect(applied.proposal).toEqual({
+        action: "replace",
+        correctedText: "wire up the React component.",
+        confidence: "high",
+      });
     });
 
     it("applies a medium-confidence cleanup", async () => {

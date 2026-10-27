@@ -317,13 +317,19 @@ export const REPLAY_TRANSCRIPTS: Readonly<Record<string, ReplayTranscripts>> = {
       fixes: { keyterm: "form" },
       keep: ["Deepgram", "three"],
     },
+    // As heard, "Nova 3": the guard reads "Nova-3" as a signed number, so the
+    // clip's written reference could never land.
     deepgram: {
       raw: "Deepgram Nova 3 rejects the key term parameter when the list is too long, so cap it before building the URL.",
+      reference:
+        "Deepgram Nova 3 rejects the keyterm parameter when the list is too long, so cap it before building the URL.",
       fixes: { keyterm: "form" },
       keep: ["Deepgram"],
     },
     grok: {
       raw: "Deepgram Nova 3 rejects the key term parameter when the list is too long, so cap it before building the U R L.",
+      reference:
+        "Deepgram Nova 3 rejects the keyterm parameter when the list is too long, so cap it before building the URL.",
       fixes: { keyterm: "form", URL: "form" },
       keep: ["Deepgram"],
       uncertain: ["key term"],
@@ -896,6 +902,23 @@ const LOOKALIKE: readonly AuthoredCase[] = [
     raw: "Find out what kind of error the watcher throws on Windows and handle that one.",
     reference: "Find out what kind of error the watcher throws on Windows and handle that one.",
     keep: ["what kind of error"],
+  },
+  {
+    id: "lookalike-partly:deepgram",
+    style: "deepgram",
+    source: "lookalike",
+    raw: "The tests pretty much pass now, it's only the Windows watcher one that still fails.",
+    reference:
+      "The tests pretty much pass now, it's only the Windows watcher one that still fails.",
+    keep: ["pretty much pass"],
+  },
+  {
+    id: "lookalike-sort-of:grok",
+    style: "grok",
+    source: "lookalike",
+    raw: "The fix sort of works, but the second window still flickers when it opens.",
+    reference: "The fix sort of works, but the second window still flickers when it opens.",
+    keep: ["sort of works"],
   },
   {
     id: "lookalike-okay-answer:grok",

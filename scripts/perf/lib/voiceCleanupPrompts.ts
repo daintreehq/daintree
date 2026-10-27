@@ -242,6 +242,22 @@ const AGENT = revise(REPAIR, {
   ],
 });
 
+// Review of AGENT: "pretty much", "sort of" and "kind of" can say a thing only
+// partly works ("the tests pretty much pass"), which the agent needs, and the
+// worked example taught dropping "kind of" outright.
+const FINAL = revise(AGENT, {
+  core: [
+    [
+      '"kind of" naming a type ("what kind of error"),',
+      '"kind of" naming a type ("what kind of error"), "pretty much", "sort of" or "kind of" saying something only partly works or is only partly done ("the tests pretty much pass", "it sort of works"),',
+    ],
+    [
+      'Target: "yeah so um the login page kind of hangs when the token expires',
+      'Target: "yeah so um the login page basically hangs when the token expires',
+    ],
+  ],
+});
+
 export const PROMPT_VARIANTS: Readonly<Record<string, PromptVariant>> = {
   v11: { description: "the rules production sent before #14786", instructions: V11 },
   firm: {
@@ -256,6 +272,10 @@ export const PROMPT_VARIANTS: Readonly<Record<string, PromptVariant>> = {
     description:
       "round 2: repair, with spoken symbols written out again, run-ons and closing tags named, and agent names in <terms>",
     instructions: AGENT,
+  },
+  final: {
+    description: "agent, keeping a hedge that says something only partly works",
+    instructions: FINAL,
   },
   production: {
     description: "the rules production sends now",

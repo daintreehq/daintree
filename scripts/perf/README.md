@@ -366,7 +366,7 @@ Every quality score is reported for what landed under each guard, and once for w
 | `--no-stream` | streamed | Asks for the whole reply at once, as cleanup did before it streamed |
 | `--probe-prediction` | off | Asks each model for Predicted Outputs on both endpoints and records the answer |
 | `--dictionary` | none | Custom dictionary terms, the same for every variant |
-| `--rescore <run.json>` |  | Scores a saved run again with today's references and checks, sending nothing, under `--guards` when given; a passage whose input changed or went away since is left out and named. A run saved before fixes had a kind (scoring v2) gets the misread and form split this way, since the kinds change nothing a passage sends |
+| `--rescore <run.json>` |  | Scores a saved run again with today's references and checks, sending nothing, under `--guards` when given; a passage whose input changed or went away since is left out and named. A run saved under an older scoring version is scored again from its saved replies, the misread and form split included; one saved before #14786, which records each reply and lands it per guard, can't be rescored |
 
 `OPENAI_ORG_ID` and `OPENAI_PROJECT_ID` are sent when set. Results land in `.tmp/perf-results/voice-cleanup/<label>-<timestamp>.json`, rewritten after every request with `complete: false` until the run finishes (Ctrl+C keeps what was paid for), and the Markdown report beside it at the end. The record keeps every prompt it sent in full and every budget it landed under. The report closes with every passage some arm didn't land ready, or where the arms disagree, with each distinct text an arm landed across the repeats.
 

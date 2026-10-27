@@ -234,8 +234,8 @@ describe("validateCorrection", () => {
     expect(
       validateCorrection(raw, dropped, { ...CORRECTION_GUARD_LIMITS, removedRatio: 0.4 })
     ).toEqual({ ok: true });
-    // A looser removal budget doesn't let more words in.
-    const added = `${raw} and also restart the box and page the on call engineer`;
+    // A looser removal budget doesn't let more words in: five over a budget of three.
+    const added = `${raw} and restart the box twice`;
     expect(
       validateCorrection(raw, added, { ...CORRECTION_GUARD_LIMITS, removedRatio: 0.5 })
     ).toEqual({ ok: false, reason: "edit_size" });
@@ -304,9 +304,64 @@ describe("validateCorrection", () => {
     });
 
     it("still holds a flag the raw text typed to its place", () => {
+      const raw = "run --watch then dash dash run";
+      expect(validateCorrection(raw, "Run --watch then --run.", symbols)).toEqual({ ok: true });
+      expect(validateCorrection(raw, "Run --run then --watch.", symbols)).toEqual({
+        ok: false,
+        reason: "protected_span",
+      });
+      // The typed flag is the required one; the spelled one stays as words.
       expect(
-        validateCorrection("run --watch then dash dash run", "Run --run then --watch.", symbols)
+        validateCorrection(
+          "say dash dash watch then run --watch",
+          "Say dash dash watch, then run --watch.",
+          symbols
+        )
+      ).toEqual({ ok: true });
+    });
+
+    it("keeps a spelled flag beside a word it was spoken next to", () => {
+      expect(
+        validateCorrection(
+          "run npm test dash dash force then publish the package",
+          "Run npm test, then publish the package --force.",
+          symbols
+        )
       ).toEqual({ ok: false, reason: "protected_span" });
+      expect(
+        validateCorrection(
+          "run npm test dash dash watch dash dash verbose",
+          "Run npm test --watch --verbose.",
+          symbols
+        )
+      ).toEqual({ ok: true });
+    });
+
+    it("takes no flag from a spelling inside code", () => {
+      expect(
+        validateCorrection(
+          "print `dash f` then publish the package",
+          "Print `dash f`, then publish the package -f.",
+          symbols
+        )
+      ).toEqual({ ok: false, reason: "protected_span" });
+    });
+
+    it("never frees a spoken symbol for one typed somewhere else", () => {
+      expect(
+        validateCorrection(
+          "Don't dash. Deploy the follow up.",
+          "Don't deploy the follow-up.",
+          symbols
+        )
+      ).toEqual({ ok: false, reason: "negation" });
+      expect(
+        validateCorrection(
+          "open the readme dot md and the follow up notes",
+          "Open the readme md and the follow up.notes.",
+          strict
+        )
+      ).toEqual({ ok: false, reason: "edit_size" });
     });
   });
 

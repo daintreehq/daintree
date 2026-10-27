@@ -122,6 +122,7 @@ function parseModel(spec: string): Omit<Variant, "id" | "prompt"> {
 }
 
 function namesIn(registry: Readonly<Record<string, unknown>>, kind: string, names: string[]) {
+  if (names.length === 0) throw new Error(`no ${kind} named`);
   const unknown = names.filter((name) => !Object.hasOwn(registry, name));
   if (unknown.length) {
     throw new Error(
@@ -295,6 +296,18 @@ function requestFor(entry: CleanupCase): VoiceCorrectionRequest {
   };
 }
 
+/** What became of a request that brought back no reply to land. */
+function withoutReply(result: VoiceCorrectionResult): Disposition {
+  return result.failed ? "failed" : "skipped";
+}
+
+/** What the service did with a passage, read the way a guard landing reads. */
+function dispositionOf(result: VoiceCorrectionResult): Disposition {
+  if (!result.proposal) return withoutReply(result);
+  if (result.rejected) return "rejected";
+  return result.action === "replace" ? "applied" : "declined";
+}
+
 /**
  * A reply landed under one guard, the way the service lands it. Without a
  * reply the request failed or was skipped, and every guard keeps the raw text.
@@ -368,7 +381,7 @@ function toTrial(
     ...(reply ? { reply } : {}),
     proposal,
     proposalScore: scoreText(entry, proposal),
-    landings: landings(entry, reply, guards, result.failed ? "failed" : "skipped", vocabulary),
+    landings: landings(entry, reply, guards, withoutReply(result), vocabulary),
     roundTripMs: result.roundTrip ? Math.round(result.roundTrip.ms) : null,
     ...(firstTextAt !== null && result.roundTrip
       ? { firstTextMs: Math.round(firstTextAt - result.roundTrip.sentAt) }
@@ -550,20 +563,22 @@ function summarise(run: RunRecord, corpus: readonly CleanupCase[]): VariantSumma
   );
 }
 
+// Under the limits the run records, so a rescore that keeps a run's guards
+// lands these as it lands the run's replies.
 function landAdversarial(
-  guards: readonly string[],
+  guards: Readonly<Record<string, GuardVariant>>,
   corpus: readonly CleanupCase[],
   vocabulary: VoiceCommandVocabulary
 ) {
   const byId = new Map(corpus.map((entry) => [entry.id, entry]));
-  return guards.flatMap((guard) =>
+  return Object.entries(guards).flatMap(([guard, { limits }]) =>
     ADVERSARIAL_PROPOSALS.flatMap(({ caseId, harm, proposal }): AdversarialResult[] => {
       const entry = byId.get(caseId);
       if (!entry) return [];
       const landing = landUnder(
         entry,
         { action: "replace", correctedText: proposal, confidence: "high" },
-        GUARD_VARIANTS[guard]!.limits,
+        limits,
         "skipped",
         vocabulary
       );
@@ -890,7 +905,7 @@ export function rescore(
       };
     });
   run.scoringVersion = VOICE_CLEANUP_SCORING_VERSION;
-  run.adversarial = landAdversarial(Object.keys(run.guards), corpus, vocabularyOf(run.profile));
+  run.adversarial = landAdversarial(run.guards, corpus, vocabularyOf(run.profile));
   run.summaries = summarise(run, corpus);
   return { run, corpus };
 }
@@ -995,12 +1010,13 @@ async function main(): Promise<number> {
       sent: requestFor(entry),
     })),
     parityMisses: 0,
-    adversarial: landAdversarial(guards, corpus, vocabularyOf(profile)),
+    adversarial: [],
     prices: MODEL_PRICES,
     predictionProbes: [],
     trials: [],
     summaries: [],
   };
+  run.adversarial = landAdversarial(run.guards, corpus, vocabularyOf(profile));
   // Written whole and renamed into place after every request, so an
   // interrupted run keeps every reply it paid for.
   const save = () => {
@@ -1080,15 +1096,20 @@ async function main(): Promise<number> {
             firstTextAt
           )
         );
-        // The replay must land a reply exactly as the service just did.
-        const replayed = result.proposal
-          ? correctionOutcome(entry.raw, result.proposal, {
-              vocabulary: vocabularyOf(profile),
-              startsPrompt: requestFor(entry).startsPrompt === true,
-              limits: CORRECTION_GUARD_LIMITS,
-            }).confirmedText
-          : entry.raw;
-        if (replayed !== result.confirmedText) {
+        // The replay must land a reply exactly as the service just did: the
+        // same text, disposition and reason, through the path the guards use.
+        const replayed = landUnder(
+          entry,
+          result.proposal,
+          CORRECTION_GUARD_LIMITS,
+          withoutReply(result),
+          vocabularyOf(profile)
+        );
+        if (
+          replayed.landed !== result.confirmedText ||
+          replayed.disposition !== dispositionOf(result) ||
+          (replayed.rejectReason ?? null) !== (result.rejected?.reason ?? null)
+        ) {
           run.parityMisses++;
           console.error(`[voice-cleanup] ${entry.id}: the guard replay landed it differently`);
         }

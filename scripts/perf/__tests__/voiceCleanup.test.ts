@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -15,6 +16,7 @@ import { PROMPT_VARIANTS, revise } from "../lib/voiceCleanupPrompts";
 import {
   corpusProblems,
   locateUncertain,
+  hasMeaningRisk,
   longestSentence,
   percentile,
   requestCost,
@@ -397,7 +399,7 @@ describe("run-ons and agent-ready text", () => {
     raw: "so the build fails on windows and then it retries forever and the log fills up so can you cap it",
     reference:
       "The build fails on Windows, and then it retries forever and the log fills up. Can you cap it?",
-    fixes: [],
+    fixes: {},
     drops: ["so"],
     maxSentenceWords: 15,
   });
@@ -425,6 +427,21 @@ describe("run-ons and agent-ready text", () => {
     expect(scoreText(entry, "Um, invalidate the cache when the branch changes.").agentReady).toBe(
       false
     );
+    // The same words as the reference, but a fix written wrong or a code span lost.
+    const written = makeCase({
+      raw: "wrap it in use shallow and run `npm test`",
+      reference: "Wrap it in useShallow and run `npm test`.",
+      fixes: { useShallow: "form" },
+      drops: [],
+    });
+    for (const text of [
+      "Wrap it in use shallow and run `npm test`.",
+      "Wrap it in useShallow and run npm test.",
+    ]) {
+      const score = scoreText(written, text);
+      expect(score.matchesReference, text).toBe(true);
+      expect(score.agentReady, text).toBe(false);
+    }
   });
 
   it("flags a run-on cap the raw already meets, or a reference breaks", () => {
@@ -448,6 +465,22 @@ describe("prompt and guard variants", () => {
     expect(() => revise(v11, { suffix: [["-", "x"]] })).toThrow(/exactly once/);
   });
 
+  it("keeps v11 byte for byte the rules production sent before #14786", () => {
+    const { core, suffix } = PROMPT_VARIANTS.v11!.instructions;
+    expect(
+      createHash("sha256")
+        .update(JSON.stringify([core, suffix]))
+        .digest("hex")
+    ).toBe("a41a409c4021edc2e71f37ef020cf9f9ec30a4b84cd428d70175ff625dc08539");
+  });
+
+  it("gives every prompt variant its own rules", () => {
+    const cores = Object.entries(PROMPT_VARIANTS)
+      .filter(([name]) => name !== "production")
+      .map(([, variant]) => variant.instructions.core);
+    expect(new Set(cores).size).toBe(cores.length);
+  });
+
   it("builds every prompt variant", () => {
     for (const [name, variant] of Object.entries(PROMPT_VARIANTS)) {
       expect(variant.instructions.core.length, name).toBeGreaterThan(4_800);
@@ -455,9 +488,13 @@ describe("prompt and guard variants", () => {
     }
   });
 
-  it("names a passage the corpus has for every harmful cleanup", () => {
-    const ids = new Set(CLEANUP_CORPUS.map((entry) => entry.id));
-    expect(ADVERSARIAL_PROPOSALS.filter(({ caseId }) => !ids.has(caseId))).toEqual([]);
+  it("names a passage the corpus has for every harmful cleanup, and does it harm", () => {
+    const byId = new Map(CLEANUP_CORPUS.map((entry) => [entry.id, entry]));
+    for (const { caseId, harm, proposal } of ADVERSARIAL_PROPOSALS) {
+      const entry = byId.get(caseId);
+      expect(entry, caseId).toBeDefined();
+      expect(hasMeaningRisk(scoreText(entry!, proposal)), harm).toBe(true);
+    }
   });
 
   it("refuses under v11 every harmful cleanup a word count can see", () => {
@@ -533,7 +570,14 @@ describe("summariseVariant", () => {
     reference: "The cache is stale.",
     fixes: {},
   });
-  const corpus = [{ ...short, fixes: {}, drops: [] }, long];
+  const kept = makeCase({
+    id: "kept",
+    raw: "run `npm test` now",
+    reference: "Run `npm test` now.",
+    fixes: {},
+    drops: [],
+  });
+  const corpus = [{ ...short, fixes: {}, drops: [] }, long, kept];
 
   type TrialOverrides = Partial<Omit<Trial, "landings">> &
     Pick<Trial, "caseId"> & { landed: string; disposition?: Disposition; rejectReason?: string };
@@ -618,38 +662,33 @@ describe("summariseVariant", () => {
   });
 
   it("tells a guard's catches from what it let through and held back", () => {
-    const risky = "The cache.";
+    const refused = (caseId: string, proposal: string, rejectReason: string) =>
+      trial({
+        caseId,
+        landed: corpus.find((entry) => entry.id === caseId)!.raw,
+        proposal,
+        disposition: "rejected",
+        rejectReason,
+      });
     const trials = [
-      // A meaning risk refused, and one landed.
-      trial({
-        caseId: "short",
-        landed: "commit and push",
-        proposal: "push",
-        disposition: "rejected",
-        rejectReason: "edit_size",
-      }),
+      // Meaning risks refused: words lost, and only a code span lost.
+      refused("short", "push", "edit_size"),
+      refused("kept", "Run npm test now.", "protected_span"),
+      // One landed.
       trial({ caseId: "short", landed: "push" }),
-      // A sound cleanup refused, which was agent-ready.
-      trial({
-        caseId: "long",
-        landed: long.raw,
-        proposal: "The cache is stale.",
-        disposition: "rejected",
-        rejectReason: "edit_size",
-      }),
-      // Refused for confidence, which no guard check decided.
-      trial({
-        caseId: "long",
-        landed: long.raw,
-        proposal: risky,
-        disposition: "rejected",
-        rejectReason: "low_confidence",
-      }),
+      // Sound cleanups refused: one agent-ready, one not.
+      refused("long", "The cache is stale.", "edit_size"),
+      refused("long", long.raw.replace(/^um /, ""), "number"),
+      // Refused by a check no guard decided, or never landed at all.
+      refused("long", "The cache.", "low_confidence"),
+      refused("short", "/push", "unknown_command"),
+      trial({ caseId: "long", landed: long.raw, disposition: "failed" }),
+      trial({ caseId: "long", landed: long.raw, disposition: "declined" }),
     ];
     expect(summariseVariant("a", "g", trials, corpus).guardChecks).toEqual({
-      caught: 1,
+      caught: 2,
       letThrough: 1,
-      heldBack: 1,
+      heldBack: 2,
       heldBackReady: 1,
     });
   });
@@ -709,6 +748,8 @@ describe("summariseVariant", () => {
     }));
     const [a, b] = ["a", "b"].map((variant) => summariseVariant(variant, "g", rows, [entry]));
     expect(a!.landed.rawWer).toBe(b!.landed.rawWer);
+    // "um" over the five words of the closer reference.
+    expect(a!.landed.rawWer).toBeCloseTo(1 / 5);
     expect(a!.landed.wer).toBe(0);
     expect(b!.landed.wer).toBe(0);
   });
@@ -806,6 +847,17 @@ describe("rescore", () => {
     fixes: { Zustand: "misread", worktree: "form", useShallow: "form" },
     drops: [],
   });
+  // Lands under the spoken-symbols guard and not under v11's.
+  const symbols = makeCase({
+    id: "symbols",
+    style: "openai",
+    source: "ramble",
+    raw: "add a project underscore id column then run npm run db colon generate and open electron slash ipc slash handlers",
+    reference:
+      "Add a project_id column, then run npm run db:generate and open electron/ipc/handlers.",
+    fixes: { project_id: "form", "db:generate": "form", "electron/ipc/handlers": "form" },
+    drops: [],
+  });
   const LUNA = "gpt-6-luna:none/production";
   const TERRA = "gpt-6.1-terra:none/production";
 
@@ -816,16 +868,19 @@ describe("rescore", () => {
     const saved = (
       variant: string,
       caseId: string,
-      correctedText: string,
+      correctedText: string | null,
       confidence: "high" | "low" = "high"
     ) => ({
       caseId,
       variant,
       repeat: 1,
-      reply: { action: "replace", correctedText, confidence },
-      proposal: correctedText,
+      ...(correctedText === null
+        ? {}
+        : { reply: { action: "replace", correctedText, confidence } }),
+      proposal: correctedText ?? "",
       proposalScore: stale,
-      landings: {},
+      // A request that failed is known by its landing; the rest land again.
+      landings: correctedText === null ? { v11: { disposition: "failed" } } : {},
       roundTripMs: 900,
       totalMs: 950,
       costUsd: 0.001,
@@ -849,11 +904,11 @@ describe("rescore", () => {
       stream: true,
       variants: [variant(LUNA), variant(TERRA)],
       prompts: {},
-      guards: { v11: GUARD_VARIANTS.v11 },
+      guards: { v11: GUARD_VARIANTS.v11, symbols: GUARD_VARIANTS.symbols },
       profile: { customDictionary: [], projectName: "daintree", projectPath: "/p", language: "en" },
       corpusHash: "corpus",
       corpus: [
-        ...[codex, zustand].map((entry) => ({
+        ...[codex, zustand, symbols].map((entry) => ({
           id: entry.id,
           style: entry.style,
           source: entry.source,
@@ -874,6 +929,8 @@ describe("rescore", () => {
         saved(TERRA, "codex", codex.reference),
         // Turned down whole: the proposal had every fix, the raw text landed.
         saved(TERRA, "zustand", zustand.reference, "low"),
+        saved(LUNA, "symbols", symbols.reference),
+        saved(TERRA, "symbols", null),
       ],
       summaries: [],
     };
@@ -888,19 +945,26 @@ describe("rescore", () => {
     expect(inputHash({ ...zustand, fixes: {} })).toBe(inputHash(zustand));
   });
 
-  it("lands a saved run's replies again and scores them by kind, landed and proposed", () => {
-    const { run, corpus } = rescore(savedRun(), null, [codex, zustand]);
+  it("lands a saved run's replies again under each of its guards and scores them by kind", () => {
+    const { run, corpus } = rescore(savedRun(), null, [codex, zustand, symbols]);
     expect(run.scoringVersion).toBe(VOICE_CLEANUP_SCORING_VERSION);
     expect(run.rescoreExclusions).toEqual([{ id: "gone", reason: "removed", trials: 1 }]);
-    const [luna, terra] = run.summaries;
-    expect(luna!.landed).toMatchObject({
-      totals: { misreads: 2, forms: 2 },
+    const summary = (variant: string, guard: string) =>
+      run.summaries.find((entry) => entry.variant === variant && entry.guard === guard)!;
+    expect(summary(LUNA, "v11").landed).toMatchObject({
+      totals: { misreads: 2, forms: 5 },
       misreadRate: 0.5,
-      formRate: 1,
+      formRate: 0.4,
     });
-    expect(luna!.proposed).toMatchObject({ misreadRate: 0.5, formRate: 1 });
-    expect(terra!.landed).toMatchObject({ misreadRate: 0.5, formRate: 0 });
-    expect(terra!.proposed).toMatchObject({ misreadRate: 1, formRate: 1 });
+    expect(summary(LUNA, "v11").rejectReasons).toEqual({ edit_size: 1 });
+    expect(summary(LUNA, "symbols").landed).toMatchObject({ misreadRate: 0.5, formRate: 1 });
+    expect(summary(LUNA, "symbols").rejectReasons).toEqual({});
+    expect(summary(LUNA, "v11").proposed).toMatchObject({ misreadRate: 0.5, formRate: 1 });
+    for (const guard of ["v11", "symbols"]) {
+      expect(summary(TERRA, guard).landed).toMatchObject({ misreadRate: 0.5, formRate: 0 });
+      expect(summary(TERRA, guard).dispositions).toMatchObject({ failed: 1, rejected: 1 });
+    }
+    expect(summary(TERRA, "v11").proposed).toMatchObject({ misreadRate: 1, formRate: 0.4 });
 
     const report = renderReport(run, corpus);
     expect(report).toContain(
@@ -917,19 +981,25 @@ describe("rescore", () => {
     expect(section("What landed")).toContain(
       "| Arm | Ready | Repaired | Misreads | Forms | Drops |"
     );
-    expect(fixCells("What landed", `${LUNA} · v11`)).toEqual(["50.0%", "100.0%"]);
+    expect(fixCells("What landed", `${LUNA} · v11`)).toEqual(["50.0%", "40.0%"]);
+    expect(fixCells("What landed", `${LUNA} · symbols`)).toEqual(["50.0%", "100.0%"]);
     expect(fixCells("What landed", `${TERRA} · v11`)).toEqual(["50.0%", "0.0%"]);
     expect(fixCells("What the model proposed", LUNA)).toEqual(["50.0%", "100.0%"]);
-    expect(fixCells("What the model proposed", TERRA)).toEqual(["100.0%", "100.0%"]);
+    expect(fixCells("What the model proposed", TERRA)).toEqual(["100.0%", "40.0%"]);
 
+    // Under the run's first guard, v11: ready · misreads · forms.
     const bySource = section("Ready, misreads and forms landed, by source");
     expect(bySource).toContain("| context | 1 | 1/1 · 1/1 · – | 1/1 · 1/1 · – |");
     expect(bySource).toContain("| replay | 1 | 0/1 · 0/1 · 2/2 | 0/1 · 0/1 · 0/2 |");
+    expect(bySource).toContain("| ramble | 1 | 0/1 · – · 0/3 | 0/1 · – · 0/3 |");
     expect(section("Ready, misreads and forms landed, by style")).toContain(
       "| deepgram | 2 | 1/2 · 1/2 · 2/2 | 1/2 · 1/2 · 0/2 |"
     );
     expect(report).toContain(
       "rejected (low_confidence); missed misreads Zustand; missed forms worktree, useShallow"
+    );
+    expect(report).toMatch(
+      /production · v11: ".*" \(rejected \(edit_size\); missed forms project_id/
     );
   });
 });
