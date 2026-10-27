@@ -272,12 +272,23 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
 
   it.each([
     ["a self-correction", "No wait, it's the reporting database that's busy."],
+    ["a correction of what was meant", "I meant the reporting database."],
     ["a list going on", "Second, the retries need a cap."],
   ])("doesn't cut where %s reaches back over the pause", async (_case, after) => {
     const { say, pause } = await setup();
     for (const sentence of OPENING) say(sentence);
     pause();
     say(after);
+    expect(correct).not.toHaveBeenCalled();
+  });
+
+  it("doesn't cut on too little said after a break, even once a newer pause replaces it", async () => {
+    const { say, pause } = await setup();
+    for (const sentence of OPENING) say(sentence);
+    pause();
+    say("I");
+    pause();
+    say("mean the reporting database is the busy one.");
     expect(correct).not.toHaveBeenCalled();
   });
 
@@ -322,6 +333,26 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
     expect(draft()).toBe(CLEANED_OPENING.slice(0, -OPENING[4]!.length - 1));
     expect(voiceStore.getState().panelBuffers[PANEL]!.completedSegments).toEqual(
       OPENING.slice(0, 4)
+    );
+  });
+
+  it("scratches every segment a cleanup ran together", async () => {
+    const { voiceStore, say, pause, draft, flush } = await setup();
+    // The cleanup rewrites the words either side of the last cut, so the last
+    // two utterances can no longer be told apart.
+    const joined = CLEANED_OPENING.replace("whole build. I'd", "whole build, and I'd");
+    correct.mockResolvedValueOnce({ action: "replace", correctedText: joined });
+    for (const sentence of OPENING) say(sentence);
+    pause();
+    say(NEXT);
+    await flush();
+    expect(draft()).toBe(`${joined} ${NEXT}`);
+
+    say("Scratch that.");
+    say("Scratch that.");
+    expect(draft()).toBe(joined.slice(0, joined.indexOf(" Either way")));
+    expect(voiceStore.getState().panelBuffers[PANEL]!.completedSegments).toEqual(
+      OPENING.slice(0, 3)
     );
   });
 
@@ -377,6 +408,61 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
     chunk.resolve({ action: "replace", correctedText: CLEANED_OPENING });
     await flush();
     expect(landed).toBe(true);
+  });
+
+  it("lets Restore on a chunk that landed while recording move it within the stop's baseline", async () => {
+    const { service, say, pause, draft, flush, baseline } = await setup();
+    const { takeLandedCorrection, rebaseCorrectionBaseline } =
+      await import("../voiceCorrectionLanding");
+    correct.mockResolvedValueOnce({ action: "replace", correctedText: CLEANED_OPENING });
+    for (const sentence of OPENING) say(sentence);
+    pause();
+    say(NEXT);
+    await flush();
+    const landed = takeLandedCorrection(PANEL, undefined, draft());
+    expect(landed?.baseline).toMatchObject({ raw: OPENING_TEXT, corrected: CLEANED_OPENING });
+
+    correct.mockResolvedValueOnce({ action: "no_change", correctedText: NEXT });
+    await service.stop();
+    await flush();
+    expect(baseline()).toBe(`${CLEANED_OPENING} ${NEXT}`);
+
+    rebaseCorrectionBaseline(PANEL, landed!, "raw");
+    expect(baseline()).toBe(`${OPENING_TEXT} ${NEXT}`);
+  });
+
+  it("keeps no cleaned text in the history when a pass failed", async () => {
+    const { service, say, pause, flush } = await setup();
+    correct
+      .mockResolvedValueOnce({ action: "replace", correctedText: CLEANED_OPENING })
+      .mockResolvedValueOnce({ action: "no_change", correctedText: NEXT, failed: true });
+    for (const sentence of OPENING) say(sentence);
+    pause();
+    say(NEXT);
+    await flush();
+    await service.stop();
+    await flush();
+
+    expect(recordHistory).toHaveBeenCalledTimes(1);
+    expect(setHistoryCorrection).not.toHaveBeenCalled();
+  });
+
+  it("folds passes into the baseline whichever lands first after the stop", async () => {
+    const { service, say, pause, flush, baseline } = await setup();
+    const chunk = deferred<CorrectResult>();
+    const tail = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(chunk.promise).mockReturnValueOnce(tail.promise);
+    for (const sentence of OPENING) say(sentence);
+    pause();
+    say(NEXT);
+    await service.stop();
+
+    chunk.resolve({ action: "replace", correctedText: CLEANED_OPENING });
+    await flush();
+    expect(baseline()).toBe(`${CLEANED_OPENING} ${NEXT}`);
+    tail.resolve({ action: "replace", correctedText: "The other thing is the login redirect." });
+    await flush();
+    expect(baseline()).toBe(`${CLEANED_OPENING} The other thing is the login redirect.`);
   });
 
   it("keeps the whole dictation's cleaned text in the history and the learning baseline", async () => {

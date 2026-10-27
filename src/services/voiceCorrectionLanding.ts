@@ -9,6 +9,12 @@ import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 export interface CorrectionBaseline {
   raw: string;
   corrected: string;
+  /**
+   * The session, for a chunk cleaned while it ran (#14772): the two sides are
+   * the chunk's passages alone, which the baseline written at that session's
+   * stop holds among the rest of its words.
+   */
+  partOf?: string;
 }
 
 /** A correction just swapped into a panel's draft, on its way to that panel's composer. */
@@ -88,11 +94,23 @@ export function rebaseCorrectionBaseline(
 ): void {
   if (!correction.baseline) return;
   const voice = useVoiceRecordingStore.getState();
-  const { raw, corrected } = correction.baseline;
+  const { raw, corrected, partOf } = correction.baseline;
   const [from, to] = now === "raw" ? [corrected, raw] : [raw, corrected];
-  if (voice.panelBuffers[panelId]?.sessionCorrectedText === from) {
-    voice.setSessionCorrectedText(panelId, to);
+  const buffer = voice.panelBuffers[panelId];
+  const current = buffer?.sessionCorrectedText;
+  if (!partOf) {
+    if (current === from) voice.setSessionCorrectedText(panelId, to);
+    return;
   }
+  // Only inside its own session's baseline, and only where it can't be
+  // mistaken for another copy of the same words.
+  if (!current || !from || buffer.dictationSessionId !== partOf) return;
+  const at = current.indexOf(from);
+  if (at < 0 || current.indexOf(from, at + 1) >= 0) return;
+  voice.setSessionCorrectedText(
+    panelId,
+    current.slice(0, at) + to + current.slice(at + from.length)
+  );
 }
 
 export function announceCorrectionShown(): void {

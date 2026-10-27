@@ -395,6 +395,8 @@ describe("voiceInput — dictating into a host's pane", () => {
       { sender: view },
       { rawText: "the first chunk", terminalId: TERMINAL, sessionId: "chunked" }
     );
+    // One read for the chunk's output and commands, kept for nothing after.
+    expect(reader.readCorrection).toHaveBeenCalledTimes(1);
     await stop(view, "chunked");
     await getHandler(CHANNELS.VOICE_INPUT_CORRECT)(
       { sender: view },

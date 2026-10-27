@@ -415,6 +415,8 @@ interface DictationCleanup {
   results: Map<CorrectionPassage, string | null>;
   /** Chunk passages that couldn't land and gave their words back to a later pass. */
   released: Set<CorrectionPassage>;
+  /** Passages whose request failed: their words never went through cleanup. */
+  failed: Set<CorrectionPassage>;
   /** The heard-as rerun's rewrites of chunks, in draft order, for the transcript. */
   rewrites: PassageRewrite[];
   stopped: boolean;
@@ -3160,6 +3162,7 @@ class VoiceRecordingService {
       passes: [],
       results: new Map(),
       released: new Set(),
+      failed: new Set(),
       rewrites: [],
       stopped: false,
       history: null,
@@ -3252,8 +3255,12 @@ class VoiceRecordingService {
    */
   private settleChunkBreak(force: boolean): void {
     const pending = this.chunkBreak;
-    if (!pending || (!force && !chunkFollowUpDecides(pending.after))) return;
-    if (this.cutChunk(pending) !== "wait" || force) {
+    if (!pending) return;
+    // Too little said to judge it ("I", then a pause, then "mean…"): a newer
+    // break replaces it uncut.
+    const decides = chunkFollowUpDecides(pending.after);
+    if (!decides && !force) return;
+    if ((decides ? this.cutChunk(pending) : "no") !== "wait" || force) {
       if (this.chunkBreak === pending) this.chunkBreak = null;
     }
   }
@@ -3345,13 +3352,29 @@ class VoiceRecordingService {
     if (this.cleanups.get(cleanup.sessionId) === cleanup) this.cleanups.delete(cleanup.sessionId);
     const history = cleanup.history;
     cleanup.history = null;
-    if (!history) return;
+    if (!history || history.passages.some((passage) => cleanup.failed.has(passage))) return;
     const texts = history.passages.map((passage) => cleanup.results.get(passage) ?? null);
     if (texts.every((text) => text === null)) return;
     keepRecentDictationCorrection(
       history.id,
       history.passages.map((passage, i) => texts[i] ?? passage.text).join(" ")
     );
+  }
+
+  /**
+   * A chunk that landed while its dictation ran, for Restore and undo to move
+   * within the baseline its stop writes later: just its passages, either side.
+   */
+  private chunkBaseline(
+    correction: PendingCorrection,
+    edits: ReadonlyArray<{ passage: CorrectionPassage; text: string }>
+  ): CorrectionBaseline | null {
+    if (correction.kind !== "chunk" || correction.cleanup.stopped || edits.length === 0) {
+      return null;
+    }
+    const raw = joinPassageTexts(edits.map(({ passage }) => passage.text));
+    const corrected = joinPassageTexts(edits.map(({ text }) => text));
+    return raw && corrected ? { raw, corrected, partOf: correction.cleanup.sessionId } : null;
   }
 
   /**
@@ -3414,8 +3437,10 @@ class VoiceRecordingService {
     }
     correction.passages.forEach((passage, i) => {
       cleanup.results.set(passage, results[i]?.text ?? null);
+      if (!results[i]?.failed) return;
+      cleanup.failed.add(passage);
       // A chunk the model couldn't clean gives its words to the next pass.
-      if (results[i]?.failed) this.releaseChunkPassage(correction, passage);
+      this.releaseChunkPassage(correction, passage);
     });
 
     // The history keeps the cleaned text even when the draft it was meant for
@@ -3527,10 +3552,9 @@ class VoiceRecordingService {
     // the user makes before sending are diffed against it to detect words
     // worth suggesting for the custom dictionary (#9749). A result that wasn't
     // applied never reached the draft, so it stays out.
-    const baseline = this.foldIntoBaseline(
-      cleanup,
-      new Map(edits.map(({ passage, text }) => [passage, text]))
-    );
+    const baseline =
+      this.foldIntoBaseline(cleanup, new Map(edits.map(({ passage, text }) => [passage, text]))) ??
+      this.chunkBaseline(correction, edits);
     this.releaseBaseline(cleanup);
     if (swapped) recordCorrectionLanded(panelId, projectId, { ...swapped, baseline });
 

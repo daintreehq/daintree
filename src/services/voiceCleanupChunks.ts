@@ -9,7 +9,7 @@
 
 // Openings that take back what came before the break.
 const RETRACTION_OPENING_RE =
-  /^(?:no|nope|nah|wait|actually|sorry|oops|rather|or|instead|correction|i mean|scratch that|strike that|make that|not that|never ?mind|hold on|hang on|let me rephrase|change that)\b/u;
+  /^(?:no|nope|nah|wait|actually|sorry|oops|rather|or|instead|correction|i mean|i meant|scratch that|strike that|make that|not that|never ?mind|hold on|hang on|let me rephrase|change that)\b/u;
 
 // Openings that carry on a list, or a thought the break cut in two.
 const CONTINUATION_OPENING_RE =

@@ -127,10 +127,18 @@ function reviewFor(doc: Text, review: CorrectionReview): ReviewState | null {
 }
 
 /**
- * The review carried through an outside write that left its words alone, or
- * null once the write reached them.
+ * The review carried through an outside write that only added text and left
+ * its words alone, or null. A write that takes text out (a scratch, a cancel,
+ * a send) ends it: the composer diffs such a write, and a diff can put the
+ * removal on an identical copy of the passage, leaving the review on text
+ * that was never corrected.
  */
 function carryReview(state: ReviewState, tr: Transaction): ReviewState | null {
+  let removes = false;
+  tr.changes.iterChangedRanges((fromA, toA) => {
+    if (toA > fromA) removes = true;
+  });
+  if (removes) return null;
   const { review } = state;
   const from = tr.changes.mapPos(review.from, 1);
   const to = from + review.correctedText.length;

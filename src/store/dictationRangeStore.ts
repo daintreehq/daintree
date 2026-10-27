@@ -989,9 +989,19 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
       const delta = piece.rewrite.text.length - (piece.to - piece.from);
       if (record.range.to >= piece.to) rangeShift += delta;
     }
+    // Over each whole passage, not the trimmed changes: words the rewrite
+    // added at the very end of the dictation are still its words to learn from.
+    const learningSpan =
+      record.learningSpan &&
+      located.reduceRight(
+        (span, { from, to, rewrite }) =>
+          mapSpanKeepingEdits(span, { from, to, insert: rewrite.text }),
+        record.learningSpan
+      );
     const rebuilt: DictationRecord = {
       ...mapped,
       range: { ...record.range, to: record.range.to + rangeShift },
+      ...(learningSpan ? { learningSpan } : {}),
       utterances,
       // A paragraph break inside a passage is now part of its words. Kept, it
       // would map to an empty edited range and stop a cancel.

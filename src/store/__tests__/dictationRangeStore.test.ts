@@ -755,6 +755,15 @@ describe("dictationRangeStore", () => {
       expect(second!.uncertain).toEqual([{ from: 7, to: 12 }]);
     });
 
+    it("keeps words the rewrite added at either end of the dictation in its learning span", () => {
+      setDraft("Typed:");
+      dictate("use codex");
+      // Only added at the end, which an edge insertion would leave outside.
+      rewriteAll("use codex-cli.");
+      expect(draft()).toBe("Typed: use codex-cli.");
+      expect(textOf(only().learningSpan!)).toBe("use codex-cli.");
+    });
+
     it("drops the words as heard and the unsure words from a cleanup", () => {
       dictate("add zoo stand", target, [{ from: 4, to: 7 }]);
       const record = only();

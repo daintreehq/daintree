@@ -253,6 +253,22 @@ describe("correction review", () => {
     expect(view.state.doc.toString()).toBe("Note. " + INTRO + RAW);
   });
 
+  it("ends when an outside write takes text out, even next to an identical copy", () => {
+    const view = mount(INTRO + RAW);
+    land(view, review);
+    const copy = " " + CORRECTED;
+    view.dispatch(
+      outsideDraftWrite({ from: view.state.doc.length, insert: copy }, "", null, { anchor: 0 })
+    );
+    expect(restoreControl(view)).not.toBeNull();
+
+    // A scratch of the dictated copy, which a diff reads as removing the second.
+    const end = view.state.doc.length;
+    view.dispatch(outsideDraftWrite({ from: end - copy.length, to: end }, "", null, { anchor: 0 }));
+    expect(marked(view)).toEqual([]);
+    expect(restoreControl(view)).toBeNull();
+  });
+
   it("ends when an outside write reaches its passage", () => {
     const view = mount(INTRO + RAW);
     land(view, review);

@@ -26,6 +26,7 @@ describe("mayCutChunk", () => {
     "Actually, make that the other dashboard.",
     "Sorry, I meant the login page.",
     "I mean the API, not the page.",
+    "I meant the staging database.",
     "Scratch that, it's fine.",
     "Or rather the cache layer.",
   ])("holds when the speaker takes it back: %s", (after) => {
