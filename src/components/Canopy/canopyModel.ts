@@ -290,7 +290,11 @@ export function unseenLabelMs(item: CanopyItem, nowMs: number): number | null {
  * or failing that its worktree's name.
  */
 export function itemSubject(item: CanopyItem): string {
-  const { row } = item;
+  return rowSubject(item.row, item.workspace.name);
+}
+
+/** {@link itemSubject} for a row alone, with the name of the project it runs in. */
+export function rowSubject(row: PilotAgentRow, workspaceName: string | undefined): string {
   const run = row.run;
   const panelNamesWork =
     run.titleMode === "user" ||
@@ -305,7 +309,7 @@ export function itemSubject(item: CanopyItem): string {
   if (panelNamesWork) return row.title;
   // A pane named only for its agent says nothing about which one this is;
   // where it runs does. Never a line off the screen: those go beneath it.
-  return row.worktreeLabel ?? item.workspace.name ?? row.title;
+  return row.worktreeLabel ?? workspaceName ?? row.title;
 }
 
 /** Whether a card line only says again what the row's title already does. */

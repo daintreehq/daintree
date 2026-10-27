@@ -287,5 +287,6 @@ export function useCanopyInboxData({
     recoveries,
     nowMs,
     baseItems,
+    workspaces,
   };
 }

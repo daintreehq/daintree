@@ -146,6 +146,23 @@ export function mergeHostReadings(readings: readonly HostReading[]): {
     ),
     lastError: null,
     failedRuns,
+    // Every host's trash, its runs keyed as the fleet's are, newest first across hosts.
+    trash: loadedCanopies
+      .flatMap(({ hostId, canopy: c }) =>
+        (c!.trash ?? []).map((entry) => ({
+          ...entry,
+          run: {
+            ...entry.run,
+            runId: allHostsKey(hostId, entry.run.runId),
+            workspaceId: allHostsKey(hostId, entry.run.workspaceId),
+          },
+        }))
+      )
+      .sort(
+        (a, b) =>
+          b.trashedAt - a.trashedAt ||
+          (a.run.runId < b.run.runId ? -1 : a.run.runId > b.run.runId ? 1 : 0)
+      ),
   };
   return { canopy, fleet, offRuns };
 }
@@ -342,6 +359,20 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
       if (!entry) return unknownRun();
       trashed.delete(mine);
       await apiFor(entry.hostId).untrash(entry.receipt);
+    },
+    restoreTrashed: (key, ...rest) => routed(key, (host, id) => host.restoreTrashed(id, ...rest)),
+    removeTrashed: (key, ...rest) => routed(key, (host, id) => host.removeTrashed(id, ...rest)),
+    // Each host empties exactly the runs confirmed on it. Every host must
+    // answer: a removal is never reported done where a host refused it.
+    emptyTrash: async (targets) => {
+      const groups = groupByHost(targets, (target) => target.runId);
+      if ([...groups.keys()].some((hostId) => !known.has(hostId))) return unknownRun();
+      const counts = await Promise.all(
+        [...groups].map(([hostId, group]) =>
+          apiFor(hostId).emptyTrash(group.map(({ item, id }) => ({ ...item, runId: id })))
+        )
+      );
+      return counts.reduce((sum, count) => sum + count, 0);
     },
   };
 
