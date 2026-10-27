@@ -13,6 +13,7 @@ export interface CorrectionRequest {
   startsPrompt: boolean;
   sessionId?: string;
   uncertain?: DictationTextSpan[];
+  pauses?: number[];
 }
 
 /**
@@ -37,5 +38,6 @@ export function correctionRequest(
     startsPrompt: passage.startsPrompt,
     ...(sessionId ? { sessionId } : {}),
     ...(passage.uncertain ? { uncertain: passage.uncertain } : {}),
+    ...(passage.pauses ? { pauses: passage.pauses } : {}),
   };
 }

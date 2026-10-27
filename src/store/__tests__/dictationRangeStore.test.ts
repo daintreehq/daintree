@@ -29,7 +29,8 @@ const textOf = (range: { from: number; to: number }) => draft().slice(range.from
 function dictate(
   words: string,
   sessionTarget = target,
-  uncertain?: Array<{ from: number; to: number }>
+  uncertain?: Array<{ from: number; to: number }>,
+  pauses?: number[]
 ): void {
   const base = draft();
   const separator = base && !base.endsWith(" ") && !base.endsWith("\n") ? " " : "";
@@ -46,6 +47,7 @@ function dictate(
     insertion: { from: base.length, to: from + words.length },
     words: { from, to: from + words.length },
     ...(uncertain ? { uncertain } : {}),
+    ...(pauses ? { pauses } : {}),
   });
 }
 
@@ -431,6 +433,80 @@ describe("dictationRangeStore", () => {
       setDraft(next(draft()));
       expect(draft()).toBe(expected);
       expect(flaggedWords().flat()).toEqual([]);
+    });
+  });
+
+  describe("the speaker's pauses (#14897)", () => {
+    /** Where each of the dictation's passages pauses, as correction would read it. */
+    const pausedAt = () =>
+      collectCorrectionPassages(only(), draft()).map((passage) => passage.pauses ?? []);
+
+    it("hands correction each utterance's pauses at their place in the passage", () => {
+      dictate("fix the bug", target, undefined, [11]);
+      dictate("and the parser", target, undefined, [3, 14]);
+      expect(pausedAt()).toEqual([[11, 15, 26]]);
+    });
+
+    it("keeps them through the session's own writes, and drops them on an edit nobody described", () => {
+      dictate("foo", target, undefined, [3]);
+      dictate("foo");
+      paragraphBreak();
+      dictate("end");
+      expect(pausedAt()).toEqual([[3]]);
+      setDraft(`${draft()} today`);
+      expect(pausedAt()).toEqual([[]]);
+    });
+
+    it("marks a pause with no words of its own after the session's latest words, once", () => {
+      dictate("fix it");
+      dictate("and ship");
+      const store = useDictationRangeStore.getState();
+      expect(store.markPause(target)).toBe(true);
+      expect(store.markPause(target)).toBe(false);
+      expect(pausedAt()).toEqual([[15]]);
+    });
+
+    it("marks no pause on latest words that were edited, or for a session with none here", () => {
+      dictate("fix it");
+      dictate("and ship");
+      edit(12, 12, "x");
+      const store = useDictationRangeStore.getState();
+      expect(store.markPause(target)).toBe(false);
+      expect(store.markPause({ ...target, sessionId: "session-2" })).toBe(false);
+      expect(only().utterances.every((utterance) => !utterance.pauses)).toBe(true);
+    });
+
+    it("keeps a pause after words a file link swaps at the end of the link, and the next utterance's where it was", () => {
+      dictate("fix the padding, link to the router", target, undefined, [16, 35]);
+      dictate("and test", target, undefined, [8]);
+      const from = draft().indexOf("link to the router");
+      useDictationRangeStore
+        .getState()
+        .rewriteWords(
+          only().id,
+          [{ from, to: from + "link to the router".length, text: "@a.ts" }],
+          (next) => setDraft(next)
+        );
+      expect(draft()).toBe("fix the padding, @a.ts and test");
+      expect(only().utterances.map((utterance) => utterance.pauses)).toEqual([[16, 22], [8]]);
+    });
+
+    it("adds the heard end of the latest words when only their written end was marked", () => {
+      // "/review" written for "Slash. review": the pause after "Slash." sits
+      // inside the heard words, and only the written end is marked yet.
+      const store = useDictationRangeStore.getState();
+      store.expectDraftChange(PANEL, PROJECT, "", "/review", { from: 0, to: 0, insert: "/review" });
+      setDraft("/review");
+      store.recordUtterance(target, {
+        insertion: { from: 0, to: 7 },
+        words: { from: 0, to: 7 },
+        heard: "Slash. review",
+        pauses: [7],
+        heardPauses: [6],
+      });
+      expect(store.markPause(target)).toBe(true);
+      expect(only().utterances[0]).toMatchObject({ pauses: [7], heardPauses: [6, 13] });
+      expect(store.markPause(target)).toBe(false);
     });
   });
 

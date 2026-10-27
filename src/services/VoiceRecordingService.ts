@@ -12,6 +12,12 @@ import {
   sliceSpans,
   type VoiceTextEdit,
 } from "@shared/utils/voiceUncertainWords";
+import {
+  carryPausePositionsThroughEdits,
+  normalizePausePositions,
+  shiftPausePositions,
+  slicePausePositions,
+} from "@shared/utils/voicePausePositions";
 import { shouldShowHybridInputBar } from "@/components/Terminal/terminalFocus";
 import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
 import { isAssistantFocused } from "@/store/macroFocusStore";
@@ -293,7 +299,8 @@ function writeVoiceWords(
   text: string,
   transcriptId?: string,
   heard?: string,
-  uncertain?: { text: DictationTextSpan[]; heard?: DictationTextSpan[] }
+  uncertain?: { text: DictationTextSpan[]; heard?: DictationTextSpan[] },
+  pauses?: { text: number[]; heard: number[] }
 ): VoiceInsertPlan {
   const draft = useTerminalInputStore.getState().getDraftInput(panelId, projectId);
   const plan = planVoiceWords(
@@ -315,6 +322,8 @@ function writeVoiceWords(
         heard,
         uncertain: uncertain?.text,
         heardUncertain: uncertain?.heard,
+        pauses: pauses?.text,
+        heardPauses: pauses?.heard,
         replaced,
       })
   );
@@ -890,6 +899,9 @@ class VoiceRecordingService {
           uncertain,
           heardUncertain,
           commandUncertain,
+          pauses,
+          heardPauses,
+          commandPauses,
         }) => {
           if (this.discardedSessionIds.has(sessionId)) return;
           logDebug(`${LOG_PREFIX} Received transcription complete`, {
@@ -911,6 +923,8 @@ class VoiceRecordingService {
           let completedHeard = heard?.trim();
           let completedUncertain = uncertain;
           let completedHeardUncertain = heardUncertain;
+          let completedPauses = pauses;
+          let completedHeardPauses = heardPauses;
           if (panelId) {
             const buffer = voiceState.panelBuffers[panelId];
             const spoken = text.trim();
@@ -946,6 +960,8 @@ class VoiceRecordingService {
               completedHeard = undefined;
               completedUncertain = commandUncertain;
               completedHeardUncertain = undefined;
+              completedPauses = commandPauses;
+              completedHeardPauses = undefined;
             }
             const finalText = completedText.trim();
             if (finalText) {
@@ -965,6 +981,14 @@ class VoiceRecordingService {
                   text: sliceSpans(completedUncertain ?? [], lead, lead + finalText.length),
                   heard: sliceSpans(
                     completedHeardUncertain ?? [],
+                    heardLead,
+                    heardLead + (completedHeard?.length ?? 0)
+                  ),
+                },
+                {
+                  text: slicePausePositions(completedPauses ?? [], lead, lead + finalText.length),
+                  heard: slicePausePositions(
+                    completedHeardPauses ?? [],
                     heardLead,
                     heardLead + (completedHeard?.length ?? 0)
                   ),
@@ -990,8 +1014,20 @@ class VoiceRecordingService {
                 this.followChunkBreak(sessionId, finalText);
                 this.schedulePrefetch(sessionId);
               }
+            } else if (pauses?.includes(0) && buffer?.dictationSessionId) {
+              // A pause after words that already landed. What a stop would
+              // send now carries it, so the prefetch for them is redone.
+              const marked = useDictationRangeStore.getState().markPause({
+                sessionId: buffer.dictationSessionId,
+                panelId,
+                projectId,
+              });
+              if (marked && !send) this.schedulePrefetch(sessionId);
             }
           }
+          // A pause with nothing else to it leaves the live preview alone: an
+          // empty completion naming no item would land it as final.
+          if (!text.trim() && !itemId && !send) return;
           // What landed, so recent dictations hold a command written as one,
           // and a scratch drops the segment its utterance wrote (#14637).
           useVoiceRecordingStore.getState().completeSegment(completedText, itemId);
@@ -3081,6 +3117,19 @@ class VoiceRecordingService {
         before.length,
         before.length + text.length
       );
+      // A pause stays after the word it followed, and after a term a rule
+      // wrote over words it fell between.
+      const pauses = normalizePausePositions(
+        text,
+        slicePausePositions(
+          carryPausePositionsThroughEdits(
+            shiftPausePositions(transcribed.pauses, before.length),
+            edits
+          ),
+          before.length,
+          before.length + text.length
+        )
+      );
       const current = useTerminalInputStore.getState().getDraftInput(panelId, projectId);
       const pending = peekPendingComposerSelection(draftKey, current);
       const caret = pending ?? readComposerSelection(draftKey, current);
@@ -3089,13 +3138,21 @@ class VoiceRecordingService {
       const span = keepUtterances
         ? (useDictationRangeStore
             .getState()
-            .rewriteUtterances(record.id, [{ passage, text, heard: { uncertain } }], (next) =>
-              useTerminalInputStore.getState().setDraftInput(panelId, next, projectId)
+            .rewriteUtterances(
+              record.id,
+              [{ passage, text, heard: { uncertain, pauses } }],
+              (next) => useTerminalInputStore.getState().setDraftInput(panelId, next, projectId)
             )?.[0] ?? null)
-        : useDictationRangeStore.getState().rewritePassage(record.id, passage, text, heard, {
-            text: uncertain,
-            heard: transcribed.uncertain,
-          });
+        : useDictationRangeStore
+            .getState()
+            .rewritePassage(
+              record.id,
+              passage,
+              text,
+              heard,
+              { text: uncertain, heard: transcribed.uncertain },
+              { text: pauses, heard: transcribed.pauses }
+            );
       if (!span) continue;
       const delta = text.length - (span.to - span.from);
       // A caret that followed the words, or sits in them, stays with them, and

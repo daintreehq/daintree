@@ -417,3 +417,108 @@ describe("UtteranceCommands — the provider's unsure words", () => {
     });
   });
 });
+
+describe("UtteranceCommands — the speaker's pauses", () => {
+  const GAP: UtteranceBoundary = { ...CUT, paused: true };
+  const PAUSED: UtteranceBoundary = { ...PAUSE, paused: true };
+  const PAUSED_END: UtteranceBoundary = { ...END, paused: true };
+
+  // Each emission's text and where the speaker paused in it.
+  const pausesOf = (emissions: readonly UtteranceEmission[] | null | undefined) =>
+    emissions?.map(({ text, pauses }) => ({ text, pauses: pauses ?? [] }));
+
+  it("marks where a segment the speaker paused after ends, and nothing where one was cut", () => {
+    const { releases } = feed([
+      ["fix the bug", GAP],
+      ["and the parser", CUT],
+      ["done.", PAUSED_END],
+    ]);
+    expect(releases.map((release) => pausesOf(release?.emissions))).toEqual([
+      [{ text: "fix the bug", pauses: [11] }],
+      [{ text: "and the parser", pauses: [] }],
+      [{ text: "done.", pauses: [5] }],
+    ]);
+  });
+
+  it("moves a pause after a stripped break back onto the words the cut kept", () => {
+    const { releases } = feed([
+      ["fix the bug new", CUT],
+      ["line.", PAUSED],
+    ]);
+    expect(pausesOf(releases[1]?.emissions)).toEqual([
+      { text: "", pauses: [] },
+      { text: "fix the bug\n", pauses: [11] },
+    ]);
+  });
+
+  it("moves a pause after a stripped send onto the words it kept, and keeps it as said in the literal", () => {
+    const { releases } = feed([
+      ["Fix the login bug, send", CUT],
+      ["it.", PAUSED_END],
+    ]);
+    expect(releases[1]?.send).toBe(true);
+    expect(pausesOf(releases[1]?.emissions)).toEqual([
+      { text: "", pauses: [] },
+      { text: "Fix the login bug", pauses: [17] },
+    ]);
+    expect(pausesOf(releases[1]?.literal)).toEqual([
+      { text: "Fix the login bug, send", pauses: [] },
+      { text: "it.", pauses: [3] },
+    ]);
+  });
+
+  it("puts a pause after words already released ahead of the break that took the rest", () => {
+    const { releases } = feed([
+      ["fix the bug", CUT],
+      ["new line.", PAUSED],
+    ]);
+    expect(pausesOf(releases[1]?.emissions)).toEqual([{ text: "\n", pauses: [0] }]);
+  });
+
+  it("ends the last held words at a pause with no words of its own", () => {
+    const utterance = new UtteranceCommands();
+    expect(utterance.push({ itemId: "i0", text: "Fix it, send it." }, CUT, dictation)).toBeNull();
+    const release = utterance.push({ text: "" }, PAUSED_END, dictation);
+    expect(release?.send).toBe(true);
+    expect(pausesOf(release?.emissions)).toEqual([{ text: "Fix it", pauses: [6] }]);
+  });
+
+  it("sends a wordless pause after released words once, and none after a pause already marked", () => {
+    const utterance = new UtteranceCommands();
+    utterance.push({ itemId: "i0", text: "fix the bug" }, CUT, dictation);
+    const bare = utterance.push({ text: "" }, PAUSED_END, dictation);
+    expect(bare).toEqual({
+      emissions: [{ text: "", uncertain: [], pauses: [0] }],
+      send: false,
+      literal: null,
+    });
+    expect(utterance.push({ text: "" }, PAUSED_END, dictation)).toBeNull();
+
+    utterance.push({ itemId: "i1", text: "and the parser" }, PAUSED_END, dictation);
+    expect(utterance.push({ text: "" }, PAUSED_END, dictation)).toBeNull();
+  });
+
+  it("keeps a pause inside a command its segments merge into", () => {
+    const { releases } = feed(
+      [
+        ["Slash.", PAUSED_END],
+        ["compact.", PAUSED_END],
+      ],
+      withCommands
+    );
+    expect(releases[1]?.emissions.at(-1)).toMatchObject({
+      text: "Slash. compact.",
+      pauses: [6, 15],
+      opensUtterance: true,
+    });
+  });
+
+  it("marks no pause a stop or a lost connection lets go of", () => {
+    for (const mode of ["stop", "literal"] as const) {
+      const utterance = new UtteranceCommands();
+      utterance.push({ itemId: "i0", text: "fix the bug new" }, CUT, dictation);
+      const release = utterance.flush(mode, dictation);
+      expect(release?.emissions.every((emission) => !emission.pauses)).toBe(true);
+    }
+  });
+});

@@ -587,6 +587,7 @@ describe("GrokTranscriptionProvider", () => {
           text: "The quick brown fox jumps over the lazy dog.",
           itemId: deltas[0].itemId,
           endOfSpeech: true,
+          paused: true,
         },
       ]);
       provider.stop();
@@ -879,7 +880,9 @@ describe("GrokTranscriptionProvider", () => {
       const { provider, events } = setup();
       const socket = await bringSessionReady(provider);
       socket.simulateMessage(utteranceFinal("", 0, 0.5));
-      expect(completesOf(events)).toEqual([{ type: "complete", text: "", endOfSpeech: true }]);
+      expect(completesOf(events)).toEqual([
+        { type: "complete", text: "", endOfSpeech: true, paused: true },
+      ]);
       provider.stop();
     });
 
@@ -891,7 +894,13 @@ describe("GrokTranscriptionProvider", () => {
       expect(deltasOf(events).at(-1)?.text).toBe("");
       socket.simulateMessage(utteranceFinal("", 0, 0.5));
       expect(completesOf(events)).toEqual([
-        { type: "complete", text: "", itemId: deltasOf(events)[0].itemId, endOfSpeech: true },
+        {
+          type: "complete",
+          text: "",
+          itemId: deltasOf(events)[0].itemId,
+          endOfSpeech: true,
+          paused: true,
+        },
       ]);
       provider.stop();
     });
@@ -1363,6 +1372,84 @@ describe("GrokTranscriptionProvider", () => {
     });
   });
 
+  // Cleanup is told where the speaker stopped (#14897): a final their silence
+  // closed, never one Enter or the stop forced.
+  describe("pauses", () => {
+    const pausedOf = (events: VoiceTranscriptionEvent[]) =>
+      completesOf(events).map((c) => c.paused === true);
+
+    it("marks an utterance final paused, but not one Enter forced", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      for (let i = 0; i < 5; i++) provider.sendAudioChunk(pcm(0));
+      socket.simulateMessage(partial("one", { start: 0, duration: 0.3 }));
+      provider.commitParagraphBoundary();
+      socket.simulateMessage(utteranceFinal("One.", 0, 0.4));
+      socket.simulateMessage(utteranceFinal("Two.", 0.6, 0.4));
+      expect(pausedOf(events)).toEqual([false, true]);
+      provider.stop();
+    });
+
+    it("doesn't mark the final a stop's audio.done brings back paused", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      for (let i = 0; i < 20; i++) provider.sendAudioChunk(pcm(3_000));
+      socket.simulateMessage(partial("last words", { start: 0, duration: 1.8 }));
+      const stopPromise = provider.stopGracefully();
+      socket.simulateMessage(utteranceFinal("Last words.", 0, 2));
+      socket.simulateMessage({ type: "transcript.done", text: "Last words.", duration: 2 });
+      await stopPromise;
+      expect(completesOf(events)).toEqual([
+        expect.objectContaining({ text: "Last words.", endOfSpeech: true }),
+      ]);
+      expect(pausedOf(events)).toEqual([false]);
+    });
+
+    // 2s of audio went out, and a 250ms endpoint, so each gap is exact.
+    it.each([
+      [0.125, false],
+      [0.25, true],
+      [0.75, true],
+    ])(
+      "marks a final in flight at the stop paused when it ended %ss before it: %s",
+      async (quiet, paused) => {
+        const provider = new GrokTranscriptionProvider({ endpointingMs: 250 });
+        const events: VoiceTranscriptionEvent[] = [];
+        provider.onEvent((e) => events.push(e));
+        const socket = await bringSessionReady(provider);
+        for (let i = 0; i < 12; i++) provider.sendAudioChunk(pcm(3_000));
+        for (let i = 0; i < 8; i++) provider.sendAudioChunk(pcm(0));
+        const stopPromise = provider.stopGracefully();
+        socket.simulateMessage(utteranceFinal("Fix the bug.", 0, 2 - quiet));
+        socket.simulateMessage({ type: "transcript.done", text: "Fix the bug.", duration: 2 });
+        await stopPromise;
+        expect(pausedOf(events)).toEqual([paused]);
+      }
+    );
+
+    it("never marks transcript.done's tail paused", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      socket.simulateMessage(utteranceFinal("First thought.", 0, 1));
+      socket.simulateMessage(partial("second", { start: 1.5, duration: 0.5 }));
+      const stopPromise = provider.stopGracefully();
+      socket.simulateMessage({
+        type: "transcript.done",
+        words: [
+          { text: "First", start: 0.1, end: 0.4 },
+          { text: "thought.", start: 0.4, end: 0.9 },
+          { text: "Second", start: 1.6, end: 2 },
+        ],
+      });
+      await stopPromise;
+      expect(completesOf(events).map((c) => [c.text, c.endOfSpeech === true])).toEqual([
+        ["First thought.", true],
+        ["Second", true],
+      ]);
+      expect(pausedOf(events)).toEqual([true, false]);
+    });
+  });
+
   describe("stopping", () => {
     it("sends audio.done and drains until transcript.done, keeping the last utterance", async () => {
       const { provider, events } = setup();
@@ -1678,6 +1765,7 @@ describe("GrokTranscriptionProvider", () => {
           text: "before the drop in flight and after.",
           itemId: [...itemIds][0],
           endOfSpeech: true,
+          paused: true,
         },
       ]);
       provider.stop();

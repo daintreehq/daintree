@@ -21,6 +21,10 @@ export type VoiceTranscriptionEvent =
   // ("new line"), but never carries a send. `incomplete` marks one whose
   // transcript never came (it failed, or was settled with its interim text),
   // so words around it may be missing.
+  // `paused` marks one the speaker paused after, as the provider heard it,
+  // short pauses inside speech included. Never a cut at a length cap, a final
+  // forced or flushed by a stop, or an incomplete transcript. It drives no
+  // command; cleanup reads where the speaker stopped from it (#14897).
   // `uncertain` spans the words in `text` the provider scored below its own
   // cut-off; absent from a provider that reports no word confidence.
   | {
@@ -30,6 +34,7 @@ export type VoiceTranscriptionEvent =
       itemId?: string;
       endOfSpeech?: boolean;
       endsAtPause?: boolean;
+      paused?: boolean;
       incomplete?: boolean;
     }
   | { type: "paragraph_boundary" }

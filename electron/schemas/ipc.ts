@@ -825,6 +825,12 @@ export const VoiceInputCorrectPayloadSchema = z.object({
     .max(12_000)
     .optional()
     .catch(undefined),
+  /**
+   * Positions in `rawText` where the speaker paused. Each follows a word, so
+   * the same bound holds. Ones that don't validate are dropped rather than
+   * failing the cleanup.
+   */
+  pauses: z.array(z.number().int().nonnegative()).max(12_000).optional().catch(undefined),
   /** Dictated into a terminal outside the asking view: cleaned up without its project's vocabulary. */
   outsideView: z.literal(true).optional(),
   /** Streams the reply, reporting its text so far under this id. */

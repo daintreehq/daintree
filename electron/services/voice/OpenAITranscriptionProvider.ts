@@ -135,6 +135,33 @@ const VAD_PAUSE_COMMIT = "vad-end-of-speech";
 // The commit reason of a segment cut at a short pause inside speech.
 const VAD_GAP_COMMIT = "vad-gap";
 const SPEECH_BACKSTOP = "vad-speech";
+
+// The pause a commit closed its segment at: the VAD hearing speech end, or a
+// short gap inside speech. Null for a cut anywhere else: the cap, the blind
+// cadence, a paragraph boundary, a stop. A speech end reported where a cut was
+// already held still ends what was said for break commands, as it always has,
+// but the cut stays no pause.
+type SegmentPause = "speech-end" | "gap" | "speech-end-at-cut" | null;
+
+function segmentPause(reason: string): SegmentPause {
+  if (reason === VAD_PAUSE_COMMIT) return "speech-end";
+  if (reason === VAD_GAP_COMMIT) return "gap";
+  return null;
+}
+
+/** Two boundaries asked for at one point in the held audio, made one commit. */
+function mergedPause(held: SegmentPause, next: SegmentPause): SegmentPause {
+  if (held === null) return next === "speech-end" ? "speech-end-at-cut" : null;
+  return held === "gap" && next === "speech-end" ? "speech-end" : held;
+}
+
+/** It ends what was said, for break commands. */
+const endsAtPause = (pause: SegmentPause | undefined) =>
+  pause === "speech-end" || pause === "speech-end-at-cut";
+
+/** The speaker paused there, for cleanup. */
+const isSpokenPause = (pause: SegmentPause | undefined) =>
+  pause === "speech-end" || pause === "gap";
 // Recent audio retained to replay after an `input_audio_buffer.clear` on speech
 // onset, so clearing the stale (silent) buffer doesn't also clip the start of
 // the utterance the VAD just detected. ~300ms at 24kHz mono PCM16 (48 B/ms).
@@ -302,8 +329,8 @@ interface ReplayFallback {
 interface ReplaySegment {
   chunks: ArrayBuffer[];
   bytes: number;
-  // Whether the VAD closed it at a pause; its replayed commit says so again.
-  atPause: boolean;
+  // The pause the VAD closed it at; its replayed commit says so again.
+  pause: SegmentPause;
   itemId?: string;
   fallback?: ReplayFallback;
 }
@@ -361,7 +388,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   // backstop, a paragraph boundary), as chunk counts into `preConnectBuffer`.
   // The flush sends a commit after each, so speech the VAD segmented while the
   // socket connected keeps its boundaries, pauses included.
-  private heldCommits: Array<{ at: number; atPause: boolean }> = [];
+  private heldCommits: Array<{ at: number; pause: SegmentPause }> = [];
   private isReady = false;
 
   // Bias terms for `session.update`, frozen for the session so a reconnect
@@ -466,12 +493,12 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   // unacknowledged segments the byte cap dropped, so their acks don't tag the
   // wrong segment.
   private replaySegments: ReplaySegment[] = [];
-  // Whether each commit awaiting its ack on this connection closed a segment
-  // at a pause the VAD heard, oldest first, and the acknowledged items that
-  // did. A pause ends what was said even when the speaker goes on before its
-  // transcript lands; a backstop commit cuts mid-speech.
-  private commitPauses: boolean[] = [];
-  private pauseItemIds = new Set<string>();
+  // The pause each commit awaiting its ack on this connection closed a segment
+  // at, oldest first, and the acknowledged items that closed at one. A
+  // speech-end pause ends what was said even when the speaker goes on before
+  // its transcript lands; a backstop commit cuts mid-speech.
+  private commitPauses: SegmentPause[] = [];
+  private itemPauses = new Map<string, Exclude<SegmentPause, null>>();
   private replayTail: ArrayBuffer[] = [];
   private replayTailBytes = 0;
   private replayTailFallback: ReplayFallback | undefined;
@@ -1231,7 +1258,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
           const first = commitsAfter[0];
           if (first?.at === 0) {
             nextCommit++;
-            this.commitHeldSegment(first.atPause);
+            this.commitHeldSegment(first.pause);
           }
           for (let i = 0; i < buffered.length; i++) {
             this.sendAudioJson(buffered[i]);
@@ -1241,7 +1268,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
             const held = commitsAfter[nextCommit];
             if (held?.at === i + 1) {
               nextCommit++;
-              this.commitHeldSegment(held.atPause);
+              this.commitHeldSegment(held.pause);
             }
           }
         }
@@ -1301,7 +1328,8 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         // A repeated ack must not tag a second segment.
         if (!this.commitOrder.includes(itemId)) {
           this.commitOrder.push(itemId);
-          if (this.commitPauses.shift()) this.pauseItemIds.add(itemId);
+          const pause = this.commitPauses.shift();
+          if (pause) this.itemPauses.set(itemId, pause);
           this.tagAcknowledgedSegment(itemId);
         }
         return;
@@ -1540,11 +1568,14 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         !this.vadDegraded &&
         this.vadHasEndedSpeech &&
         !this.isSpeaking;
-      const endsAtPause = !settled && this.pauseItemIds.has(itemId);
-      this.pauseItemIds.delete(itemId);
+      const pause = settled ? undefined : this.itemPauses.get(itemId);
+      this.itemPauses.delete(itemId);
       this.emitCompletion(transcript, itemId, {
         ...(endOfSpeech ? { endOfSpeech: true } : {}),
-        ...(endsAtPause ? { endsAtPause: true } : {}),
+        ...(endsAtPause(pause) ? { endsAtPause: true } : {}),
+        // A gap the speaker went straight on from still paused them. Silence
+        // after a cut doesn't make the cut one: only the commit's reason does.
+        ...(isSpokenPause(pause) ? { paused: true } : {}),
         // Its transcript never came, so words around it may be missing.
         ...(settled ? { incomplete: true } : {}),
       });
@@ -1577,7 +1608,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   private emitCompletion(
     transcript: string,
     itemId?: string,
-    boundary: { endOfSpeech?: true; endsAtPause?: true; incomplete?: true } = {}
+    boundary: { endOfSpeech?: true; endsAtPause?: true; paused?: true; incomplete?: true } = {}
   ): void {
     if (transcript) {
       logDebug(`${P} Emitting complete transcript to renderer`, {
@@ -1585,6 +1616,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         length: transcript.length,
         endOfSpeech: boundary.endOfSpeech === true,
         endsAtPause: boundary.endsAtPause === true,
+        paused: boundary.paused === true,
         incomplete: boundary.incomplete === true,
       });
       this.emit({
@@ -1636,16 +1668,16 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
    * resend audio this commit already carries. Throws if the send does; callers
    * own their eligibility checks, logging and failure handling.
    */
-  private sendCommit(atPause = false): void {
+  private sendCommit(pause: SegmentPause = null): void {
     if (!this.connection) throw new Error("No connection");
     this.connection.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
     this.pendingCommits++;
-    this.commitPauses.push(atPause);
+    this.commitPauses.push(pause);
     this.bytesSinceCommit = 0;
     this.replaySegments.push({
       chunks: this.replayTail,
       bytes: this.replayTailBytes,
-      atPause,
+      pause,
       ...(this.replayTailFallback ? { fallback: this.replayTailFallback } : {}),
     });
     this.replayTail = [];
@@ -1782,7 +1814,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       this.replayTailFallback = joinFallbacks(this.replayTailFallback, carried);
       carried = undefined;
       try {
-        this.sendCommit(segment.atPause);
+        this.sendCommit(segment.pause);
         logDebug(`${P} → input_audio_buffer.commit (replayed segment)`, {
           pendingCommits: this.pendingCommits,
         });
@@ -1823,11 +1855,16 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
           showing: [itemId],
         });
       } else {
-        const endsAtPause = final && this.pauseItemIds.has(itemId);
+        const pause = final ? this.itemPauses.get(itemId) : undefined;
         this.emitCompletion(
           text,
           itemId,
-          final ? (endsAtPause ? { endsAtPause: true } : {}) : { incomplete: true }
+          final
+            ? {
+                ...(endsAtPause(pause) ? { endsAtPause: true } : {}),
+                ...(isSpokenPause(pause) ? { paused: true } : {}),
+              }
+            : { incomplete: true }
         );
       }
       this.heldCompletions.delete(itemId);
@@ -2063,7 +2100,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     // chain: what arrived is released, and what the replay redoes waits for it.
     this.holdItemsForReplay();
     this.completedItemIds.clear();
-    this.pauseItemIds.clear();
+    this.itemPauses.clear();
   }
 
   private cleanupPreviousSession(): void {
@@ -2082,7 +2119,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     this.pendingCommits = 0;
     this.commitPauses = [];
     this.completedItemIds.clear();
-    this.pauseItemIds.clear();
+    this.itemPauses.clear();
     this.commitOrder = [];
     this.heldCompletions.clear();
     this.itemDeltaText.clear();
@@ -2354,7 +2391,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     }
     try {
       const bytes = this.bytesSinceCommit;
-      this.sendCommit(reason === VAD_PAUSE_COMMIT);
+      this.sendCommit(segmentPause(reason));
       logDebug(`${P} → input_audio_buffer.commit`, {
         reason,
         bytes,
@@ -2373,25 +2410,25 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
 
   private holdCommit(reason: string): boolean {
     const at = this.preConnectBuffer.length;
-    const atPause = reason === VAD_PAUSE_COMMIT;
+    const pause = segmentPause(reason);
     // With nothing held yet, a boundary still closes a dropped connection's
     // unacknowledged tail, which is replayed ahead of the held audio.
     if (at === 0 && this.replayTailBytes === 0) return false;
     const last = this.heldCommits.at(-1);
     if (last?.at === at) {
-      last.atPause ||= atPause;
+      last.pause = mergedPause(last.pause, pause);
       return true;
     }
-    this.heldCommits.push({ at, atPause });
+    this.heldCommits.push({ at, pause });
     logDebug(`${P} Commit held until the socket is ready`, { reason, bufferedChunks: at });
     return true;
   }
 
   /** A held commit, sent once the flush reaches it. Too little audio waits for the next. */
-  private commitHeldSegment(atPause: boolean): void {
+  private commitHeldSegment(pause: SegmentPause): void {
     if (this.bytesSinceCommit < MIN_COMMIT_BYTES) return;
     try {
-      this.sendCommit(atPause);
+      this.sendCommit(pause);
       logDebug(`${P} → input_audio_buffer.commit (held)`, {
         pendingCommits: this.pendingCommits,
       });

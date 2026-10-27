@@ -29,6 +29,8 @@ type MockTranscriptionEvent = {
   itemId?: string;
   replace?: boolean;
   endOfSpeech?: boolean;
+  endsAtPause?: boolean;
+  paused?: boolean;
   incomplete?: boolean;
   status?: string;
   message?: string;
@@ -310,6 +312,10 @@ function completions() {
           uncertain?: Span[];
           heardUncertain?: Span[];
           commandUncertain?: Span[];
+          itemId?: string;
+          pauses?: number[];
+          heardPauses?: number[];
+          commandPauses?: number[];
         }
     );
 }
@@ -679,6 +685,128 @@ describe("voiceInput — the target agent's commands", () => {
     await handleCorrect(fakeEvent, { rawText: "compact the conversation" });
     expect(shared.correctionCalls[0]?.request).toMatchObject({ startsPrompt: false });
     expect(shared.correctionCalls[0]?.settings).not.toHaveProperty("commandTarget");
+  });
+
+  // Where the speaker paused (#14897), by position in each string sent.
+  it("carries the pauses through heard-as rules, a stripped break and a stripped send", async () => {
+    shared.dictionary = [{ term: "Zustand", heardAs: ["zoo stand"], source: "manual", addedAt: 1 }];
+    await start();
+    // A short pause inside speech: no command boundary, but a pause all the same.
+    emitTranscriptionEvent({ type: "complete", text: "use zoo stand", itemId: "A", paused: true });
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "for the store new line.",
+      itemId: "B",
+      endsAtPause: true,
+      paused: true,
+    });
+    emitTranscriptionEvent({ type: "complete", text: "then test it", itemId: "C" });
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "send it.",
+      itemId: "D",
+      endOfSpeech: true,
+      paused: true,
+    });
+    const sent = completions().map(({ text, heard, pauses, heardPauses, send }) => ({
+      text,
+      ...(heard !== undefined ? { heard, heardPauses } : {}),
+      pauses: pauses ?? [],
+      ...(send ? { send } : {}),
+    }));
+    expect(sent).toEqual([
+      { text: "use Zustand", heard: "use zoo stand", heardPauses: [13], pauses: [11] },
+      { text: "for the store", pauses: [13] },
+      { text: "then test it", pauses: [] },
+      // The send's own item is left with no words; the pause after it ends the words before.
+      { text: "", pauses: [0], send: true },
+    ]);
+  });
+
+  it("sends a pause with no words of its own as a marker after the words already sent", async () => {
+    shared.provider = "deepgram";
+    await start();
+    emitTranscriptionEvent({ type: "complete", text: "fix the bug", itemId: "A" });
+    emitTranscriptionEvent({ type: "complete", text: "", endOfSpeech: true, paused: true });
+    emitTranscriptionEvent({ type: "complete", text: "", endOfSpeech: true, paused: true });
+    expect(completions()).toEqual([
+      expect.objectContaining({ text: "fix the bug", itemId: "A" }),
+      { sessionId: currentSessionId, text: "", willCorrect: false, pauses: [0] },
+    ]);
+  });
+
+  it("rides a pause after words already sent on the completion that retires a break's item", async () => {
+    await start();
+    emitTranscriptionEvent({ type: "complete", text: "fix the bug", itemId: "A" });
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "new line.",
+      itemId: "B",
+      endsAtPause: true,
+      paused: true,
+    });
+    expect(completions()).toEqual([
+      expect.objectContaining({ text: "fix the bug", itemId: "A" }),
+      { sessionId: currentSessionId, text: "", willCorrect: false, itemId: "B", pauses: [0] },
+    ]);
+    expect(completions()[0]).not.toHaveProperty("pauses");
+  });
+
+  it("puts a pause in an opening command's name at the end of the command as typed", async () => {
+    await start();
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "Slash.",
+      itemId: "A",
+      endOfSpeech: true,
+      paused: true,
+    });
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "review the parser.",
+      itemId: "B",
+      endOfSpeech: true,
+      paused: true,
+    });
+    const command = completions().find((p) => p.commandText);
+    expect(command).toMatchObject({
+      text: "Slash. review the parser.",
+      pauses: [6, 25],
+      commandText: "/review the parser.",
+      commandPauses: [7, 19],
+    });
+  });
+
+  it("marks no pause on an incomplete segment's words", async () => {
+    await start();
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "fix the bug",
+      itemId: "A",
+      incomplete: true,
+      paused: true,
+    });
+    expect(completions()[0]).not.toHaveProperty("pauses");
+  });
+
+  it("hands correction the pauses the renderer sent, and drops ones that don't validate", async () => {
+    const handleCorrect = getHandler("voice-input:correct") as (
+      e: unknown,
+      request: unknown
+    ) => Promise<unknown>;
+    await handleCorrect(fakeEvent, {
+      rawText: "fix it then ship",
+      terminalId: TERMINAL,
+      pauses: [6],
+    });
+    await handleCorrect(fakeEvent, {
+      rawText: "fix it then ship",
+      terminalId: TERMINAL,
+      pauses: [-1, 6],
+    });
+    expect(shared.correctionCalls[0]?.request).toMatchObject({ pauses: [6] });
+    expect(shared.correctionCalls).toHaveLength(2);
+    expect(shared.correctionCalls[1]?.request).not.toHaveProperty("pauses");
   });
 });
 

@@ -9,6 +9,10 @@ import {
 import { makeDraftKey } from "@/lib/draftKey";
 import { mapWordCuts } from "@/lib/wordAlignment";
 import { carrySpansThroughEdits } from "@shared/utils/voiceUncertainWords";
+import {
+  carryPausePositionsThroughEdits,
+  normalizePausePositions,
+} from "@shared/utils/voicePausePositions";
 import { useTerminalInputStore } from "./terminalInputStore";
 
 export interface DictationTextSpan {
@@ -45,6 +49,13 @@ export interface DictationUtterance {
   uncertain?: DictationTextSpan[];
   /** The same words in `heard`, relative to its start. */
   heardUncertain?: DictationTextSpan[];
+  /**
+   * Where the speaker paused, relative to `range.from`, each straight after a
+   * word (#14897). They hold as `uncertain` does.
+   */
+  pauses?: number[];
+  /** The same pauses in `heard`, relative to its start. */
+  heardPauses?: number[];
   /**
    * The selection these words replaced. It left the draft with them, so a
    * cancel has to put it back where they stood.
@@ -110,9 +121,9 @@ export interface UtteranceRewrite {
   text: string;
   /**
    * Keep the words as transcribed, for rules that rewrite from them, and the
-   * unsure words in `text`, relative to its start.
+   * unsure words and pauses in `text`, relative to its start.
    */
-  heard?: { uncertain: readonly DictationTextSpan[] };
+  heard?: { uncertain: readonly DictationTextSpan[]; pauses?: readonly number[] };
 }
 
 /**
@@ -144,10 +155,20 @@ interface DictationRangeState {
       uncertain?: DictationTextSpan[];
       /** Relative to the start of `heard`. */
       heardUncertain?: DictationTextSpan[];
+      /** Relative to `words.from`. */
+      pauses?: number[];
+      /** Relative to the start of `heard`. */
+      heardPauses?: number[];
       /** The selection the words replaced. */
       replaced?: string;
     }
   ) => void;
+  /**
+   * Marks a pause after the session's latest words in this draft, for one the
+   * provider reported with no words of its own. Nothing changes once those
+   * words were edited. Returns whether it marked a new one.
+   */
+  markPause: (target: DictationDraftTarget) => boolean;
   /** Records a paragraph break the session just wrote into the draft. */
   recordParagraphBreak: (target: DictationDraftTarget, insertion: DictationTextSpan) => void;
   /**
@@ -183,7 +204,8 @@ interface DictationRangeState {
    * Writes `text` over a passage of the session's own words, as the session:
    * the passage's utterances become one holding it, still unedited, so
    * correction treats it as dictated. `uncertain` gives the unsure words in
-   * `text` and in `heard`, which only the rewriter can place. Returns the span
+   * `text` and in `heard`, and `pauses` where the speaker paused in each,
+   * which only the rewriter can place. Returns the span
    * the passage covered before the write, or null, writing nothing, once the
    * passage no longer holds `passage.text` or one of its words was edited.
    */
@@ -192,7 +214,8 @@ interface DictationRangeState {
     passage: { utteranceIds: readonly string[]; text: string },
     text: string,
     heard: string,
-    uncertain?: { text: DictationTextSpan[]; heard: DictationTextSpan[] }
+    uncertain?: { text: DictationTextSpan[]; heard: DictationTextSpan[] },
+    pauses?: { text: number[]; heard: number[] }
   ) => DictationTextSpan | null;
   /**
    * Swaps words inside the session's own utterances, as the session, for a
@@ -224,8 +247,8 @@ interface DictationRangeState {
    * keeps its own words, still unedited, so a scratch or a cancel takes just
    * those; utterances a rewritten word runs across become one. A rewrite with
    * `heard` keeps the words as transcribed, for the heard-as rules to rerun
-   * from; one without drops them with the unsure words (a cleanup, which
-   * nothing reruns). `rewrites` are in draft order and must not overlap;
+   * from; one without drops them with the unsure words and pauses (a cleanup,
+   * which nothing reruns). `rewrites` are in draft order and must not overlap;
    * `write` receives the new draft and puts it there, and the record moves in
    * the same update as the draft. Returns the span each passage covered
    * before the write, or null, writing nothing, once one of them no longer
@@ -268,22 +291,57 @@ function sameSpan(a: DictationTextSpan | undefined, b: DictationTextSpan | undef
   return a === b || (!!a && !!b && a.from === b.from && a.to === b.to);
 }
 
+const placesWords = (u: DictationUtterance) =>
+  !!(u.uncertain || u.heardUncertain || u.pauses || u.heardPauses);
+
 /**
- * The record without its unsure words, for a change its writer didn't
- * describe. The change is then inferred by diffing the drafts, which can't say
- * which copy of repeated text changed, nor see the separate edits one update
- * can hold, so a flag kept through it could end up on another copy of its word.
+ * The record without its unsure words and pauses, for a change its writer
+ * didn't describe. The change is then inferred by diffing the drafts, which
+ * can't say which copy of repeated text changed, nor see the separate edits one
+ * update can hold, so a mark kept through it could end up on another copy of
+ * its word.
  */
-function forgetUncertain(record: DictationRecord): DictationRecord {
-  if (!record.utterances.some((u) => u.uncertain || u.heardUncertain)) return record;
+function forgetWordMarks(record: DictationRecord): DictationRecord {
+  if (!record.utterances.some(placesWords)) return record;
   return {
     ...record,
     utterances: record.utterances.map((utterance) => {
-      if (!utterance.uncertain && !utterance.heardUncertain) return utterance;
-      const { uncertain: _uncertain, heardUncertain: _heardUncertain, ...rest } = utterance;
+      if (!placesWords(utterance)) return utterance;
+      const {
+        uncertain: _uncertain,
+        heardUncertain: _heardUncertain,
+        pauses: _pauses,
+        heardPauses: _heardPauses,
+        ...rest
+      } = utterance;
       return rest;
     }),
   };
+}
+
+/**
+ * `positions` sorted and each once, or null when none follow a word. Given
+ * `text`, each first moves back over the space before it.
+ */
+function placedPauses(positions: readonly number[] | undefined, text?: string): number[] | null {
+  const sorted =
+    text === undefined
+      ? [...new Set(positions)].sort((a, b) => a - b)
+      : normalizePausePositions(text, positions ?? []);
+  const placed = sorted.filter((at) => at > 0);
+  return placed.length > 0 ? placed : null;
+}
+
+/** `pauses` to spread onto an utterance, or nothing when there are none. */
+function pausesField(positions: readonly number[] | undefined, text?: string) {
+  const pauses = placedPauses(positions, text);
+  return pauses ? { pauses } : {};
+}
+
+/** `heardPauses` to spread onto an utterance, or nothing when there are none. */
+function heardPausesField(positions: readonly number[] | undefined, text?: string) {
+  const heardPauses = placedPauses(positions, text);
+  return heardPauses ? { heardPauses } : {};
 }
 
 function mapRecord(record: DictationRecord, change: TextChange): DictationRecord {
@@ -368,14 +426,18 @@ function mapOwnEdit(record: DictationRecord, change: TextChange, owner: number):
         insertion: through(utterance.insertion),
         ...(separatorAfter ? { separatorAfter } : {}),
       };
-      if (i !== owner || !utterance.uncertain) return mapped;
+      if (i !== owner || (!utterance.uncertain && !utterance.pauses)) return mapped;
       // An unsure word the change replaced is gone; the rest keep their words.
+      // A pause stays after the word it followed, the swap's end for one in it.
       const at = utterance.range.from;
-      const uncertain = carrySpansThroughEdits(utterance.uncertain, [
-        { from: change.from - at, to: change.to - at, insert: change.insert },
-      ]);
-      const { uncertain: _uncertain, ...rest } = mapped;
-      return uncertain.length > 0 ? { ...rest, uncertain } : rest;
+      const edit = { from: change.from - at, to: change.to - at, insert: change.insert };
+      const uncertain = carrySpansThroughEdits(utterance.uncertain ?? [], [edit]);
+      const { uncertain: _uncertain, pauses: _pauses, ...rest } = mapped;
+      return {
+        ...rest,
+        ...(uncertain.length > 0 ? { uncertain } : {}),
+        ...pausesField(carryPausePositionsThroughEdits(utterance.pauses ?? [], [edit])),
+      };
     }),
     breaks: record.breaks.map(through),
     ...(learningSpan ? { learningSpan } : {}),
@@ -392,12 +454,15 @@ function withSwappedHeard(
     (words, { from, to, text }) => words.slice(0, from) + text + words.slice(to),
     utterance.heard
   );
-  const unsure = carrySpansThroughEdits(
-    utterance.heardUncertain ?? [],
-    swaps.map(({ from, to, text }) => ({ from, to, insert: text }))
-  );
-  const { heardUncertain: _heardUncertain, ...rest } = utterance;
-  return { ...rest, heard, ...(unsure.length > 0 ? { heardUncertain: unsure } : {}) };
+  const edits = swaps.map(({ from, to, text }) => ({ from, to, insert: text }));
+  const unsure = carrySpansThroughEdits(utterance.heardUncertain ?? [], edits);
+  const { heardUncertain: _heardUncertain, heardPauses: _heardPauses, ...rest } = utterance;
+  return {
+    ...rest,
+    heard,
+    ...(unsure.length > 0 ? { heardUncertain: unsure } : {}),
+    ...heardPausesField(carryPausePositionsThroughEdits(utterance.heardPauses ?? [], edits), heard),
+  };
 }
 
 /** A stretch of the draft the dictation wrote, as it comes back out. */
@@ -584,6 +649,7 @@ function rewrittenUtterances(
     // put between them, so the heard-as rules can rerun from them.
     let heard = "";
     const heardUncertain: DictationTextSpan[] = [];
+    const heardPauses: number[] = [];
     group.members.forEach((member, i) => {
       if (i > 0) heard += draft.slice(group.members[i - 1]!.range.to, member.range.from);
       const said = member.heard ?? draft.slice(member.range.from, member.range.to);
@@ -591,17 +657,28 @@ function rewrittenUtterances(
       for (const span of spans) {
         heardUncertain.push({ from: heard.length + span.from, to: heard.length + span.to });
       }
+      const paused = (member.heard === undefined ? member.pauses : member.heardPauses) ?? [];
+      for (const at of paused) heardPauses.push(heard.length + at);
       heard += said;
     });
     const uncertain = rewrite.heard.uncertain
       .filter((span) => span.from >= group.start && span.to <= group.end && span.from < span.to)
       .map((span) => ({ from: span.from - group.start, to: span.to - group.start }));
+    // A pause on the cut ends the words before it, so this group keeps it.
+    const pauses = (rewrite.heard.pauses ?? [])
+      .filter((at) => at > group.start && at <= group.end)
+      .map((at) => at - group.start);
     const written = text.slice(group.start, group.end);
     return {
       ...utterance,
       ...(uncertain.length > 0 ? { uncertain } : {}),
+      ...pausesField(pauses, written),
       ...(heard !== written
-        ? { heard, ...(heardUncertain.length > 0 ? { heardUncertain } : {}) }
+        ? {
+            heard,
+            ...(heardUncertain.length > 0 ? { heardUncertain } : {}),
+            ...heardPausesField(heardPauses, heard),
+          }
         : {}),
     };
   });
@@ -683,7 +760,18 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
 
   recordUtterance: (
     target,
-    { insertion, words, separatorAfter, transcriptId, heard, uncertain, heardUncertain, replaced }
+    {
+      insertion,
+      words,
+      separatorAfter,
+      transcriptId,
+      heard,
+      uncertain,
+      heardUncertain,
+      pauses,
+      heardPauses,
+      replaced,
+    }
   ) =>
     set((state) => ({
       drafts: withInsertion(state.drafts, target, insertion, {
@@ -697,9 +785,36 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
         ...(heard !== undefined && heardUncertain && heardUncertain.length > 0
           ? { heardUncertain }
           : {}),
+        ...pausesField(pauses?.filter((at) => at <= words.to - words.from)),
+        ...(heard !== undefined
+          ? heardPausesField(heardPauses?.filter((at) => at <= heard.length))
+          : {}),
         ...(replaced ? { replaced } : {}),
       }),
     })),
+
+  markPause: (target) => {
+    const key = makeDraftKey(target.panelId, target.projectId);
+    const record = get().drafts[key]?.find((r) => r.sessionId === target.sessionId);
+    const last = record?.utterances[record.utterances.length - 1];
+    if (!record || !last || last.range.edited) return false;
+    const end = last.range.to - last.range.from;
+    const heardEnd = last.heard?.length;
+    // Each is checked on its own: a rule can have written the end over a
+    // pause the words as heard put somewhere else.
+    const written = !last.pauses?.includes(end);
+    const heard = heardEnd !== undefined && !last.heardPauses?.includes(heardEnd);
+    if (end <= 0 || (!written && !heard)) return false;
+    const marked: DictationUtterance = {
+      ...last,
+      ...pausesField([...(last.pauses ?? []), end]),
+      ...(heardEnd !== undefined ? heardPausesField([...(last.heardPauses ?? []), heardEnd]) : {}),
+    };
+    set((state) =>
+      replaceRecord(state, { ...record, utterances: [...record.utterances.slice(0, -1), marked] })
+    );
+    return true;
+  },
 
   recordParagraphBreak: (target, insertion) =>
     set((state) => ({ drafts: withInsertion(state.drafts, target, insertion, null) })),
@@ -771,7 +886,7 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
       nextDrafts[key] = records.map(
         (record) =>
           rebuilt?.get(record.id) ??
-          changes.reduce(mapRecord, known ? record : forgetUncertain(record))
+          changes.reduce(mapRecord, known ? record : forgetWordMarks(record))
       );
     }
     expectedChanges.clear();
@@ -798,7 +913,7 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
     });
   },
 
-  rewritePassage: (id, passage, text, heard, uncertain) => {
+  rewritePassage: (id, passage, text, heard, uncertain, pauses) => {
     const record = get().getDictation(id);
     if (!record || !text) return null;
     const first = record.utterances.findIndex((u) => u.id === passage.utteranceIds[0]);
@@ -848,6 +963,8 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
       ...(heard !== text && uncertain && uncertain.heard.length > 0
         ? { heardUncertain: uncertain.heard }
         : {}),
+      ...pausesField(pauses?.text, text),
+      ...(heard !== text ? heardPausesField(pauses?.heard, heard) : {}),
       ...(replaced ? { replaced } : {}),
     };
     const delta = end - to;

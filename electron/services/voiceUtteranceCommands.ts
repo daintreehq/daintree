@@ -25,6 +25,10 @@ import {
   sliceSpans,
   type VoiceTextSpan,
 } from "../../shared/utils/voiceUncertainWords.js";
+import {
+  normalizePausePositions,
+  shiftPausePositions,
+} from "../../shared/utils/voicePausePositions.js";
 
 export interface UtteranceSegment {
   itemId?: string;
@@ -43,6 +47,11 @@ export interface UtteranceBoundary {
    * a send too (#14803). Its clause still runs on into what the drain has left.
    */
   stopping?: boolean;
+  /**
+   * The speaker paused after it, short pauses inside speech included. It
+   * decides no command; it only marks where cleanup is told they stopped.
+   */
+  paused?: boolean;
 }
 
 export interface UtteranceOptions {
@@ -58,6 +67,11 @@ export interface UtteranceEmission {
   text: string;
   /** The unsure words that survived into `text`, where they sit in it. */
   uncertain: VoiceTextSpan[];
+  /**
+   * Where the speaker paused in `text`, each straight after a word. One at 0
+   * is a pause after words the renderer already has, before any of these.
+   */
+  pauses?: number[];
   /** It opens the utterance, so a spoken command it starts with is written as one. */
   opensUtterance?: true;
 }
@@ -74,6 +88,8 @@ interface HeldSegment {
   itemId?: string;
   text: string;
   uncertain: readonly VoiceTextSpan[];
+  /** Where the speaker paused in `text`; 0 for one after the words before it. */
+  pauses: number[];
 }
 
 const PIECE_BREAK_RE = /\s*\n\s*/;
@@ -87,6 +103,9 @@ export class UtteranceCommands {
   // with the clause they opened, and a command never opens after them.
   private said = "";
   private held: HeldSegment[] = [];
+  // Words went to the renderer with no pause after them yet, so a pause that
+  // brings no words of its own still has somewhere to go.
+  private owesPause = false;
 
   push(
     segment: UtteranceSegment,
@@ -95,18 +114,25 @@ export class UtteranceCommands {
   ): UtteranceRelease | null {
     const text = segment.text.trim();
     const lead = segment.text.length - segment.text.trimStart().length;
+    const paused = boundary.paused === true;
     // An empty segment with no item only marks the boundary.
     if (text || segment.itemId) {
       this.held.push({
         ...(segment.itemId ? { itemId: segment.itemId } : {}),
         text,
         uncertain: sliceSpans(segment.uncertain ?? [], lead, lead + text.length),
+        pauses: paused && text ? [text.length] : [],
       });
     }
+    // A pause with no words of its own ends the last words heard.
+    if (paused && !text) this.pauseAfterHeld();
     const pause = boundary.endOfSpeech || boundary.endsAtPause;
     if (this.held.length === 0) {
       if (boundary.endOfSpeech) this.said = "";
-      return null;
+      if (!paused || !this.owesPause) return null;
+      // Those words already went out, so the pause follows on its own.
+      this.owesPause = false;
+      return { emissions: [{ text: "", uncertain: [], pauses: [0] }], send: false, literal: null };
     }
     // "Slash" and a pause, then "compact": the name is still to come, even
     // after the pause.
@@ -160,6 +186,16 @@ export class UtteranceCommands {
   clear(): void {
     this.held = [];
     this.said = "";
+    this.owesPause = false;
+  }
+
+  /** Marks a pause after the last held words, or ahead of the held segments when none have any. */
+  private pauseAfterHeld(): void {
+    const worded = this.held.filter((segment) => segment.text).at(-1);
+    const owner = worded ?? this.held[0];
+    if (!owner) return;
+    const at = worded ? worded.text.length : 0;
+    if (!owner.pauses.includes(at)) owner.pauses.push(at);
   }
 
   private opening(options: UtteranceOptions) {
@@ -214,8 +250,9 @@ export class UtteranceCommands {
         : { cut: Math.max(end, held), replacement: "" };
     };
     const decided = read(cut);
-    const emissions = open(edit(segments, starts, decided));
-    const literal = send ? open(edit(segments, starts, read(full.length))) : null;
+    const emissions = open(edit(segments, starts, full, held, decided));
+    const literal = send ? open(edit(segments, starts, full, held, read(full.length))) : null;
+    this.owesPause = owesPauseAfter(emissions, this.owesPause);
 
     this.held = this.held.slice(count);
     // A break starts a new line of thought, so the next send reads its own clause.
@@ -235,31 +272,69 @@ const LITERAL = { send: false, breaks: false, endsUtterance: false };
  * Each segment's text once everything from `cut` on is replaced. The segment
  * the cut falls in takes the replacement and goes last, so a send rides its
  * words; segments wholly inside the command retire ahead of it.
+ *
+ * A pause inside or after the command ends the words the cut kept, so it
+ * moves back to them, and to words the renderer already has (the first
+ * `held` characters of `full`) when the cut kept none.
  */
 function edit(
   segments: readonly HeldSegment[],
   starts: readonly number[],
+  full: string,
+  held: number,
   { cut, replacement }: { cut: number; replacement: string }
 ): UtteranceEmission[] {
   let at = segments.findIndex((segment, i) => starts[i]! + segment.text.length > cut);
   if (at < 0) at = segments.length - 1;
+  const kept = Math.max(0, cut - starts[at]!);
+  const keptLength = (i: number) => (i < at ? segments[i]!.text.length : i === at ? kept : 0);
+  const pauses: number[][] = segments.map(() => []);
+  let leading = false;
+  const placed = normalizePausePositions(
+    full,
+    segments.flatMap((segment, i) =>
+      segment.pauses.map((pause) => Math.min(starts[i]! + pause, cut))
+    )
+  );
+  for (const position of placed) {
+    const owner = segments.findIndex(
+      (_, i) => i <= at && starts[i]! < position && position <= starts[i]! + keptLength(i)
+    );
+    if (owner >= 0) pauses[owner]!.push(position - starts[owner]!);
+    else if (position <= held) leading = true;
+  }
   const emission = (i: number): UtteranceEmission => {
     const segment = segments[i]!;
     const id = segment.itemId ? { itemId: segment.itemId } : {};
-    if (i < at) return { ...id, text: segment.text, uncertain: [...segment.uncertain] };
+    const own = pauses[i]!.length > 0 ? { pauses: pauses[i]! } : {};
+    if (i < at) return { ...id, text: segment.text, uncertain: [...segment.uncertain], ...own };
     if (i > at) return { ...id, text: "", uncertain: [] };
-    const kept = Math.max(0, cut - starts[i]!);
     return {
       ...id,
       text: segment.text.slice(0, kept) + replacement,
       uncertain: sliceSpans(segment.uncertain, 0, kept),
+      ...own,
     };
   };
-  return [
+  const emissions = [
     ...segments.slice(0, at).map((_, i) => emission(i)),
     ...segments.slice(at + 1).map((_, i) => emission(at + 1 + i)),
     emission(at),
   ];
+  // Ahead of this release's words, which follow the pause.
+  if (leading) emissions[0] = { ...emissions[0]!, pauses: [0, ...(emissions[0]!.pauses ?? [])] };
+  return emissions;
+}
+
+/**
+ * Whether words have gone out with no pause after them once `emissions` have:
+ * the last of their words decide it, or a pause after earlier words when they
+ * have none.
+ */
+function owesPauseAfter(emissions: readonly UtteranceEmission[], owed: boolean): boolean {
+  const worded = emissions.filter((emission) => /\S/.test(emission.text)).at(-1);
+  if (worded) return !(worded.pauses ?? []).includes(worded.text.trimEnd().length);
+  return emissions.some((emission) => emission.pauses?.includes(0)) ? false : owed;
 }
 
 /**
@@ -289,6 +364,15 @@ function openUtterance(
     offset += emission.text.length + 1;
     return spans;
   });
+  offset = 0;
+  const pauses = normalizePausePositions(
+    joined,
+    worded.flatMap((emission) => {
+      const positions = shiftPausePositions(emission.pauses ?? [], offset);
+      offset += emission.text.length + 1;
+      return positions;
+    })
+  );
   return [
     ...emissions
       .filter((emission) => emission !== first)
@@ -296,7 +380,15 @@ function openUtterance(
         ...(emission.itemId ? { itemId: emission.itemId } : {}),
         text: "",
         uncertain: [],
+        // Words joined into the command take their pauses with them.
+        ...(!emission.text && emission.pauses ? { pauses: emission.pauses } : {}),
       })),
-    { ...first, text: joined, uncertain, opensUtterance: true },
+    {
+      ...first,
+      text: joined,
+      uncertain,
+      ...(pauses.length > 0 ? { pauses } : {}),
+      opensUtterance: true,
+    },
   ];
 }

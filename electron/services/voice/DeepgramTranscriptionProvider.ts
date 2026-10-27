@@ -1031,12 +1031,14 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
             text: trimmed,
             ...(uncertain.length > 0 ? { uncertain } : {}),
             itemId: previewId ?? nextSpanItemId(),
-            ...(speechFinal ? { endOfSpeech: true } : {}),
+            // Only endpointing sets speech_final: a Finalize or CloseStream
+            // flush never does, so a stop is never taken for a pause.
+            ...(speechFinal ? { endOfSpeech: true, paused: true } : {}),
           });
         } else if (speechFinal) {
           // The utterance's words landed in earlier finals; this one only says
           // it ended, which a "send it" among them waits on.
-          this.emit({ type: "complete", text: "", endOfSpeech: true });
+          this.emit({ type: "complete", text: "", endOfSpeech: true, paused: true });
         }
         return;
       }
