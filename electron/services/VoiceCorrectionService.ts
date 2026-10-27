@@ -55,6 +55,7 @@ const FILE_LINK_DETECTION_TIMEOUT_MS = 4000;
 const REWRITE_CACHE_PREFIX = "voice-rewrite-v1";
 const MIN_REWRITE_TIMEOUT_MS = 10000;
 const FILE_LINK_CACHE_PREFIX = "voice-file-link-v2";
+const PROMPT_TAG_OPEN_RE = /<(?=\/?(?:terminal_output|target|job|confirmed_history|uncertain)\b)/gi;
 const LEADING_FILLER_RE = /^(?:\s*(?:um|uh)[\s,.;:!-]+)+/i;
 
 const FILE_LINK_DETECTION_SCHEMA = {
@@ -434,7 +435,10 @@ export class VoiceCorrectionService {
     parts.push(`<target>\n${targetText}\n</target>`);
 
     if (request.terminalOutput?.trim()) {
-      parts.push(`<terminal_output>\n${request.terminalOutput.trim()}\n</terminal_output>`);
+      // Output the terminal printed must not be able to close its own block or
+      // open a <target> of its own.
+      const output = request.terminalOutput.trim().replace(PROMPT_TAG_OPEN_RE, "‹");
+      parts.push(`<terminal_output>\n${output}\n</terminal_output>`);
     }
 
     return parts.join("\n\n");

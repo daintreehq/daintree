@@ -38,6 +38,24 @@ describe("boundTerminalOutput", () => {
     expect(out).toBe("before\n\nafter");
   });
 
+  it("redacts a credential split by colour codes", () => {
+    const out = boundTerminalOutput(["\x1b[36mpassword\x1b[39m: hunter2", "", "kept"])!;
+    expect(out).not.toContain("hunter2");
+    expect(out).toBe("kept");
+  });
+
+  it("redacts a numeric password assigned or passed as a flag", () => {
+    const out = boundTerminalOutput([
+      "PGPASSWORD=123456",
+      "",
+      "mysql --password 123456 -u root",
+      "",
+      "kept",
+    ])!;
+    expect(out).not.toContain("123456");
+    expect(out).toBe("kept");
+  });
+
   it("is null when nothing readable remains", () => {
     expect(boundTerminalOutput([])).toBeNull();
     expect(boundTerminalOutput(["", "   ", ""])).toBeNull();

@@ -1,5 +1,6 @@
 import type { PtyClient } from "./PtyClient.js";
 import { logDebug } from "../utils/logger.js";
+import { stripAnsi } from "./voiceContextKeyterms.js";
 import { redactSecretShapedLines } from "./voiceKeytermSecrets.js";
 
 const P = "[VoiceTerminalContext]";
@@ -20,7 +21,12 @@ export const TERMINAL_READ_BUDGET_MS = 500;
  * within the line and character bounds. Null when nothing readable is left.
  */
 export function boundTerminalOutput(lines: readonly string[]): string | null {
-  const redacted = redactSecretShapedLines(lines.slice(-SNAPSHOT_LINES));
+  // Colour codes can split a credential name from its value, so they go before
+  // the redactor sees the line. Strict, because the text is sent as written.
+  const redacted = redactSecretShapedLines(
+    lines.slice(-SNAPSHOT_LINES).map((line) => (typeof line === "string" ? stripAnsi(line) : "")),
+    true
+  );
   const kept: string[] = [];
   for (const raw of redacted) {
     const line = raw.trimEnd().slice(0, MAX_LINE_CHARS);
