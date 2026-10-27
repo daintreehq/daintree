@@ -11,7 +11,8 @@ export function filterDriversIn(listing: Buffer): string[] {
   const drivers = new Set<string>();
   for (const { key } of parseConfigListing(listing)) {
     const text = key.toString("utf8");
-    if (!/^filter\..+\.(clean|process|required)$/s.test(text)) continue;
+    // `filter=` with no value selects a driver whose name is empty.
+    if (!/^filter\..*\.(clean|process|required)$/s.test(text)) continue;
     // The override is handed to git as text; a name it can't carry exactly
     // would switch off some other driver and leave this one running.
     if (!Buffer.from(text, "utf8").equals(key)) {

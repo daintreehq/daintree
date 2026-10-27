@@ -23,8 +23,28 @@ afterEach(() => {
 
 describe("readWorktreeDiffNames's deadline", () => {
   it("answers with nothing at the deadline while git is still running", async () => {
+    vi.useFakeTimers();
     runGitForBytes.mockReturnValue(new Promise(() => {}));
-    expect(await readWorktreeDiffNames("/repo", 20)).toEqual([]);
+    let names: string[] | undefined;
+    void readWorktreeDiffNames("/repo", 20).then((read) => (names = read));
+
+    await vi.advanceTimersByTimeAsync(19);
+    expect(names).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(names).toEqual([]);
+  });
+
+  it("aborts what git is still doing once it has answered", async () => {
+    vi.useFakeTimers();
+    runGitForBytes.mockReturnValue(new Promise(() => {}));
+    const names = readWorktreeDiffNames("/repo", 20);
+    await vi.advanceTimersByTimeAsync(20);
+    await names;
+
+    const signals = runGitForBytes.mock.calls.map(
+      ([, , options]) => (options as { signal: AbortSignal }).signal
+    );
+    expect(signals.map((signal) => signal.aborted)).toEqual([true, true]);
   });
 
   it("starts no diff once the deadline has passed", async () => {
@@ -45,6 +65,17 @@ describe("readWorktreeDiffNames's deadline", () => {
     runGitForBytes.mockImplementation((_cwd: string, args: string[]) =>
       args[0] === "merge-base"
         ? Promise.reject(new GitTimeoutError("merge-base"))
+        : Promise.resolve(answer(""))
+    );
+
+    expect(await readWorktreeDiffNames("/repo", 5_000)).toEqual([]);
+    expect(commands()).toEqual(["config", "merge-base"]);
+  });
+
+  it("ends the read when merge-base was killed, rather than diffing from HEAD", async () => {
+    runGitForBytes.mockImplementation((_cwd: string, args: string[]) =>
+      args[0] === "merge-base"
+        ? Promise.reject(new GitCommandError("merge-base", null, "killed by SIGTERM"))
         : Promise.resolve(answer(""))
     );
 
