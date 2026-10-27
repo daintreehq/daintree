@@ -433,6 +433,28 @@ describe("addPanel — a launch's prompt is recorded once its process starts (#1
     expect(ptyPanel("p1")?.firstPrompt).toEqual(launchPrompt);
   });
 
+  it("records nothing when a restart has taken the pane over before the spawn resolves", async () => {
+    let release: () => void = () => {};
+    spawn.mockImplementation(
+      ({ id }) =>
+        new Promise((resolve) => {
+          release = () => resolve(id ?? "spawn-id");
+        })
+    );
+    await launch("p1");
+    await drainMicrotasks();
+    usePanelStore.setState((state) => {
+      const panel = state.panelsById.p1;
+      if (!panel || !isPtyPanel(panel)) return state;
+      return { panelsById: { ...state.panelsById, p1: { ...panel, isRestarting: true } } };
+    });
+
+    release();
+    await drainMicrotasks();
+
+    expect(ptyPanel("p1")?.firstPrompt).toBeUndefined();
+  });
+
   it("records nothing when the spawn fails", async () => {
     spawn.mockRejectedValue(new Error("spawn failed"));
     await launch("p1");

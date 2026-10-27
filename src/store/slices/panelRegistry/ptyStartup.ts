@@ -8,6 +8,7 @@ import {
   peek as peekTerminalService,
 } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { saveNormalized } from "./persistence";
+import { deferPersistToBatchEnd, isHydrationBatchActive } from "./hydrationBatch";
 import { reconcileWorktreeAfterSpawn } from "./helpers";
 import { logWarn, logError } from "@/utils/logger";
 import { markRendererPerformance } from "@/utils/performance";
@@ -177,14 +178,19 @@ export function enqueuePtyStartup(
   // Any pane waits for control of its project (#13913), save the assistant
   // and dialog panes, whose own surfaces handle a launch that didn't start.
   const holdsForDriveLease = location !== "overlay" && location !== "dialog";
-  // The launch's prompt becomes the pane's record once its process is running
-  // (#14592); a spawn that fails or is refused never delivered it.
+  // The launch's prompt becomes the pane's record once this launch's own
+  // process is running (#14592): a spawn that fails or is refused never
+  // delivered it, and a pane a restart has taken over belongs to its successor.
   const started = <T extends PtyPanelData>(current: T): T =>
-    options.launchPrompt && !current.firstPrompt
+    options.launchPrompt && !current.firstPrompt && !current.isRestarting
       ? { ...current, firstPrompt: options.launchPrompt }
       : current;
   const persistLaunchPrompt = (): void => {
     if (!options.launchPrompt) return;
+    if (isHydrationBatchActive()) {
+      deferPersistToBatchEnd();
+      return;
+    }
     const after = get();
     saveNormalized(after.panelsById, after.panelIds);
   };
@@ -204,11 +210,12 @@ export function enqueuePtyStartup(
       const current = state.panelsById[id];
       if (!current || !isPtyPanel(current) || current.spawnStatus !== "spawning") return state;
       adopted = true;
+      // Not this launch's process: the host may run a launch another window
+      // started under the id, so this one's prompt is never claimed for it.
       return {
-        panelsById: { ...state.panelsById, [id]: { ...started(current), spawnStatus: "ready" } },
+        panelsById: { ...state.panelsById, [id]: { ...current, spawnStatus: "ready" } },
       };
     });
-    if (adopted) persistLaunchPrompt();
     // What it printed before this pane attached comes from the host's record.
     if (adopted) {
       fetchAndRestoreTerminal(id).catch((error: unknown) => {
