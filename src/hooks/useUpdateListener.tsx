@@ -6,6 +6,7 @@ import {
 } from "@/store/slices/notificationHistorySlice";
 import { logError } from "@/utils/logger";
 import { notify } from "@/lib/notify";
+import { isScreenLocked } from "@/lib/powerPolicyState";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { useDistributionStore } from "@/store/distributionStore";
 
@@ -123,10 +124,10 @@ function surfaceDownloaded(version: string): void {
       message: READY_INBOX_MESSAGE(version),
       correlationId: UPDATE_CORRELATION_ID,
       supersedeKey: UPDATE_CORRELATION_ID,
-      // Seen only if the window is focused to show the patched toast — the
-      // same focus gate notify() applies — so a blurred stage change stays
-      // unread instead of quietly clearing the badge.
-      seenAsToast: typeof document === "undefined" || document.hasFocus(),
+      // Seen only if the window is focused on an unlocked screen to show the
+      // patched toast — the same gate notify() applies — so a stage change
+      // nobody was there for stays unread instead of quietly clearing the badge.
+      seenAsToast: !isScreenLocked() && (typeof document === "undefined" || document.hasFocus()),
       actions: [changelogHistoryAction()],
     });
     // Stage transition: clear the Available-stage onDismiss so dismissing the

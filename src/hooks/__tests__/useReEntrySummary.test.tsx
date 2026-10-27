@@ -11,6 +11,8 @@ import type { Project } from "@shared/types";
 import type { Scratch } from "@shared/types/scratch";
 import type { BrowserPanelData } from "@shared/types/panel";
 import { APP_SOURCE_LABEL } from "@/lib/notificationSourceLabel";
+import { __resetPowerPolicyStateForTests, isScreenLocked } from "@/lib/powerPolicyState";
+import type { PowerPolicySnapshot } from "@shared/types/powerPolicy";
 
 vi.mock("@/store/createWorktreeStore", () => ({
   getCurrentViewStoreOrNull: vi.fn(),
@@ -19,6 +21,21 @@ vi.mock("@/store/createWorktreeStore", () => ({
 vi.mock("@/store/viewWorkspaceId", () => ({
   getViewWorkspaceId: vi.fn(() => "proj-here"),
 }));
+
+// The return check runs a frame after focus or unlock. Frames run inline here,
+// so each test reads the summary straight after the event that ends the
+// absence; the deferral itself has its own test with a queued frame.
+beforeEach(() => {
+  vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+    cb(0);
+    return 0;
+  });
+  vi.stubGlobal("cancelAnimationFrame", () => {});
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 function addEntry(
   overrides: Partial<{
@@ -800,5 +817,271 @@ describe("useReEntrySummary", () => {
     expect(result.current.visible).toBe(true);
     expect(result.current.entries).toHaveLength(1);
     expect(result.current.entries[0]!.message).toBe("During blur");
+  });
+});
+
+describe("useReEntrySummary across a screen lock (#14885)", () => {
+  let pushPolicy: ((snapshot: PowerPolicySnapshot) => void) | null = null;
+  let hasFocusSpy: ReturnType<typeof vi.spyOn>;
+  let now = 0;
+
+  function setScreenLocked(locked: boolean): void {
+    act(() => {
+      pushPolicy!({
+        level: locked ? "deep" : "active",
+        canObserve: !locked,
+        onBattery: false,
+        screenLocked: locked,
+        anyWindowFocused: true,
+        anyWindowVisible: true,
+      });
+    });
+  }
+
+  beforeEach(async () => {
+    pushPolicy = null;
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      writable: true,
+      value: {
+        events: {
+          on: (name: string, cb: (snapshot: PowerPolicySnapshot) => void) => {
+            if (name === "system:power-policy-changed") pushPolicy = cb;
+            return () => {};
+          },
+        },
+      },
+    });
+    useNotificationHistoryStore.setState({ entries: [], unreadCount: 0 });
+    useProjectStore.setState({ projects: [], currentProject: null });
+    usePanelStore.setState({ panelsById: {} });
+    vi.mocked(getViewWorkspaceId).mockReturnValue("proj-here");
+    const { getCurrentViewStoreOrNull } = await import("@/store/createWorktreeStore");
+    vi.mocked(getCurrentViewStoreOrNull).mockReturnValue(null);
+    // A locked screen fires no blur: the window still reports focus.
+    hasFocusSpy = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    Reflect.deleteProperty(window, "electron");
+    __resetPowerPolicyStateForTests();
+  });
+
+  it("shows the summary on unlock for what was raised during the lock", () => {
+    const { result } = renderHook(() => useReEntrySummary());
+    addEntry({ type: "info", message: "Before the lock", context: { worktreeId: "wt-1" } });
+
+    now += 1000;
+    setScreenLocked(true);
+    now += 1000;
+    addEntry({ type: "error", message: "During the lock", context: { worktreeId: "wt-1" } });
+    now += 60_000;
+    setScreenLocked(false);
+
+    expect(result.current.visible).toBe(true);
+    expect(result.current.entries.map((e) => e.message)).toEqual(["During the lock"]);
+  });
+
+  it("shows nothing after a lock shorter than the blur threshold", () => {
+    const { result } = renderHook(() => useReEntrySummary());
+
+    setScreenLocked(true);
+    addEntry({ type: "error", message: "During the lock" });
+    now += 1000;
+    setScreenLocked(false);
+
+    expect(result.current.visible).toBe(false);
+  });
+
+  it("waits for focus when the screen unlocks into a window without it", () => {
+    const { result } = renderHook(() => useReEntrySummary());
+
+    setScreenLocked(true);
+    now += 1000;
+    addEntry({ type: "error", message: "During the lock" });
+    // The window blurs partway through the lock; the lock still started first.
+    now += 1000;
+    act(() => {
+      window.dispatchEvent(new Event("blur"));
+    });
+    now += 60_000;
+    hasFocusSpy.mockReturnValue(false);
+    setScreenLocked(false);
+    expect(result.current.visible).toBe(false);
+
+    now += 10_000;
+    hasFocusSpy.mockReturnValue(true);
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+
+    expect(result.current.visible).toBe(true);
+    expect(result.current.entries.map((e) => e.message)).toEqual(["During the lock"]);
+  });
+
+  it("waits for the unlock when focus lands on a locked screen", () => {
+    const { result } = renderHook(() => useReEntrySummary());
+
+    setScreenLocked(true);
+    now += 1000;
+    addEntry({ type: "error", message: "During the lock" });
+    now += 60_000;
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    expect(result.current.visible).toBe(false);
+
+    setScreenLocked(false);
+
+    expect(result.current.visible).toBe(true);
+  });
+
+  it("spends both the blur and the lock on one return", () => {
+    const { result } = renderHook(() => useReEntrySummary());
+
+    act(() => {
+      window.dispatchEvent(new Event("blur"));
+    });
+    setScreenLocked(true);
+    now += 1000;
+    addEntry({ type: "error", message: "While away" });
+    now += 60_000;
+    setScreenLocked(false);
+    expect(result.current.visible).toBe(true);
+    act(() => {
+      result.current.dismiss();
+    });
+
+    now += 1000;
+    addEntry({ type: "error", message: "After the return" });
+    now += 60_000;
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+
+    expect(result.current.visible).toBe(false);
+    const after = useNotificationHistoryStore
+      .getState()
+      .entries.find((e) => e.message === "After the return");
+    expect(after?.summarized).toBe(false);
+  });
+
+  it("counts from a blur that came before the lock", () => {
+    const { result } = renderHook(() => useReEntrySummary());
+
+    act(() => {
+      window.dispatchEvent(new Event("blur"));
+    });
+    now += 1000;
+    addEntry({ type: "error", message: "Between the blur and the lock" });
+    now += 1000;
+    setScreenLocked(true);
+    now += 60_000;
+    setScreenLocked(false);
+
+    expect(result.current.entries.map((e) => e.message)).toEqual(["Between the blur and the lock"]);
+  });
+
+  it("reads focus a frame after the focus event, where it is current", () => {
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => frames.push(cb));
+    const { result } = renderHook(() => useReEntrySummary());
+
+    setScreenLocked(true);
+    now += 1000;
+    addEntry({ type: "error", message: "During the lock" });
+    now += 60_000;
+    hasFocusSpy.mockReturnValue(false);
+    setScreenLocked(false);
+    act(() => {
+      for (const frame of frames.splice(0)) frame(0);
+    });
+    expect(result.current.visible).toBe(false);
+
+    // Stale inside the handler; current by the frame.
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    hasFocusSpy.mockReturnValue(true);
+    act(() => {
+      for (const frame of frames.splice(0)) frame(0);
+    });
+
+    expect(result.current.visible).toBe(true);
+  });
+
+  it("keeps the absence's start when a blur lands before the focus frame", () => {
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => frames.push(cb));
+    const { result } = renderHook(() => useReEntrySummary());
+
+    act(() => {
+      window.dispatchEvent(new Event("blur"));
+    });
+    now += 1000;
+    addEntry({ type: "error", message: "Early in the absence" });
+    now += 60_000;
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+      window.dispatchEvent(new Event("blur"));
+    });
+    frames.splice(0);
+    now += 60_000;
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    act(() => {
+      for (const frame of frames.splice(0)) frame(0);
+    });
+
+    expect(result.current.entries.map((e) => e.message)).toEqual(["Early in the absence"]);
+  });
+
+  it("keeps the earliest start when the screen locks again before the return", () => {
+    const { result } = renderHook(() => useReEntrySummary());
+
+    setScreenLocked(true);
+    now += 1000;
+    addEntry({ type: "error", message: "During the first lock" });
+    now += 60_000;
+    hasFocusSpy.mockReturnValue(false);
+    setScreenLocked(false);
+    setScreenLocked(true);
+    now += 60_000;
+    hasFocusSpy.mockReturnValue(true);
+    setScreenLocked(false);
+
+    expect(result.current.entries.map((e) => e.message)).toEqual(["During the first lock"]);
+  });
+
+  it("counts from mount when the view comes up on a locked screen", () => {
+    isScreenLocked();
+    setScreenLocked(true);
+    addEntry({ type: "error", message: "Before the view came up" });
+    now += 60_000;
+    const { result } = renderHook(() => useReEntrySummary());
+
+    now += 1000;
+    addEntry({ type: "error", message: "After the view came up" });
+    now += 60_000;
+    setScreenLocked(false);
+
+    expect(result.current.entries.map((e) => e.message)).toEqual(["After the view came up"]);
+  });
+
+  it("times a view that came up on a locked screen from its mount, not the lock", () => {
+    isScreenLocked();
+    setScreenLocked(true);
+    now += 60_000;
+    const { result } = renderHook(() => useReEntrySummary());
+
+    addEntry({ type: "error", message: "After the view came up" });
+    now += 1000;
+    setScreenLocked(false);
+
+    expect(result.current.visible).toBe(false);
   });
 });

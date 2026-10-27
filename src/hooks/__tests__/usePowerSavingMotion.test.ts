@@ -25,11 +25,8 @@ vi.mock("@/lib/viewCacheState", () => ({
 }));
 
 import { StrictMode } from "react";
-import {
-  loopingMotionMode,
-  resetPowerSavingMotionForTests,
-  usePowerSavingMotion,
-} from "../usePowerSavingMotion";
+import { loopingMotionMode, usePowerSavingMotion } from "../usePowerSavingMotion";
+import { __resetPowerPolicyStateForTests, isScreenLocked } from "@/lib/powerPolicyState";
 import { useResourceProfileStore } from "@/store/resourceProfileStore";
 
 const eventsOnMock = vi.fn();
@@ -106,7 +103,7 @@ describe("usePowerSavingMotion", () => {
     Reflect.deleteProperty(window, "electron");
     delete document.body.dataset.powerSaving;
     delete document.body.dataset.motionRate;
-    resetPowerSavingMotionForTests();
+    __resetPowerPolicyStateForTests();
   });
 
   it("keeps a policy replayed before mount across StrictMode's effect re-run", () => {
@@ -124,6 +121,24 @@ describe("usePowerSavingMotion", () => {
     renderHook(() => usePowerSavingMotion(), { wrapper: StrictMode });
 
     expect(motionRate()).toBe("reduced");
+  });
+
+  it("sees a replayed policy that another reader subscribed for first", () => {
+    let buffered: PowerPolicySnapshot | null = snapshot("deep");
+    eventsOnMock.mockImplementation((name: string, cb: (payload: PowerPolicySnapshot) => void) => {
+      if (name === "system:power-policy-changed" && buffered) {
+        const replay = buffered;
+        buffered = null;
+        cb(replay);
+      }
+      return vi.fn();
+    });
+
+    expect(isScreenLocked()).toBe(true);
+    renderHook(() => usePowerSavingMotion());
+
+    expect(powerSaving()).toBe("true");
+    expect(eventsOnMock).toHaveBeenCalledTimes(1);
   });
 
   it("follows main's power policy, including the way back", () => {
