@@ -174,7 +174,10 @@ describe("readWorktreeDiffNames", () => {
     const inSub = gitIn(sub);
     inSub("config", "user.email", "test@example.com");
     inSub("config", "user.name", "Test");
-    writeFileSync(path.join(sub, ".gitattributes"), "*.ts filter=spy diff=spy\n*.proc filter=proc\n");
+    writeFileSync(
+      path.join(sub, ".gitattributes"),
+      "*.ts filter=spy diff=spy\n*.proc filter=proc\n"
+    );
     writeFileSync(path.join(sub, "inner.ts"), "export const innerSubmoduleName = 1;\n");
     writeFileSync(path.join(sub, "data.proc"), "x\n");
     inSub("add", ".");
