@@ -11,6 +11,7 @@ import {
 import {
   assembleKeyterms,
   assembleTaggedKeyterms,
+  readPaneKeytermReads,
   screenDictationNames,
   formatKeytermPrompt,
   sanitizeOpenAIKeywords,
@@ -1188,5 +1189,66 @@ describe("assembleTaggedKeyterms", () => {
     expect(bySource("branch")).toContain("auth");
     expect(bySource("terminal")).toEqual(expect.arrayContaining(["myVariable", "handleRequest"]));
     expect(bySource("branch")).not.toContain("myVariable");
+  });
+});
+
+describe("keyterms from a pane read elsewhere", () => {
+  it("gives the same list from a host's reads as from reading the pane here", async () => {
+    const projectPath = await mkdtemp(join(tmpdir(), "voice-pane-reads-"));
+    try {
+      await writeFile(
+        join(projectPath, "package.json"),
+        JSON.stringify({ name: "@acme/quartzline-widgets" })
+      );
+      const lines = ["const myVariable = handleRequest();", "myVariable"];
+      const readHere = await assembleTaggedKeyterms({
+        customDictionary: ["zodSchema"],
+        projectPath,
+        terminalId: TARGET,
+        ptyClient: asPtyClient(makePtyClient(lines)),
+      });
+      const paneReads = await readPaneKeytermReads({
+        projectPath,
+        terminalId: TARGET,
+        ptyClient: asPtyClient(makePtyClient(lines)),
+      });
+      const readElsewhere = await assembleTaggedKeyterms({
+        customDictionary: ["zodSchema"],
+        paneReads: Promise.resolve(paneReads),
+      });
+      expect(readElsewhere).toEqual(readHere);
+      const bySource = (source: string) =>
+        readElsewhere.filter((t) => t.source === source).map((t) => t.term);
+      expect(bySource("repository")).toEqual(expect.arrayContaining(["quartzline", "widgets"]));
+      expect(bySource("branch")).toContain("auth");
+      expect(bySource("terminal")).toContain("myVariable");
+    } finally {
+      await rm(projectPath, { recursive: true, force: true });
+    }
+  });
+
+  it("reads nothing here once given a pane's reads", async () => {
+    const ptyClient = makePtyClient(["const myVariable = handleRequest();"]);
+    const tagged = await assembleTaggedKeyterms({
+      customDictionary: [],
+      terminalId: TARGET,
+      ptyClient: asPtyClient(ptyClient),
+      paneReads: { repoNames: [], branchName: "feature/remote-voice", terminalTerms: [] },
+    });
+    expect(tagged.map((t) => t.term)).toEqual(["feature", "remote", "voice"]);
+    expect(ptyClient.getTerminalSnapshot).not.toHaveBeenCalled();
+    expect(ptyClient.getTerminalAsync).not.toHaveBeenCalled();
+  });
+
+  it("screens a pane's terminal terms again before sending them", async () => {
+    const tagged = await assembleTaggedKeyterms({
+      customDictionary: [],
+      paneReads: {
+        repoNames: [],
+        branchName: null,
+        terminalTerms: ["sk-abcdefghijklmnopqrstuvwxyz0123456789", "echo", "useStore"],
+      },
+    });
+    expect(tagged).toEqual([{ term: "useStore", source: "terminal" }]);
   });
 });

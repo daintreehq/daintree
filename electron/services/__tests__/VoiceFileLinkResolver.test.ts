@@ -232,4 +232,56 @@ describe("VoiceFileLinkResolver", () => {
 
     expect(fetchMock).toHaveBeenCalled();
   });
+
+  describe("choosing among candidates a search elsewhere found", () => {
+    const { cwd: _cwd, ...request } = BASE_PAYLOAD;
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it("takes a confident match without searching here or asking the reranker", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      const resolver = new VoiceFileLinkResolver();
+      const result = await resolver.pick({
+        ...request,
+        candidates: ["src/components/HybridInputBar.tsx", "src/components/Input.tsx"],
+      });
+
+      expect(result).toBe("src/components/HybridInputBar.tsx");
+      expect(searchNaturalLanguageMock).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("asks the reranker to choose only among the candidates given", async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          output_text: JSON.stringify({ matched_file: "src/components/Input.tsx" }),
+        }),
+      } as unknown as Response);
+      vi.stubGlobal("fetch", fetchMock);
+
+      const resolver = new VoiceFileLinkResolver();
+      const result = await resolver.pick({
+        ...request,
+        description: "input component",
+        candidates: ["src/components/Bar.tsx", "src/components/Input.tsx"],
+      });
+
+      expect(result).toBe("src/components/Input.tsx");
+      const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string) as { input: string };
+      expect(body.input).toContain("src/components/Bar.tsx");
+      expect(searchNaturalLanguageMock).not.toHaveBeenCalled();
+    });
+
+    it("finds nothing among no candidates", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      const resolver = new VoiceFileLinkResolver();
+      await expect(resolver.pick({ ...request, candidates: [] })).resolves.toBeNull();
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
 });

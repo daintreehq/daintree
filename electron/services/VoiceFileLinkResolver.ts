@@ -12,6 +12,16 @@ const NL_CONFIDENCE_THRESHOLD = 0.67;
 const MIN_MATCHING_TOKENS = 2;
 const AI_RERANK_TIMEOUT_MS = 4000;
 const AI_RERANK_CACHE_PREFIX = "voice-file-rerank-v1";
+/** How many paths a search offers for one description. */
+export const FILE_LINK_CANDIDATE_LIMIT = 20;
+
+interface PickRequest {
+  description: string;
+  apiKey: string;
+  organizationId?: string;
+  projectId?: string;
+  signal?: AbortSignal;
+}
 
 const AI_RERANK_SCHEMA = {
   type: "object",
@@ -31,45 +41,55 @@ export class VoiceFileLinkResolver {
     projectId?: string;
     signal?: AbortSignal;
   }): Promise<string | null> {
-    const { cwd, description, apiKey, organizationId, projectId } = payload;
+    const { cwd, description } = payload;
     if (!cwd || !description.trim()) return null;
 
     try {
       const candidates = await fileSearchService.searchNaturalLanguage({
         cwd,
         description,
-        limit: 20,
+        limit: FILE_LINK_CANDIDATE_LIMIT,
       });
-
-      if (candidates.length === 0) {
-        logDebug(`${P} No candidates found`, { descriptionLength: description.length });
-        return null;
-      }
-
-      const tokens = this.extractTokens(description);
-      const topScore = this.computeScore(description, candidates[0]);
-      if (
-        topScore !== null &&
-        topScore >= NL_CONFIDENCE_THRESHOLD &&
-        tokens.length >= MIN_MATCHING_TOKENS
-      ) {
-        logDebug(`${P} High-confidence match`, { score: Number(topScore.toFixed(2)) });
-        return candidates[0];
-      }
-
-      return await this.aiRerank(
-        description,
-        candidates,
-        apiKey,
-        organizationId,
-        projectId,
-        payload.signal
-      );
+      return await this.pick({ ...payload, candidates });
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return null;
       logWarn(`${P} Resolution failed`, voiceErrorLogFields(error));
       return null;
     }
+  }
+
+  /**
+   * The path among `candidates`, best first as a search ranked them, that
+   * `description` names. For a search run elsewhere: a host searches its own
+   * files, and the choice is made here with this machine's credentials.
+   */
+  async pick(payload: PickRequest & { candidates: readonly string[] }): Promise<string | null> {
+    const { candidates, description, apiKey, organizationId, projectId } = payload;
+    if (!description.trim()) return null;
+    if (candidates.length === 0) {
+      logDebug(`${P} No candidates found`, { descriptionLength: description.length });
+      return null;
+    }
+
+    const tokens = this.extractTokens(description);
+    const topScore = this.computeScore(description, candidates[0]);
+    if (
+      topScore !== null &&
+      topScore >= NL_CONFIDENCE_THRESHOLD &&
+      tokens.length >= MIN_MATCHING_TOKENS
+    ) {
+      logDebug(`${P} High-confidence match`, { score: Number(topScore.toFixed(2)) });
+      return candidates[0];
+    }
+
+    return this.aiRerank(
+      description,
+      [...candidates],
+      apiKey,
+      organizationId,
+      projectId,
+      payload.signal
+    );
   }
 
   private extractTokens(description: string): string[] {

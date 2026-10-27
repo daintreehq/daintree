@@ -463,6 +463,24 @@ vi.mock("../deviceAnswer/hostInstall.js", () => ({
     return deviceAnswer.uninstallHost;
   }),
 }));
+const voicePane = vi.hoisted(() => ({
+  uninstallClient: vi.fn(),
+  uninstallHost: vi.fn(),
+  installVoicePaneHostsClient: vi.fn(),
+  installVoicePaneHost: vi.fn(),
+}));
+vi.mock("../voice/clientInstall.js", () => ({
+  installVoicePaneHostsClient: vi.fn((deps: unknown) => {
+    voicePane.installVoicePaneHostsClient(deps);
+    return voicePane.uninstallClient;
+  }),
+}));
+vi.mock("../voice/hostInstall.js", () => ({
+  installVoicePaneHost: vi.fn((server: unknown) => {
+    voicePane.installVoicePaneHost(server);
+    return voicePane.uninstallHost;
+  }),
+}));
 const control = vi.hoisted(() => {
   const uninstall = vi.fn();
   const uninstallLink = vi.fn();
@@ -1151,6 +1169,23 @@ describe("startRemoteHosts", () => {
 
     await stopRemoteHosts();
     expect(deviceAnswer.uninstallClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads a host's pane for dictation from start, and answers a Shell's only while listening", async () => {
+    await startRemoteHosts({ hostMode: false });
+    expect(voicePane.installVoicePaneHostsClient).toHaveBeenCalledWith({
+      sessionFor: m.client.sessionFor,
+    });
+    expect(voicePane.installVoicePaneHost).not.toHaveBeenCalled();
+
+    const hostMode = getRemoteService("hostMode")!;
+    await hostMode.startListening();
+    expect(voicePane.installVoicePaneHost).toHaveBeenCalledWith(m.server);
+    await hostMode.stopListening();
+    expect(voicePane.uninstallHost).toHaveBeenCalledTimes(1);
+
+    await stopRemoteHosts();
+    expect(voicePane.uninstallClient).toHaveBeenCalledTimes(1);
   });
 
   it("serves plugin assets for opened endpoints and moves them to a resumed link", async () => {

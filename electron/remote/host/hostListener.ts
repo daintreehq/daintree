@@ -46,6 +46,7 @@ import {
 import { composeLinkActivity } from "./linkActivity.js";
 import { installCanopyHost } from "../canopy/hostInstall.js";
 import { installDeviceAnswerHost } from "../deviceAnswer/hostInstall.js";
+import { installVoicePaneHost } from "../voice/hostInstall.js";
 import { installAssistantSenderHost } from "../assistant/hostSenders.js";
 import { installHostMcpRelay, relayCallerOf } from "../assistant/hostMcpRelay.js";
 import { getHelpAssistantSettings } from "../../ipc/handlers/helpAssistant.js";
@@ -187,6 +188,8 @@ async function buildHostListener(
   teardowns.push(installCanopyHost(server));
   // Devices paired with those Shells answering this host's agents, under its own lease.
   teardowns.push(installDeviceAnswerHost(server));
+  // A Shell dictating into one of this host's panes reads its context here (#14782).
+  teardowns.push(installVoicePaneHost(server));
   // The sender each Shell proves, for the tools this host runs for its
   // assistants, and what v0.44 Shells still read of their retired exchanges (#13496).
   teardowns.push(await installAssistantSenderHost(server));
