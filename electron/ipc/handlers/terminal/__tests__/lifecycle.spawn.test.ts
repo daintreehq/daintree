@@ -3313,10 +3313,13 @@ describe("terminal spawn handler - Windows PATH refresh", () => {
 
 describe("terminal spawn handler - no host agent ceiling (#14810)", () => {
   const GiB = 1024 * 1024 * 1024;
+  type FakeSpawnOptions = { launchAgentId?: string };
+  let live: Map<string, FakeSpawnOptions>;
   let ptyClient: {
     spawn: ReturnType<typeof vi.fn>;
     hasTerminal: ReturnType<typeof vi.fn>;
     write: ReturnType<typeof vi.fn>;
+    countLiveAgentTerminals: ReturnType<typeof vi.fn<(excludeId?: string) => number>>;
   };
 
   beforeEach(async () => {
@@ -3325,7 +3328,19 @@ describe("terminal spawn handler - no host agent ceiling (#14810)", () => {
     mockGetProjectById.mockReturnValue(null);
     mockGetProjectSettings.mockResolvedValue({});
     mockRevokePaneConfig.mockResolvedValue(undefined);
-    ptyClient = { spawn: vi.fn(), hasTerminal: vi.fn(() => false), write: vi.fn() };
+    live = new Map();
+    // Registers synchronously and counts the way PtyClient did when it capped a
+    // host, so a ceiling restored here refuses for the right reason.
+    ptyClient = {
+      spawn: vi.fn((id: string, options: FakeSpawnOptions) => live.set(id, options)),
+      hasTerminal: vi.fn(() => false),
+      write: vi.fn(),
+      countLiveAgentTerminals: vi.fn<(excludeId?: string) => number>((excludeId) => {
+        let count = 0;
+        for (const [id, options] of live) if (id !== excludeId && options.launchAgentId) count++;
+        return count;
+      }),
+    };
     // A small host serving Shells: the RAM that once capped it at two agents.
     const { default: os } = await import("os");
     vi.spyOn(os, "totalmem").mockReturnValue(8 * GiB);
@@ -3333,6 +3348,7 @@ describe("terminal spawn handler - no host agent ceiling (#14810)", () => {
       await import("../../../../remote/runtime.js");
     _resetRemoteServicesForTest();
     registerRemoteService("hostServer", {} as never);
+    registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
   });
 
   afterEach(async () => {
@@ -3341,8 +3357,11 @@ describe("terminal spawn handler - no host agent ceiling (#14810)", () => {
     _resetRemoteServicesForTest();
   });
 
+  function fillWithAgents(count: number): void {
+    for (let i = 0; i < count; i++) live.set(`agent-${i}`, { launchAgentId: "claude" });
+  }
+
   async function agentSpawn(id: string, extra: Record<string, unknown> = {}) {
-    registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
     const os = await import("os");
     return getSpawnHandler()(
       {} as Electron.IpcMainInvokeEvent,
@@ -3359,14 +3378,18 @@ describe("terminal spawn handler - no host agent ceiling (#14810)", () => {
   }
 
   it("starts every agent launch on a host with Host mode on, however many are live", async () => {
+    fillWithAgents(10);
+
     for (let i = 0; i < 20; i++) {
-      await expect(agentSpawn(`agent-${i}`)).resolves.toBe(`agent-${i}`);
+      await expect(agentSpawn(`new-${i}`)).resolves.toBe(`new-${i}`);
     }
 
     expect(ptyClient.spawn).toHaveBeenCalledTimes(20);
+    expect(ptyClient.countLiveAgentTerminals()).toBe(30);
   });
 
   it("starts launches that arrive at once from several Shells", async () => {
+    fillWithAgents(10);
     const ids = Array.from({ length: 12 }, (_, i) => `concurrent-${i}`);
 
     await expect(Promise.all(ids.map((id) => agentSpawn(id)))).resolves.toEqual(ids);
@@ -3374,9 +3397,9 @@ describe("terminal spawn handler - no host agent ceiling (#14810)", () => {
   });
 
   it("starts a restored agent past the old ceiling too", async () => {
-    for (let i = 0; i < 5; i++) await agentSpawn(`agent-${i}`);
+    fillWithAgents(10);
 
     await expect(agentSpawn("restored", { restore: true })).resolves.toBe("restored");
-    expect(ptyClient.spawn).toHaveBeenCalledTimes(6);
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
   });
 });

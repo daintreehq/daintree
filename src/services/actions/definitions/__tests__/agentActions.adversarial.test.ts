@@ -566,7 +566,8 @@ describe("agentActions adversarial", () => {
       ...result,
       hostAgentLimit: { host: "Studio", count: 12, limit: 10 },
     });
-    expect(parsed.success && parsed.data).not.toHaveProperty("hostAgentLimit");
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data).toEqual(result);
   });
 
   it("agent.launch reports a cwd outside the worktree it filed under (#13130)", async () => {

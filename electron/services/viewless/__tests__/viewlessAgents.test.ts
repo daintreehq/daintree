@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CHANNELS } from "../../../ipc/channels.js";
 import type { AgentSettings } from "../../../../shared/types/agentSettings.js";
 import { executeViewlessAction } from "../ViewlessActionExecutor.js";
@@ -252,6 +252,10 @@ describe("agent.launch with no frontend", () => {
     );
     const { deps, invoke } = launchDeps({ getPtyReader: () => makePty(records) });
     deps.hostPlatform = { ...deps.hostPlatform, totalMemoryBytes: 8 * 1024 ** 3 };
+    // The dependency the ceiling was read through, full: a check restored here
+    // would decline the launch on it.
+    const readHostAgentLimit = vi.fn(() => ({ host: "Studio", count: 12, limit: 2 }));
+    Object.assign(deps, { readHostAgentLimit });
 
     const result = await executeViewlessAction(
       request("agent.launch", { agentId: "claude" }),
@@ -260,6 +264,7 @@ describe("agent.launch with no frontend", () => {
 
     expect(result).toMatchObject({ ok: true, result: { launched: true, spawnStatus: null } });
     expect((result as { result: object }).result).not.toHaveProperty("hostAgentLimit");
+    expect(readHostAgentLimit).not.toHaveBeenCalled();
     expect(invoke.mock.calls.some(([, channel]) => channel === CHANNELS.TERMINAL_SPAWN)).toBe(true);
   });
 
