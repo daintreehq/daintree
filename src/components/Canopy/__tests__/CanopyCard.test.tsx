@@ -73,7 +73,13 @@ vi.mock("@/components/Terminal/HybridInputBar", async () => {
           dictationFocus();
         },
       }));
-      return <div data-testid="composer" />;
+      return (
+        <div data-testid="composer">
+          <div className="cm-editor">
+            <div tabIndex={-1} data-editor-content="" />
+          </div>
+        </div>
+      );
     },
   };
 });
@@ -87,7 +93,7 @@ beforeEach(() => {
   submit.mockClear();
   sendKey.mockClear();
   composerFocus.mockClear();
-  dictationFocus.mockClear();
+  dictationFocus.mockReset();
   composerProps.current = null;
   terminalProps.current = null;
 });
@@ -371,7 +377,8 @@ describe("CanopyCard", () => {
         hostScope?: string | null;
         reconnecting?: boolean;
         initialFocus?: CanopyPaneFocus;
-        onInitialFocusSettled?: () => void;
+        dictationRequest?: number;
+        onDictationSettled?: (request: number) => void;
       } = {}
     ) {
       const ref = createRef<CanopyCardHandle>();
@@ -403,20 +410,18 @@ describe("CanopyCard", () => {
       });
     });
 
+    const frame = () =>
+      act(async () => {
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+      });
+
     it("hands the keyboard to the reply when sent back to it, whatever has focus as it opens (#14778)", async () => {
       // The indicator that asked keeps focus as the pane mounts.
       const indicator = document.createElement("button");
       document.body.append(indicator);
       indicator.focus();
       const settled = vi.fn();
-      renderWithHandle(itemFor("question"), {
-        initialFocus: "dictation",
-        onInitialFocusSettled: settled,
-      });
-      const frame = () =>
-        act(async () => {
-          await new Promise((resolve) => requestAnimationFrame(resolve));
-        });
+      renderWithHandle(itemFor("question"), { dictationRequest: 1, onDictationSettled: settled });
       await composer();
       await frame();
       await frame();
@@ -426,11 +431,43 @@ describe("CanopyCard", () => {
       // The user pressing anything is theirs: the handoff stands down and settles.
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "j" }));
       expect(settled).toHaveBeenCalledTimes(1);
+      expect(settled).toHaveBeenCalledWith(1);
       const stopped = dictationFocus.mock.calls.length;
       await frame();
       await frame();
       expect(dictationFocus.mock.calls.length).toBe(stopped);
       indicator.remove();
+    });
+
+    it("takes a request on a pane already showing, and settles once the reply has the keyboard (#14778)", async () => {
+      dictationFocus.mockImplementation(() => {
+        document.querySelector<HTMLElement>("[data-editor-content]")?.focus();
+      });
+      const settled = vi.fn();
+      const item = itemFor("question");
+      const view = renderWithHandle(item, { onDictationSettled: settled });
+      await composer();
+      await frame();
+      await frame();
+      expect(dictationFocus).not.toHaveBeenCalled();
+
+      view.rerender(
+        <CanopyCard
+          item={item}
+          {...PROPS}
+          {...handlers()}
+          dictationRequest={2}
+          onDictationSettled={settled}
+        />
+      );
+      await frame();
+      await frame();
+      expect(document.activeElement?.closest(".cm-editor")).not.toBeNull();
+      expect(settled).toHaveBeenCalledTimes(1);
+      expect(settled).toHaveBeenCalledWith(2);
+      const landed = dictationFocus.mock.calls.length;
+      await frame();
+      expect(dictationFocus.mock.calls.length).toBe(landed);
     });
 
     it("names no terminal for main to read when another project's view has the run", async () => {

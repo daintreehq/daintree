@@ -281,10 +281,15 @@ describe("going back to a dictated reply (#14778)", () => {
     useCanopyStore.getState().setHostId("studio");
     useCanopyStore.getState().revealReply({ runId: "6.studio.run-1", hostScope: ALL_HOSTS_ID });
     expect(useCanopyStore.getState().hostId).toBe(ALL_HOSTS_ID);
+    expect(useCanopyStore.getState().replyReveal).toMatchObject({
+      runId: "6.studio.run-1",
+      hostScope: ALL_HOSTS_ID,
+    });
   });
 
   it("wins over a remembered place and drops another assistant's narrowing when it opens", () => {
     useCanopyStore.setState({
+      hostId: "studio",
       resume: { at: Date.now(), hostId: "studio", query: "lint", runId: "run-9", order: [] },
       workOf: { assistantId: "a-1", name: "Planner" },
     });
@@ -293,6 +298,25 @@ describe("going back to a dictated reply (#14778)", () => {
     expect(state.resume).toBeNull();
     expect(state.workOf).toBeNull();
     expect(state.hostId).toBeNull();
+  });
+
+  it("keeps the open panel's narrowing to one assistant's work", () => {
+    const workOf = { assistantId: "a-1", name: "Planner" };
+    useCanopyStore.setState({ isOpen: true, workOf });
+    useCanopyStore.getState().revealReply({ runId: "run-1", hostScope: null });
+    expect(useCanopyStore.getState().workOf).toBe(workOf);
+  });
+
+  it("is dropped by every way the panel closes", () => {
+    const ask = () => useCanopyStore.getState().revealReply({ runId: "run-1", hostScope: null });
+    ask();
+    useCanopyStore.getState().toggle();
+    expect(useCanopyStore.getState().replyReveal).toBeNull();
+    ask();
+    useCanopyStore
+      .getState()
+      .closeForTerminal({ at: Date.now(), hostId: null, query: "", runId: "run-1", order: [] });
+    expect(useCanopyStore.getState().replyReveal).toBeNull();
   });
 
   it("does nothing while Canopy is hidden", () => {

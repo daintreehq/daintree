@@ -124,11 +124,8 @@ export interface CanopyCardHandle {
   dictation: () => CanopyReplyDictation;
 }
 
-/**
- * Where the keyboard lands in the pane when it opens: what the user was in on
- * the agent before, or the reply a dictation is writing into.
- */
-export type CanopyPaneFocus = "composer" | "terminal" | "dictation" | null;
+/** Where the keyboard lands in the pane when it opens: what the user was in on the agent before. */
+export type CanopyPaneFocus = "composer" | "terminal" | null;
 
 interface CanopyCardProps extends CanopyCardHandlers {
   item: CanopyItem;
@@ -140,6 +137,14 @@ interface CanopyCardProps extends CanopyCardHandlers {
   initialFocus?: CanopyPaneFocus;
   /** The handoff above landed, gave up, or gave way to the user. */
   onInitialFocusSettled?: () => void;
+  /**
+   * The recording indicator sent the keyboard back to this reply, which a
+   * dictation is writing into (#14778): each new number is a new request,
+   * whether the pane opens for it or is already showing.
+   */
+  dictationRequest?: number;
+  /** That handoff landed, gave up, or gave way to the user. */
+  onDictationSettled?: (request: number) => void;
   /**
    * Trash asked for from the row's menu: armed as its first press arms it, for
    * the pane's button or ⌘⌫ to confirm. Each new number is a new request.
@@ -254,6 +259,8 @@ export function CanopyCard({
   onLeavePane,
   initialFocus = null,
   onInitialFocusSettled,
+  dictationRequest,
+  onDictationSettled,
   armTrash,
   renameRequest,
   otherHostId,
@@ -317,7 +324,7 @@ export function CanopyCard({
   });
   useEffect(() => {
     const initialFocus = initialFocusRef.current;
-    if (initialFocus === null || initialFocus === "dictation") return;
+    if (initialFocus === null) return;
     let frame = 0;
     const settle = () => onSettledRef.current?.();
     const attempt = (tries: number) => {
@@ -616,17 +623,19 @@ export function CanopyCard({
   };
   useImperativeHandle(ref, () => ({ handleKey, focusComposer: () => focusComposer(), dictation }));
 
-  // Sent back here by the recording indicator (#14778): the keyboard goes to
-  // the reply, from the indicator or wherever the opening panel put it, and
-  // stays with the user once they press anything themselves.
+  // Sent back here by the recording indicator: the keyboard goes to the
+  // reply, from the indicator or wherever the opening panel put it, and stays
+  // with the user once they press anything themselves.
   const focusComposerRef = useRef(focusComposer);
+  const onDictationSettledRef = useRef(onDictationSettled);
   useEffect(() => {
     focusComposerRef.current = focusComposer;
+    onDictationSettledRef.current = onDictationSettled;
   });
   useEffect(() => {
-    if (initialFocusRef.current !== "dictation") return;
-    focusComposerRef.current(true, () => onSettledRef.current?.());
-  }, []);
+    if (dictationRequest === undefined) return;
+    focusComposerRef.current(true, () => onDictationSettledRef.current?.(dictationRequest));
+  }, [dictationRequest]);
 
   const agentId = isBuiltInAgentId(run.agentId) ? run.agentId : undefined;
   // The grid's chip rules: nothing while idle, and a settled agent keeps its

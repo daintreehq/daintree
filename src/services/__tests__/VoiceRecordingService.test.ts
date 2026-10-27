@@ -1845,14 +1845,21 @@ describe("VoiceRecordingService — Canopy's reply box (#14777)", () => {
     unregister();
     const unregisterOther = registry.registerCanopyReplyDictation(() => ({
       ok: true,
-      target: { ...REPLY, panelId: "isolated-composer:run-2" },
+      target: {
+        ...REPLY,
+        panelId: "isolated-composer:run-2",
+        terminalId: "run-2",
+        canopyRow: { runId: "run-2", hostScope: null },
+      },
       focus,
     }));
     await expect(voiceRecordingService.focusActiveTarget()).resolves.toBe(true);
     expect(canopy.revealReply).toHaveBeenLastCalledWith(REPLY.canopyRow);
 
-    // Canopy closed: the same, and the selected row it last had isn't asked.
+    // Canopy closed: the same, even with the row's own reply still answering
+    // from the panel on its way out.
     unregisterOther();
+    registry.registerCanopyReplyDictation(() => ({ ok: true, target: REPLY, focus }));
     canopy.isOpen = false;
     await expect(voiceRecordingService.focusActiveTarget()).resolves.toBe(true);
     expect(canopy.revealReply).toHaveBeenCalledTimes(2);

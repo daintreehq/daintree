@@ -448,6 +448,20 @@ describe("VoiceRecordingService — spoken send to a Canopy reply off screen (#1
     expect(useVoiceRecordingStore.getState().activeTarget?.panelId).toBe(REPLY.panelId);
   });
 
+  it("sends nothing while Canopy shows another row's reply instead", async () => {
+    const { voiceRecordingService, useVoiceRecordingStore, stop } = await setupReply(true);
+    const otherRow = vi.fn();
+    voiceRecordingService.onSpokenSend("isolated-composer:run-2", undefined, otherRow);
+    draftState.draft = "Fix the";
+
+    complete("login bug", "item-a", true);
+
+    expect(otherRow).not.toHaveBeenCalled();
+    expect(stop).not.toHaveBeenCalled();
+    expect(draftState.draft).toBe("Fix the login bug");
+    expect(useVoiceRecordingStore.getState().status).toBe("recording");
+  });
+
   it("sends from the reply while it is on screen", async () => {
     const { voiceRecordingService, stop } = await setupReply(true);
     const handler = vi.fn();

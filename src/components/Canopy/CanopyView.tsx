@@ -737,6 +737,8 @@ function CanopyInbox({
     activeIndex,
     focusedItem,
     paneFocus,
+    replyFocus,
+    settleReplyFocus,
     assistantRefusal,
     selectedAssistant,
     selectNow,
@@ -1854,6 +1856,10 @@ function CanopyInbox({
                         renameAsk?.runId === focusedItem.runId ? renameAsk.request : undefined
                       }
                       onInitialFocusSettled={() => settlePaneFocus(focusedItem.runId)}
+                      dictationRequest={
+                        replyFocus?.runId === focusedItem.runId ? replyFocus.id : undefined
+                      }
+                      onDictationSettled={settleReplyFocus}
                       otherHostId={(everyHost ? focusedHostId : hostId) ?? undefined}
                       hostScope={hostId}
                       aside={setAside}

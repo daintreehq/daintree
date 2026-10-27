@@ -268,10 +268,12 @@ async function frames(count = 2) {
   }
 }
 
-/** Long enough for the dialog's exit to unmount what it held. */
+/** Longer than the dialog's exit, after which what it held unmounts. */
+const DIALOG_EXIT_SETTLE_MS = 400;
+
 async function settle() {
   await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    await new Promise((resolve) => setTimeout(resolve, DIALOG_EXIT_SETTLE_MS));
   });
 }
 
@@ -345,6 +347,24 @@ describe("CanopyView — a reply's dictation outlives its screen (#14778)", () =
     expect(useCanopyStore.getState().replyReveal).toBeNull();
   });
 
+  it("hands the keyboard back to the row the panel opens on by itself", async () => {
+    render(<CanopyView />);
+    await frames();
+    const first = selectedRun()!;
+    const target = await replyTarget(first);
+    startDictation(target);
+    act(() => useCanopyStore.getState().close());
+    await settle();
+
+    await goBackTo(target);
+
+    // Opened on the same row its landing would have picked: the pane is the one
+    // already showing, and it still takes the request.
+    expect(selectedRun()).toBe(first);
+    await vi.waitFor(() => expect(dictationFocus).toHaveBeenCalledWith(first));
+    expect(useCanopyStore.getState().replyReveal).toBeNull();
+  });
+
   it("leaves the session with its row when another is selected, marks that row, and goes back to it", async () => {
     render(<CanopyView />);
     await frames();
@@ -360,17 +380,21 @@ describe("CanopyView — a reply's dictation outlives its screen (#14778)", () =
     expect(useVoiceRecordingStore.getState().activeTarget).toBe(target);
     expect(row("asking").querySelector("[data-canopy-dictating]")).not.toBeNull();
     expect(row("working").querySelector("[data-canopy-dictating]")).toBeNull();
-    expect(row("asking").getAttribute("aria-describedby")).toBeTruthy();
-    expect(document.getElementById("canopy-card-asking-meta")?.textContent).toContain(
-      "dictating a reply"
-    );
+    const description = row("asking")
+      .getAttribute("aria-describedby")!
+      .split(" ")
+      .map((id) => document.getElementById(id)?.textContent ?? "")
+      .join(" ");
+    expect(description).toContain("dictating a reply");
 
     await goBackTo(target);
     expect(selectedRun()).toBe("asking");
     await vi.waitFor(() => expect(dictationFocus).toHaveBeenCalledWith("asking"));
 
     // Stopped, the mark goes with the session.
-    act(() => useVoiceRecordingStore.setState({ status: "idle", activeTarget: null }));
+    act(() => {
+      useVoiceRecordingStore.setState({ status: "idle", activeTarget: null });
+    });
     expect(row("asking").querySelector("[data-canopy-dictating]")).toBeNull();
   });
 
@@ -404,7 +428,12 @@ describe("CanopyView — a reply's dictation outlives its screen (#14778)", () =
     expect(announce).toHaveBeenCalledWith(expect.stringContaining("isn't in Canopy"), "polite");
     expect(useCanopyStore.getState().isOpen).toBe(true);
     expect(useCanopyStore.getState().replyReveal).toBeNull();
-    expect(selectedRun()).not.toBe("asking");
+    // The opening lands as it would have: the list's top row, keyboard in the search.
+    await frames();
+    expect(selectedRun()).toBe("waiting");
+    expect(document.activeElement).toBe(
+      document.querySelector("[data-testid=canopy-dialog] input[role=combobox]")
+    );
     expect(dictationFocus).not.toHaveBeenCalled();
     // The dictation itself is untouched: its words stay in its draft.
     expect(useVoiceRecordingStore.getState().activeTarget).toBe(target);

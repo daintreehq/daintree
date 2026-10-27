@@ -89,6 +89,9 @@ export function useCanopyInboxFocus({
   const [paneFocus, setPaneFocus] = useState<{ runId: string; focus: CanopyPaneFocus } | null>(
     null
   );
+  // The reply a dictation writes into, its keyboard asked for by the recording
+  // indicator: by request, since its pane may already be showing.
+  const [replyFocus, setReplyFocus] = useState<{ runId: string; id: number } | null>(null);
   const focusedIndex = visible.findIndex((item) => item.runId === focusedId);
   const activeIndex = focusedIndex === -1 ? 0 : focusedIndex;
   // Nothing is open until a run is chosen or landed on; before that the pane
@@ -141,6 +144,7 @@ export function useCanopyInboxFocus({
   // The run selected, its row brought into view, the keyboard left where it is.
   const selectNow = useCallback((runId: string) => {
     setPaneFocus(null);
+    setReplyFocus(null);
     setAssistantId(null);
     setFocusedId(runId);
     document.getElementById(canopyCardDomId(runId))?.scrollIntoView({ block: "nearest" });
@@ -148,6 +152,7 @@ export function useCanopyInboxFocus({
 
   const focusCardNow = useCallback((runId: string) => {
     setPaneFocus(null);
+    setReplyFocus(null);
     setAssistantId(null);
     setFocusedId(runId);
     const element = document.getElementById(canopyCardDomId(runId));
@@ -243,6 +248,7 @@ export function useCanopyInboxFocus({
     if (!isOpen) {
       landedRef.current = false;
       setFocusedId(null);
+      setReplyFocus(null);
       setQuery("");
       return;
     }
@@ -305,7 +311,8 @@ export function useCanopyInboxFocus({
     // The keyboard is on its way into the new run's pane (⌘↑/⌘↓, or Send):
     // the old pane unmounting drops it on the page for a moment, which is not
     // a run leaving.
-    if (paneFocus?.runId === focusedId && items.some((item) => item.runId === focusedId)) return;
+    const handingOff = paneFocus?.runId === focusedId || replyFocus?.runId === focusedId;
+    if (handingOff && items.some((item) => item.runId === focusedId)) return;
     const active = document.activeElement;
     if (active !== null && active !== document.body && active.isConnected) return;
     if (visible.length === 0) {
@@ -319,7 +326,7 @@ export function useCanopyInboxFocus({
         ? visible[focusedIndex]!
         : visible[Math.min(lastIndexRef.current, visible.length - 1)]!;
     focusCardNow(target.runId);
-  }, [focusedIndex, focusedId, visible, focusCardNow, paneFocus, items]);
+  }, [focusedIndex, focusedId, visible, focusCardNow, paneFocus, replyFocus, items]);
 
   // A new search selects its top match, as opening selects the top run; a
   // match leaving under the same search gives its place to the next.
@@ -377,6 +384,7 @@ export function useCanopyInboxFocus({
   // terminal — rather than onto its row.
   const openPaneNow = useCallback((runId: string, focus: CanopyPaneFocus) => {
     setPaneFocus({ runId, focus });
+    setReplyFocus(null);
     setFocusedId(runId);
     document.getElementById(canopyCardDomId(runId))?.scrollIntoView({ block: "nearest" });
   }, []);
@@ -393,6 +401,7 @@ export function useCanopyInboxFocus({
     if (!wasOpen) return;
     setFocusedId(null);
     setPaneFocus(null);
+    setReplyFocus(null);
   }, [hostId, isOpen]);
 
   // The recording indicator asked for the row a dictation writes its reply
@@ -407,14 +416,7 @@ export function useCanopyInboxFocus({
       settle();
       return;
     }
-    if (!loaded) {
-      // A host that never answers doesn't hold the opening forever.
-      const timer = setTimeout(() => {
-        settle();
-        reportReplyHidden("isn't in Canopy");
-      }, REPLY_REVEAL_WAIT_MS);
-      return () => clearTimeout(timer);
-    }
+    if (!loaded) return;
     settle();
     const item = items.find((entry) => entry.runId === replyReveal.runId);
     if (item === undefined) {
@@ -430,10 +432,25 @@ export function useCanopyInboxFocus({
     landedRef.current = true;
     restoreRef.current = null;
     setAssistantId(null);
-    setPaneFocus({ runId: item.runId, focus: "dictation" });
+    setPaneFocus(null);
+    setReplyFocus({ runId: item.runId, id: replyReveal.id });
     setFocusedId(item.runId);
     document.getElementById(canopyCardDomId(item.runId))?.scrollIntoView({ block: "nearest" });
   }, [isOpen, replyReveal, hostId, loaded, items, workersShown, inWork, searching, visible]);
+  // A host that never answers doesn't hold the opening forever: each request
+  // waits so long from when it is first kept waiting, whatever else updates.
+  useEffect(() => {
+    if (!isOpen || replyReveal === null || loaded) return;
+    const timer = setTimeout(() => {
+      useCanopyStore.getState().settleReplyReveal(replyReveal.id);
+      reportReplyHidden("isn't in Canopy");
+    }, REPLY_REVEAL_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [isOpen, replyReveal, loaded]);
+  const settleReplyFocus = useCallback(
+    (id: number) => setReplyFocus((current) => (current?.id === id ? null : current)),
+    []
+  );
 
   /**
    * Where the cursor goes once a run is dealt with — archived, answered,
@@ -472,6 +489,7 @@ export function useCanopyInboxFocus({
   // keyboard on the row rather than carried into the pane.
   const selectRow = (runId: string) => {
     setPaneFocus(null);
+    setReplyFocus(null);
     setAssistantId(null);
     setFocusedId(runId);
   };
@@ -565,6 +583,8 @@ export function useCanopyInboxFocus({
     activeIndex,
     focusedItem,
     paneFocus,
+    replyFocus,
+    settleReplyFocus,
     assistantRefusal,
     selectedAssistant,
     selectNow,
