@@ -1,10 +1,13 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   buildCorrectionSystemPrompt,
   buildRewriteSystemPrompt,
   CORE_CORRECTION_PROMPT,
   correctionInstructionsFor,
+  LITERAL_CORRECTION_INSTRUCTIONS,
   LITERAL_CORRECTION_PROMPT,
+  type CorrectionPromptContext,
 } from "../voiceCorrection.js";
 
 describe("CORE_CORRECTION_PROMPT", () => {
@@ -533,5 +536,69 @@ describe("buildCorrectionSystemPrompt worktree and repository names", () => {
     const prompt = buildRewriteSystemPrompt({ ...shared, worktree, repositoryNames });
     expect(prompt).toBe(buildRewriteSystemPrompt(shared));
     expect(prompt).toContain("CURRENT PROJECT:");
+  });
+});
+
+describe("buildCorrectionSystemPrompt contextNames", () => {
+  // Every block a cleanup prompt can carry, so a change to any of them shows.
+  const context: CorrectionPromptContext = {
+    target: {
+      agentName: "Claude Code",
+      isAssistant: false,
+      commands: [
+        { token: "/review", description: "Request code review of pending changes" },
+        { token: "/compact", description: "" },
+      ],
+    },
+    projectName: "Daintree",
+    projectPath: "/Users/dev/Projects/daintree",
+    customDictionary: ["Terra", "Zustand"],
+    knownNames: ["main-host", "feature/voice"],
+    repositoryNames: ["daintree", "smol-toml"],
+    worktree: { name: "feature/issue-1-voice", titles: ["Let cleanup fix names"] },
+    heardAs: [{ heard: "tara", term: "Terra" }],
+    customInstructions: "Prefer British spelling.",
+    language: "en",
+  };
+  const digest = (text: string) => createHash("sha256").update(text).digest("hex");
+  const blocks = (prompt: string) => prompt.split("\n\n");
+
+  // #14873 moved Terra's context blocks only: Luna's rules were measured on these.
+  it("sends Luna and the rewrite the prompts they were sent before #14873, byte for byte", () => {
+    expect(
+      digest(buildCorrectionSystemPrompt(context, correctionInstructionsFor("gpt-6-luna")))
+    ).toBe("bb9e92beeb66b3e83e91b70d6199c0d7dcb3c9d24e9fd13489c274bcce50fd77");
+    expect(digest(buildRewriteSystemPrompt(context))).toBe(
+      "5612a37b1528b5662a89dd220133a5f8895885c6422f4887fe6c7b7d48e6c38a"
+    );
+  });
+
+  it("rewrites only the project, dictionary and workspace blocks when names are spellings", () => {
+    const tiebreak = blocks(
+      buildCorrectionSystemPrompt(context, { ...LITERAL_CORRECTION_INSTRUCTIONS, contextNames: "tiebreak" })
+    );
+    const spelling = blocks(
+      buildCorrectionSystemPrompt(context, { ...LITERAL_CORRECTION_INSTRUCTIONS, contextNames: "spelling" })
+    );
+    expect(spelling).toHaveLength(tiebreak.length);
+    const changed = tiebreak.flatMap((block, index) =>
+      block === spelling[index] ? [] : [block.split(/[\n(]/)[0]!.trim()]
+    );
+    expect(changed).toEqual([
+      "CURRENT PROJECT:",
+      "PREFERRED TERMS",
+      expect.stringMatching(/^Use the worktree and repository names above/),
+    ]);
+    // Each still says what the names it spells are: words to spell, never words to add.
+    const evidence = spelling.find((block) => block.startsWith("The worktree and repository names"));
+    expect(evidence).toMatch(/never a source of words, names or facts to add/);
+  });
+
+  it("reads the same either way for a prompt with none of those blocks", () => {
+    const { target, knownNames, heardAs, language } = context;
+    const bare = { target, knownNames, heardAs, language };
+    expect(
+      buildCorrectionSystemPrompt(bare, { ...LITERAL_CORRECTION_INSTRUCTIONS, contextNames: "spelling" })
+    ).toBe(buildCorrectionSystemPrompt(bare, LITERAL_CORRECTION_INSTRUCTIONS));
   });
 });
