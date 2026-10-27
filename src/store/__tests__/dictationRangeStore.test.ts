@@ -1027,3 +1027,96 @@ describe("expected draft changes (#14634)", () => {
     expect(only().utterances[0]!.range).toEqual({ from: 4, to: 7, edited: false });
   });
 });
+
+describe("draft writes that touch several places (#14781)", () => {
+  const other = { sessionId: "session-2", panelId: PANEL, projectId: PROJECT };
+
+  const third = { sessionId: "session-3", panelId: PANEL, projectId: PROJECT };
+  const anchorOf = (sessionTarget: typeof other) =>
+    useDictationRangeStore.getState().getAnchor(sessionTarget);
+
+  it("moves records and anchors between and after two declared changes by each in turn", () => {
+    setDraft("aa bb cc dd");
+    const store = useDictationRangeStore.getState();
+    store.recordUtterance(other, { insertion: { from: 3, to: 5 }, words: { from: 3, to: 5 } });
+    store.recordUtterance(third, { insertion: { from: 9, to: 11 }, words: { from: 9, to: 11 } });
+    store.setAnchor(other, { from: 5, to: 5 });
+    store.setAnchor(third, { from: 11, to: 11 });
+
+    // The first change grows past where the second starts, so they only land
+    // right taken last first, each where it was placed.
+    store.expectDraftChange(PANEL, PROJECT, "aa bb cc dd", "AAAAAA bb C dd", [
+      { from: 0, to: 2, insert: "AAAAAA" },
+      { from: 6, to: 8, insert: "C" },
+    ]);
+    setDraft("AAAAAA bb C dd");
+
+    const [between, after] = records();
+    expect(between!.utterances[0]!.range).toEqual({ from: 7, to: 9, edited: false });
+    expect(after!.utterances[0]!.range).toEqual({ from: 12, to: 14, edited: false });
+    expect(anchorOf(other)).toEqual({ from: 9, to: 9, edited: false });
+    expect(anchorOf(third)).toEqual({ from: 14, to: 14, edited: false });
+  });
+
+  it("keeps the unsure words of an utterance between two declared changes", () => {
+    setDraft("aa bb cc dd");
+    useDictationRangeStore.getState().recordUtterance(other, {
+      insertion: { from: 3, to: 5 },
+      words: { from: 3, to: 5 },
+      uncertain: [{ from: 0, to: 2 }],
+    });
+
+    useDictationRangeStore
+      .getState()
+      .expectDraftChange(PANEL, PROJECT, "aa bb cc dd", "AAAAAA bb C dd", [
+        { from: 0, to: 2, insert: "AAAAAA" },
+        { from: 6, to: 8, insert: "C" },
+      ]);
+    setDraft("AAAAAA bb C dd");
+
+    const [utterance] = only().utterances;
+    expect(utterance!.range).toEqual({ from: 7, to: 9, edited: false });
+    expect(utterance!.uncertain).toEqual([{ from: 0, to: 2 }]);
+  });
+
+  it("takes a replacement ahead of an insertion at its start", () => {
+    setDraft("helloworld");
+    const store = useDictationRangeStore.getState();
+    store.setAnchor(other, { from: 7, to: 7 });
+
+    store.expectDraftChange(PANEL, PROJECT, "helloworld", "hello!World.", [
+      { from: 5, to: 5, insert: "!" },
+      { from: 5, to: 10, insert: "World." },
+    ]);
+    setDraft("hello!World.");
+
+    expect(anchorOf(other)).toEqual({ from: 12, to: 12, edited: false });
+  });
+
+  it("still flags the words the diff of an undeclared write runs across, and drops their unsure words", () => {
+    setDraft("aa bb cc");
+    useDictationRangeStore.getState().recordUtterance(other, {
+      insertion: { from: 3, to: 5 },
+      words: { from: 3, to: 5 },
+      uncertain: [{ from: 0, to: 2 }],
+    });
+    setDraft("AAA bb C");
+
+    expect(only().utterances[0]!.range.edited).toBe(true);
+    expect(only().utterances[0]!.uncertain).toBeUndefined();
+  });
+
+  it("never shows a subscriber anchors that moved with ranges that haven't", () => {
+    dictate("the parsr");
+    useDictationRangeStore.getState().setAnchor(other, { from: 9, to: 9 });
+    const seen: string[] = [];
+    const stop = useDictationRangeStore.subscribe(() =>
+      seen.push(textOf(only().utterances[0]!.range))
+    );
+
+    edit(0, 0, "note: ");
+    stop();
+
+    expect(seen).toEqual(["the parsr"]);
+  });
+});

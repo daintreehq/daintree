@@ -126,14 +126,13 @@ import { useEditorFactory } from "./hooks/useEditorFactory";
 import {
   clearComposerHistory,
   createComboboxAttributes,
-  minimalDocChange,
   captureRewriteSelection,
   outsideDraftWrite,
   selectionAfterOutsideWrite,
   readImageChipPaths,
   replayLandedCorrection,
 } from "./inputEditorExtensions";
-import { takeLandedCorrection } from "@/services/voiceCorrectionLanding";
+import { outsideWriteChange, takeLandedCorrection } from "@/services/voiceCorrectionLanding";
 import { takeScratchLanded } from "@/services/voiceScratchCommand";
 import { registerComposerSelectionSource } from "@/services/voiceRewriteSelection";
 import { readComposerSelection, takePendingComposerSelection } from "@/lib/composerCaret";
@@ -967,9 +966,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       if (!view) return;
       const landed = takeLandedCorrection(terminalId, projectId, draft);
       const scratched = takeScratchLanded(terminalId, projectId, draft);
-      // Only the span that differs is replaced, so an append leaves the
-      // image and file chips already in the draft attached.
-      const change = minimalDocChange(view.state.doc.toString(), draft);
+      // Only what differs is replaced, so an append leaves the image and
+      // file chips already in the draft attached.
+      const change = outsideWriteChange(view.state.doc.toString(), draft, landed);
       if (change !== null) {
         setValue(draft);
         lastEmittedValueRef.current = draft;

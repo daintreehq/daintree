@@ -136,14 +136,16 @@ interface DictationRangeState {
   /**
    * Tells the next mapping of this draft what the write it's about to see
    * actually changed. A diff of the two strings can't say which of two
-   * identical runs was written, so a writer that knows passes it here.
+   * identical runs was written, or that a write touching two places left the
+   * text between them alone, so a writer that knows passes it here. Several
+   * changes are each placed in `before` and must not overlap.
    */
   expectDraftChange: (
     panelId: string,
     projectId: string | undefined,
     before: string,
     after: string,
-    change: TextChange
+    change: TextChange | readonly TextChange[]
   ) => void;
   /**
    * Writes `text` over a passage of the session's own words, as the session:
@@ -347,19 +349,26 @@ function withInsertion(
 
 // One-shot and keyed by draft: a write that never lands as expected (another
 // write got there first) is simply diffed, as every other write is.
-const expectedChanges = new Map<string, { before: string; after: string; change: TextChange }>();
+const expectedChanges = new Map<
+  string,
+  { before: string; after: string; changes: readonly TextChange[] }
+>();
 
-/** The change, and whether its writer said where it was rather than it being inferred. */
-function changeFor(
+/**
+ * The write's changes, last in the draft first, so each still lands where it
+ * was placed, and whether its writer said where they were rather than them
+ * being inferred.
+ */
+function changesFor(
   key: string,
   before: string,
   after: string
-): { change: TextChange; known: boolean } {
+): { changes: readonly TextChange[]; known: boolean } {
   const expected = expectedChanges.get(key);
   if (expected?.before === before && expected.after === after) {
-    return { change: expected.change, known: true };
+    return { changes: expected.changes, known: true };
   }
-  return { change: minimalDocChange(before, after)!, known: false };
+  return { changes: [minimalDocChange(before, after)!], known: false };
 }
 
 function mapAnchors(
@@ -377,10 +386,10 @@ function mapAnchors(
       delete nextAnchors[key];
       continue;
     }
-    const { change } = changeFor(key, before, after);
+    const { changes } = changesFor(key, before, after);
     nextAnchors[key] = list.map((anchor) => ({
       ...anchor,
-      range: mapTextRange(anchor.range, change),
+      range: changes.reduce(mapTextRange, anchor.range),
     }));
   }
   return nextAnchors;
@@ -465,7 +474,6 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
   mapDrafts: (previous, next) => {
     const { drafts, anchors } = get();
     const nextAnchors = mapAnchors(anchors, previous, next);
-    if (nextAnchors) set({ anchors: nextAnchors });
     let nextDrafts: Record<string, DictationRecord[]> | null = null;
     for (const [key, records] of Object.entries(drafts)) {
       const after = next.get(key) ?? "";
@@ -476,17 +484,28 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
         delete nextDrafts[key];
         continue;
       }
-      const { change, known } = changeFor(key, before, after);
+      const { changes, known } = changesFor(key, before, after);
       nextDrafts[key] = records.map((record) =>
-        mapRecord(known ? record : forgetUncertain(record), change)
+        changes.reduce(mapRecord, known ? record : forgetUncertain(record))
       );
     }
     expectedChanges.clear();
-    if (nextDrafts) set({ drafts: nextDrafts });
+    // One update: a subscriber woken between two would read ranges that
+    // haven't moved yet against the draft that has.
+    if (nextAnchors || nextDrafts) {
+      set({
+        ...(nextAnchors ? { anchors: nextAnchors } : {}),
+        ...(nextDrafts ? { drafts: nextDrafts } : {}),
+      });
+    }
   },
 
   expectDraftChange: (panelId, projectId, before, after, change) => {
-    expectedChanges.set(makeDraftKey(panelId, projectId), { before, after, change });
+    // A replacement goes ahead of an insertion at its start: the insertion is
+    // the earlier of the two in the draft.
+    const changes =
+      "insert" in change ? [change] : [...change].sort((a, b) => b.from - a.from || b.to - a.to);
+    expectedChanges.set(makeDraftKey(panelId, projectId), { before, after, changes });
   },
 
   rewritePassage: (id, passage, text, heard, uncertain) => {

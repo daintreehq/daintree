@@ -414,6 +414,188 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     expect(draft("panel-1")).toBe("my note: the parser");
   });
 
+  it("lands a pending correction when text is typed before it while a restart dictates", async () => {
+    const { service, dictate, draft, flush, inputStore } = await setup();
+    const first = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(first.promise);
+
+    dictate("panel-1", "the parsr");
+    await service.stop();
+    dictate("panel-1", "and the lexer");
+    inputStore.getState().setDraftInput("panel-1", "note: " + draft("panel-1"));
+    expect(service.hasPendingCorrection("panel-1")).toBe(true);
+
+    first.resolve({ action: "replace", correctedText: "the parser" });
+    await flush();
+    expect(draft("panel-1")).toBe("note: the parser and the lexer");
+  });
+
+  it("lands a pending correction when a restart dictates a lead-in ahead of it", async () => {
+    const { service, dictate, draft, flush } = await setup();
+    const first = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(first.promise);
+
+    dictate("panel-1", "the parsr");
+    await service.stop();
+    const caret = await import("@/lib/composerCaret");
+    const text = draft("panel-1");
+    caret.recordComposerState(
+      "panel-1",
+      {},
+      {
+        doc: { length: text.length, toString: () => text },
+        selection: { main: { from: 0, to: 0 } },
+      }
+    );
+    dictate("panel-1", "fix");
+    expect(draft("panel-1")).toBe("fix the parsr");
+
+    first.resolve({ action: "replace", correctedText: "the parser" });
+    await flush();
+    expect(draft("panel-1")).toBe("fix the parser");
+  });
+
+  it("cleans each passage of a dictation split by a paste and a newline mid-session", async () => {
+    const { service, dictate, say, draft, flush, inputStore } = await setup();
+    correct.mockResolvedValueOnce({ action: "replace", correctedText: "Look at the parser in" });
+    correct.mockResolvedValueOnce({ action: "replace", correctedText: "and fix the lexer too." });
+
+    dictate("panel-1", "look at the parsr in");
+    inputStore.getState().setDraftInput("panel-1", draft("panel-1") + " /src/parser.ts\n");
+    say("and fix the lexr too");
+    await service.stop();
+    expect(correct).toHaveBeenLastCalledWith({
+      sessionId: expect.any(String),
+      rawText: "and fix the lexr too",
+      recentContext: ["look at the parsr in /src/parser.ts\n"],
+      startsPrompt: false,
+      terminalId: "panel-1",
+    });
+    await flush();
+
+    expect(draft("panel-1")).toBe("Look at the parser in /src/parser.ts\nand fix the lexer too.");
+  });
+
+  it("cleans every stretch around pasted paths, blank lines and an image, leaving them as they were", async () => {
+    const { service, dictate, say, draft, flush, inputStore } = await setup();
+    const cleaned: Record<string, string> = {
+      "look at the parsr": "Look at the parser",
+      "and the lexr": "and the lexer",
+      "then the tokenizr": "then the tokenizer.",
+    };
+    correct.mockImplementation(async ({ rawText }) => ({
+      action: "replace",
+      correctedText: cleaned[rawText] ?? rawText,
+    }));
+    const paste = (text: string) =>
+      inputStore.getState().setDraftInput("panel-1", draft("panel-1") + text);
+
+    dictate("panel-1", "look at the parsr");
+    paste(" /src/parser.ts\n\n");
+    say("and the lexr");
+    paste(" /tmp/screenshot.png ");
+    say("then the tokenizr");
+    await service.stop();
+    await flush();
+
+    expect(correct.mock.calls.map(([request]) => request.rawText)).toEqual(Object.keys(cleaned));
+    expect(draft("panel-1")).toBe(
+      "Look at the parser /src/parser.ts\n\nand the lexer /tmp/screenshot.png then the tokenizer."
+    );
+  });
+
+  it("hands the composer only what cleanup changed in each passage", async () => {
+    const { service, dictate, say, draft, flush, inputStore } = await setup();
+    correct.mockImplementation(async ({ rawText }) => ({
+      action: "replace",
+      correctedText: rawText.replace("parsr", "parser").replace("lexr", "lexer"),
+    }));
+
+    dictate("panel-1", "the parsr");
+    inputStore.getState().setDraftInput("panel-1", draft("panel-1") + " /tmp/screenshot.png ");
+    say("the lexr");
+    await service.stop();
+    await flush();
+
+    expect(draft("panel-1")).toBe("the parser /tmp/screenshot.png the lexer");
+    const { takeLandedCorrection } = await import("@/services/voiceCorrectionLanding");
+    expect(takeLandedCorrection("panel-1", undefined, draft("panel-1"))?.write?.changes).toEqual([
+      { from: 8, to: 8, insert: "e" },
+      { from: 37, to: 37, insert: "e" },
+    ]);
+  });
+
+  it("leaves only the passage edited while its cleanup was out raw", async () => {
+    const { service, dictate, say, draft, flush, inputStore } = await setup();
+    const pending = new Map<string, ReturnType<typeof deferred<CorrectResult>>>();
+    correct.mockImplementation(({ rawText }) => {
+      const result = deferred<CorrectResult>();
+      pending.set(rawText, result);
+      return result.promise;
+    });
+    const paste = (text: string) =>
+      inputStore.getState().setDraftInput("panel-1", draft("panel-1") + text);
+
+    dictate("panel-1", "the parsr");
+    paste("\n");
+    say("the lexr");
+    paste("\n");
+    say("the tokenizr");
+    await service.stop();
+    expect([...pending.keys()]).toEqual(["the parsr", "the lexr", "the tokenizr"]);
+
+    inputStore.getState().setDraftInput("panel-1", draft("panel-1").replace("lexr", "lexer!"));
+    pending.get("the parsr")!.resolve({ action: "replace", correctedText: "The parser" });
+    pending.get("the lexr")!.resolve({ action: "replace", correctedText: "The lexer" });
+    pending.get("the tokenizr")!.resolve({ action: "replace", correctedText: "The tokenizer" });
+    await flush();
+
+    expect(draft("panel-1")).toBe("The parser\nthe lexer!\nThe tokenizer");
+  });
+
+  it("keeps a restart dictating between a pending correction's passages on its own text", async () => {
+    const { service, dictate, say, draft, flush, inputStore } = await setup();
+    const first = deferred<CorrectResult>();
+    const second = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(first.promise);
+    correct.mockReturnValueOnce(second.promise);
+
+    dictate("panel-1", "look at the parsr");
+    inputStore.getState().setDraftInput("panel-1", draft("panel-1") + "\n");
+    say("and fix the lexr");
+    await service.stop();
+    expect(correct).toHaveBeenCalledTimes(2);
+
+    const caret = await import("@/lib/composerCaret");
+    const text = draft("panel-1");
+    const at = text.indexOf("\n");
+    caret.recordComposerState(
+      "panel-1",
+      {},
+      {
+        doc: { length: text.length, toString: () => text },
+        selection: { main: { from: at, to: at } },
+      }
+    );
+    dictate("panel-1", "in src");
+    expect(draft("panel-1")).toBe("look at the parsr in src\nand fix the lexr");
+
+    first.resolve({ action: "replace", correctedText: "Look at the parser" });
+    second.resolve({ action: "replace", correctedText: "and fix the lexer." });
+    await flush();
+    expect(draft("panel-1")).toBe("Look at the parser in src\nand fix the lexer.");
+
+    say("now");
+    expect(draft("panel-1")).toBe("Look at the parser in src now\nand fix the lexer.");
+    correct.mockResolvedValueOnce({ action: "replace", correctedText: "in src/ now" });
+    await service.stop();
+    expect(correct).toHaveBeenLastCalledWith(
+      expect.objectContaining({ rawText: "in src now", terminalId: "panel-1" })
+    );
+    await flush();
+    expect(draft("panel-1")).toBe("Look at the parser in src/ now\nand fix the lexer.");
+  });
+
   it("drops a correction whose passage was edited, even when a copy survives elsewhere", async () => {
     const { service, dictate, draft, flush, inputStore } = await setup();
     const first = deferred<CorrectResult>();

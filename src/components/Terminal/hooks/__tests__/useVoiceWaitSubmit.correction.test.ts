@@ -6,6 +6,7 @@ import { EditorView } from "@codemirror/view";
 import { undo } from "@codemirror/commands";
 import { createComposerHistory } from "../../inputEditorExtensions/composerHistory";
 import { createCorrectionReview } from "../../inputEditorExtensions/correctionReview";
+import { addImageChip, imageChipField, readImageChipPaths } from "../../inputEditorExtensions";
 
 // Enter while dictating, end to end through the real voice service, both real
 // stores and a real editor: the send waits for the passage's correction to land
@@ -240,6 +241,36 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611, #14780)", () =
     expect(sent).toEqual(["Hello world."]);
     expect(result.current.voiceSubmitPhase).toBeNull();
     expect(isEditable()).toBe(true);
+  });
+
+  it("sends an image between two corrected passages still attached (#14781)", async () => {
+    correct.mockImplementation(async ({ rawText }) => ({
+      action: "replace",
+      correctedText: rawText.replace("parsr", "parser").replace("lexr", "lexer"),
+    }));
+    const image = "/tmp/screenshot.png";
+    dictate(PANEL_ID, "the parsr");
+    useTerminalInputStore.getState().setDraftInput(PANEL_ID, `${draft(PANEL_ID)} ${image} `);
+    const itemId = `item-${++itemSeq}`;
+    callbacks.delta!({ text: "the lexr", itemId });
+    callbacks.complete!({ text: "the lexr", willCorrect: false, itemId });
+    const result = renderComposer({ extensions: [imageChipField] });
+    const at = draft(PANEL_ID).indexOf(image);
+    view.dispatch({
+      effects: addImageChip.of({
+        from: at,
+        to: at + image.length,
+        filePath: image,
+        thumbnailUrl: "data:image/png;base64,",
+      }),
+    });
+
+    await act(async () => {
+      result.current.startVoiceWaitSubmit();
+    });
+
+    expect(sent).toEqual([`the parser ${image} the lexer`]);
+    expect(readImageChipPaths(view)).toEqual([image]);
   });
 
   it("leaves a correction it synced marked and undoable when the send is held back", async () => {

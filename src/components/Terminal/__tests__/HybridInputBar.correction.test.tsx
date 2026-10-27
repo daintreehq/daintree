@@ -28,6 +28,7 @@ import { initBuiltInPanelKinds } from "@/panels/registry";
 import { recordCorrectionLanded, takeLandedCorrection } from "@/services/voiceCorrectionLanding";
 import { recordScratchLanded, takeScratchLanded } from "@/services/voiceScratchCommand";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
+import { addImageChip, readImageChipPaths } from "../inputEditorExtensions";
 import { HybridInputBar } from "../HybridInputBar";
 
 const WT_ID = "/repo/wt";
@@ -223,6 +224,64 @@ describe("HybridInputBar after an AI correction lands", () => {
     await undo(view);
     expect(view.state.doc.toString()).toBe(RAW);
     expect(draft()).toBe(RAW);
+  });
+});
+
+describe("HybridInputBar after a correction over several passages lands", () => {
+  const IMAGE = "/tmp/screenshot.png";
+  const BEFORE = `look at the parsr ${IMAGE} and the lexr`;
+  const AFTER = `Look at the parser ${IMAGE} and the lexer.`;
+
+  async function pasteImage(view: EditorView): Promise<void> {
+    await act(async () => {
+      const at = view.state.doc.length;
+      view.dispatch({
+        changes: { from: at, insert: IMAGE + " " },
+        effects: addImageChip.of({
+          from: at,
+          to: at + IMAGE.length,
+          filePath: IMAGE,
+          thumbnailUrl: "data:image/png;base64,",
+        }),
+        selection: { anchor: at + IMAGE.length + 1 },
+      });
+    });
+  }
+
+  it("keeps an image pasted between the passages attached, through undo too", async () => {
+    const { view } = await mount();
+    await writeDraft("look at the parsr ");
+    await pasteImage(view);
+    await writeDraft(BEFORE);
+    expect(readImageChipPaths(view)).toEqual([IMAGE]);
+
+    const lexer = BEFORE.indexOf("and the lexr");
+    await act(async () => {
+      const inputs = useTerminalInputStore.getState();
+      inputs.setDraftInput("term-1", AFTER);
+      recordCorrectionLanded("term-1", undefined, {
+        from: 0,
+        rawText: BEFORE,
+        correctedText: AFTER,
+        baseline: null,
+        write: {
+          before: BEFORE,
+          after: AFTER,
+          changes: [
+            { from: 0, to: "look at the parsr".length, insert: "Look at the parser" },
+            { from: lexer, to: BEFORE.length, insert: "and the lexer." },
+          ],
+        },
+      });
+      inputs.bumpExternalDraftRevision();
+    });
+
+    expect(view.state.doc.toString()).toBe(AFTER);
+    expect(readImageChipPaths(view)).toEqual([IMAGE]);
+
+    await undo(view);
+    expect(view.state.doc.toString()).toBe(BEFORE);
+    expect(readImageChipPaths(view)).toEqual([IMAGE]);
   });
 });
 
