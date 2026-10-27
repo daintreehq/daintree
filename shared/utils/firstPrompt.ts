@@ -7,6 +7,15 @@ import type { TerminalFirstPrompt, TerminalFirstPromptVia } from "../types/panel
  */
 export const FIRST_PROMPT_MAX_CHARS = 8_000;
 
+/** `text` cut at the cap, never between the two halves of a surrogate pair. */
+function capText(text: string): { text: string; truncated: boolean } {
+  if (text.length <= FIRST_PROMPT_MAX_CHARS) return { text, truncated: false };
+  let end = FIRST_PROMPT_MAX_CHARS;
+  const last = text.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+  return { text: text.slice(0, end), truncated: true };
+}
+
 /**
  * The record for a prompt delivered at `at`, or undefined when there is nothing
  * to record: a launch or send with no text is not a prompt.
@@ -17,12 +26,12 @@ export function buildFirstPrompt(
   at: number
 ): TerminalFirstPrompt | undefined {
   if (typeof text !== "string" || text.trim().length === 0) return undefined;
-  const truncated = text.length > FIRST_PROMPT_MAX_CHARS;
+  const capped = capText(text);
   return {
-    text: truncated ? text.slice(0, FIRST_PROMPT_MAX_CHARS) : text,
+    text: capped.text,
     via,
     at,
-    ...(truncated && { truncated: true as const }),
+    ...(capped.truncated && { truncated: true as const }),
   };
 }
 
@@ -39,10 +48,10 @@ export function sanitizeFirstPrompt(value: unknown): TerminalFirstPrompt | undef
   if (typeof text !== "string" || text.trim().length === 0) return undefined;
   if (via !== "launch" && via !== "send") return undefined;
   if (typeof at !== "number" || !Number.isFinite(at)) return undefined;
-  const cut = text.length > FIRST_PROMPT_MAX_CHARS;
-  const truncated = cut || ("truncated" in value && value.truncated === true);
+  const capped = capText(text);
+  const truncated = capped.truncated || ("truncated" in value && value.truncated === true);
   return {
-    text: cut ? text.slice(0, FIRST_PROMPT_MAX_CHARS) : text,
+    text: capped.text,
     via,
     at,
     ...(truncated && { truncated: true as const }),

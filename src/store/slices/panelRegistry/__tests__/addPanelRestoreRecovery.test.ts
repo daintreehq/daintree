@@ -390,6 +390,85 @@ describe("addPanel — scratchpad carry onto an existing record (#12835)", () =>
   });
 });
 
+describe("addPanel — the run's first prompt on an existing record (#14592)", () => {
+  const firstPrompt = { text: "Port the parser", via: "launch" as const, at: 1_000 };
+
+  beforeEach(async () => {
+    await usePanelStore.getState().reset();
+    spawn.mockReset();
+    spawn.mockImplementation(async ({ id }) => id ?? "spawn-id");
+    usePanelLimitStore.setState({ softWarningLimit: 100, confirmationLimit: 200, hardLimit: 300 });
+  });
+
+  async function holdWithPrompt(id: string): Promise<void> {
+    await usePanelStore.getState().addPanel({
+      kind: "terminal",
+      requestedId: id,
+      launchAgentId: "codex",
+      command: "codex",
+      cwd: "/worktrees/task-a",
+      worktreeId: "/worktrees/task-a",
+      restoreRecovery: { reason: "sibling-owns-resume-latest-slot" },
+      firstPrompt,
+      title: "Task A",
+      bypassLimits: true,
+    });
+    await drainMicrotasks();
+  }
+
+  it("lets a held pane's launch decide it: a fresh start carries none", async () => {
+    await holdWithPrompt("held-1");
+    expect(ptyPanel("held-1")?.firstPrompt).toEqual(firstPrompt);
+
+    await expect(launchOver("held-1")).resolves.toBe("held-1");
+    await drainMicrotasks();
+
+    expect(ptyPanel("held-1")?.firstPrompt).toBeUndefined();
+  });
+
+  it("keeps it when the held pane's launch carries it on", async () => {
+    await holdWithPrompt("held-1");
+
+    await usePanelStore.getState().addPanel({
+      kind: "terminal",
+      requestedId: "held-1",
+      replacesRestoreRecovery: true,
+      launchAgentId: "codex",
+      command: "codex resume sess-1",
+      agentSessionId: "sess-1",
+      cwd: "/worktrees/task-a",
+      worktreeId: "/worktrees/task-a",
+      firstPrompt,
+      title: "Task A",
+    });
+    await drainMicrotasks();
+
+    expect(ptyPanel("held-1")?.firstPrompt).toEqual(firstPrompt);
+  });
+
+  it("keeps the live record when a reconnect lands with a snapshot that has none", async () => {
+    await usePanelStore.getState().addPanel({
+      kind: "terminal",
+      existingId: "p1",
+      cwd: "/repo",
+      firstPrompt,
+      bypassLimits: true,
+    });
+    await drainMicrotasks();
+
+    await usePanelStore.getState().addPanel({
+      kind: "terminal",
+      requestedId: "p1",
+      existingId: "p1",
+      cwd: "/repo",
+      bypassLimits: true,
+    });
+    await drainMicrotasks();
+
+    expect(ptyPanel("p1")?.firstPrompt).toEqual(firstPrompt);
+  });
+});
+
 /**
  * Tests for spawn-time PTY geometry (#10863).
  *

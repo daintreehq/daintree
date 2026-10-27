@@ -362,6 +362,46 @@ describe("agent.launch with no frontend", () => {
     );
   });
 
+  it("records the prompt as the caller wrote it, without the handback instruction (#14592)", async () => {
+    const { deps, invoke, store } = launchDeps();
+
+    const result = await executeViewlessAction(
+      request("agent.launch", {
+        agentId: "claude",
+        worktreeId: "/repo-wt/feature",
+        prompt: "Fix the flaky test\nthen push",
+        handback: true,
+      }),
+      deps
+    );
+
+    const terminalId = (result as { result: { terminalId: string } }).result.terminalId;
+    // The spawn still carries the instruction; only the record goes without it.
+    expect(spawned(invoke).command).toContain("DAINTREE-DONE-");
+    const snapshot = store.read()?.terminals.find((terminal) => terminal.id === terminalId);
+    expect(snapshot?.firstPrompt).toEqual({
+      text: "Fix the flaky test\nthen push",
+      via: "launch",
+      at: expect.any(Number),
+    });
+    // Never handed back to the caller.
+    expect(JSON.stringify(result)).not.toContain("Fix the flaky test");
+  });
+
+  it("writes no record for a launch with no prompt (#14592)", async () => {
+    const { deps, store } = launchDeps();
+
+    const result = await executeViewlessAction(
+      request("agent.launch", { agentId: "claude", worktreeId: "/repo-wt/feature" }),
+      deps
+    );
+
+    const terminalId = (result as { result: { terminalId: string } }).result.terminalId;
+    const snapshot = store.read()?.terminals.find((terminal) => terminal.id === terminalId);
+    expect(snapshot).toBeDefined();
+    expect(snapshot).not.toHaveProperty("firstPrompt");
+  });
+
   it("opens a plain shell for the terminal id", async () => {
     const { deps, invoke } = launchDeps();
 

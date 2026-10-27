@@ -234,6 +234,26 @@ describe("restoreClosedTerminals", () => {
     );
   });
 
+  it("brings back what the run was first asked with the terminal (#14592)", async () => {
+    const firstPrompt = { text: "Port the parser", via: "launch" as const, at: 1_000 };
+    seed([
+      ptyPanel({
+        id: "agent",
+        cwd: "/repo/wt",
+        launchAgentId: "claude",
+        command: "claude 'Port the parser'",
+        firstPrompt,
+      }),
+    ]);
+    const [snapshot] = captureWorktreeTerminalSnapshot("wt-1");
+
+    await restoreClosedTerminals(snapshot ? [snapshot] : []);
+
+    expect(addPanelMock).toHaveBeenCalledWith(
+      expect.objectContaining({ requestedId: "agent", firstPrompt })
+    );
+  });
+
   it("relaunches a plain terminal with its stored command and never builds a resume command", async () => {
     await restoreClosedTerminals([{ id: "plain", location: "grid", command: undefined }]);
     expect(buildResumeCommandMock).not.toHaveBeenCalled();

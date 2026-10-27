@@ -438,8 +438,7 @@ export const agentActionRuns = {
         handbackCode !== undefined && prompt !== undefined
           ? appendHandbackInstruction(prompt, handbackCode)
           : prompt,
-      promptAsWritten: prompt,
-      ...(handbackCode !== undefined ? { handbackCode } : {}),
+      ...(handbackCode !== undefined ? { handbackCode, promptAsWritten: prompt } : {}),
       systemPromptArgs: systemPromptArgs.args.length > 0 ? systemPromptArgs.args : undefined,
       interactive,
       modelId: model,

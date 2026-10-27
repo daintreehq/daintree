@@ -2240,3 +2240,107 @@ describe("restartTerminalOnPreset", () => {
     expect(pane().title).toBe("Claude [Personal]");
   });
 });
+
+describe("restartTerminal and the run's first prompt (#14592)", () => {
+  const firstPrompt = { text: "Fix the login bug", via: "launch" as const, at: 1_000 };
+  const launched = {
+    ...agentPanelBase,
+    agentState: "working" as const,
+    command: "claude 'Fix the login bug'",
+    firstPrompt,
+  };
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    getMergedPresetMock.mockReturnValue(undefined);
+    buildAgentLaunchFlagsMock.mockReturnValue([]);
+    mockGracefulKill.mockResolvedValue(null);
+    const { agentSettingsClient, projectClient } = await import("@/clients");
+    vi.mocked(agentSettingsClient.get).mockResolvedValue({ agents: {} });
+    vi.mocked(projectClient.getSettings).mockResolvedValue({ runCommands: [] });
+    const { buildResumeCommand, buildResumeLatestCommand } = await import("@shared/types");
+    vi.mocked(buildResumeCommand).mockReturnValue(null);
+    vi.mocked(buildResumeLatestCommand).mockReturnValue(null);
+    const { reset } = usePanelStore.getState();
+    await reset();
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
+      tabGroups: new Map(),
+      trashedTerminals: new Map(),
+      backgroundedTerminals: new Map(),
+      focusedId: null,
+      maximizedId: null,
+      commandQueue: [],
+    });
+  });
+
+  function paneAfterRestart(): PtyPanelData {
+    const panel = usePanelStore.getState().panelsById["test-1"];
+    if (!panel || !isPtyPanel(panel)) throw new Error("restarted pane is gone");
+    return panel;
+  }
+
+  function show(pane: PtyPanelData): void {
+    usePanelStore.setState({ panelsById: { [pane.id]: pane }, panelIds: [pane.id] });
+  }
+
+  it("keeps the record when the restart resumes the run's conversation", async () => {
+    const { buildResumeCommand } = await import("@shared/types");
+    vi.mocked(buildResumeCommand).mockReturnValue("claude --resume abc");
+    show({ ...launched, agentSessionId: "abc" });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(mockSpawn.mock.calls[0]![0].command).toBe("claude --resume abc");
+    expect(paneAfterRestart().firstPrompt).toEqual(firstPrompt);
+  });
+
+  it("keeps the record when the restart resumes the latest conversation", async () => {
+    const { buildResumeLatestCommand } = await import("@shared/types");
+    vi.mocked(buildResumeLatestCommand).mockReturnValue("claude --continue");
+    show(launched);
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(mockSpawn.mock.calls[0]![0].command).toBe("claude --continue");
+    expect(paneAfterRestart().firstPrompt).toEqual(firstPrompt);
+  });
+
+  it("drops the record when the restart starts a new conversation without the prompt", async () => {
+    show(launched);
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(mockSpawn.mock.calls[0]![0].command).toBe("claude --flag");
+    expect(paneAfterRestart().firstPrompt).toBeUndefined();
+  });
+
+  it("keeps the record when the stored launch command, prompt included, runs again", async () => {
+    const { agentSettingsClient } = await import("@/clients");
+    vi.mocked(agentSettingsClient.get).mockRejectedValue(new Error("settings unavailable"));
+    show({ ...launched, agentLaunchFlags: undefined });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(mockSpawn.mock.calls[0]![0].command).toBe(launched.command);
+    expect(paneAfterRestart().firstPrompt).toEqual(firstPrompt);
+  });
+
+  it("drops the record when a fallback preset starts a new conversation", async () => {
+    getMergedPresetMock.mockReturnValue({
+      id: "amber-provider",
+      name: "Amber Provider",
+      color: "#ffbb33",
+      args: ["--provider", "amber"],
+    });
+    show({ ...launched, agentPresetId: "blue-provider" });
+
+    await usePanelStore
+      .getState()
+      .activateFallbackPreset("test-1", "amber-provider", "blue-provider");
+
+    expect(mockSpawn).toHaveBeenCalled();
+    expect(paneAfterRestart().firstPrompt).toBeUndefined();
+  });
+});

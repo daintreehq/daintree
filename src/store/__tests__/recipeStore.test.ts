@@ -4151,6 +4151,26 @@ describe("plugin recipe panels, variables and agent tools (#13797)", () => {
     expect(addTerminalMock.mock.calls[0]?.[0].command).toContain("Review Invoice 42 on feature/x");
   });
 
+  it("records the agent's first turn with its line breaks, and none for a step without one (#14592)", async () => {
+    await run(
+      {
+        terminals: [
+          { type: "claude" as const, initialPrompt: "Review {{plugin.record}}\n\nReport back." },
+          { type: "claude" as const },
+        ],
+      },
+      { record: "Invoice 42" }
+    );
+
+    expect(addTerminalMock).toHaveBeenCalledTimes(2);
+    expect(addTerminalMock.mock.calls[0]?.[0].firstPrompt).toEqual({
+      text: "Review Invoice 42\n\nReport back.",
+      via: "launch",
+      at: expect.any(Number),
+    });
+    expect(addTerminalMock.mock.calls[1]?.[0]).not.toHaveProperty("firstPrompt");
+  });
+
   it("refuses a panel kind that is no longer the contributing plugin's", async () => {
     panelKindConfigMock.mockImplementation((kind: string) => ({
       id: kind,

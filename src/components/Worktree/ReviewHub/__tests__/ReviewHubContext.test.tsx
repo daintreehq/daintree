@@ -48,7 +48,7 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("ReviewHubContext", () => {
-  it("renders nothing without an issue or a handback", () => {
+  it("renders nothing without an issue, a first prompt or a handback", () => {
     worktrees.set("wt-1", { id: "wt-1", path: "/repo/wt" });
     panelsById.a = terminal("a");
     const { container } = render(<ReviewHubContext worktreePath="/repo/wt" worktreeId="wt-1" />);
@@ -80,9 +80,12 @@ describe("ReviewHubContext", () => {
     const { getAllByTestId, getByText } = render(
       <ReviewHubContext worktreePath="/repo/wt" worktreeId="wt-1" />
     );
+    const runs = getAllByTestId("review-hub-run");
+    expect(runs).toHaveLength(1);
+    expect(runs[0]!.textContent).toContain("Agent a");
     const cards = getAllByTestId("review-hub-handback");
     expect(cards).toHaveLength(1);
-    expect(cards[0]!.textContent).toContain("Last handback from");
+    expect(cards[0]!.textContent).toContain("Last handback");
     expect(cards[0]!.textContent).toContain("5 minutes ago");
     expect(cards[0]!.textContent).toContain("The agent said");
     expect(cards[0]!.textContent).toContain("Done <b>x</b>");
@@ -105,5 +108,72 @@ describe("ReviewHubContext", () => {
     const cards = getAllByTestId("review-hub-handback");
     expect(cards[0]!.textContent).toContain("no summary");
     expect(cards[1]!.textContent).toContain("old");
+  });
+
+  it("shows what the run launched with beside its handback, as plain text", () => {
+    panelsById.a = terminal("a", {
+      firstPrompt: { text: "Fix <b>login</b>\nthen test", via: "launch", at: NOW - 3_600_000 },
+      lastHandback: { message: "Fixed", observedAt: NOW, truncated: false },
+    });
+    const { getAllByTestId, getByTestId } = render(
+      <ReviewHubContext worktreePath="/repo/wt" worktreeId="wt-1" />
+    );
+    const runs = getAllByTestId("review-hub-run");
+    expect(runs).toHaveLength(1);
+    const prompt = getByTestId("review-hub-first-prompt");
+    expect(prompt.textContent).toContain("Launched with");
+    expect(prompt.textContent).toContain("1 hour ago");
+    expect(prompt.textContent).toContain("Fix <b>login</b>\nthen test");
+    expect(prompt.querySelector("b")).toBeNull();
+    expect(runs[0]!.querySelector('[data-testid="review-hub-handback"]')).not.toBeNull();
+    expect(runs[0]!.textContent).toContain("Fixed");
+  });
+
+  it("labels a prompt that arrived after launch as first sent", () => {
+    worktrees.set("wt-1", { id: "wt-1", path: "/repo/wt" });
+    panelsById.a = terminal("a", { firstPrompt: { text: "Review this", via: "send", at: NOW } });
+    const { getByTestId, queryByTestId } = render(
+      <ReviewHubContext worktreePath="/repo/wt" worktreeId="wt-1" />
+    );
+    expect(getByTestId("review-hub-first-prompt").textContent).toContain("First sent");
+    expect(queryByTestId("review-hub-handback")).toBeNull();
+  });
+
+  it("says when a long prompt was cut, and clamps it behind Show more", () => {
+    panelsById.a = terminal("a", {
+      firstPrompt: { text: "x".repeat(400), via: "launch", at: NOW, truncated: true },
+    });
+    const { getByTestId, getByRole } = render(
+      <ReviewHubContext worktreePath="/repo/wt" worktreeId="wt-1" />
+    );
+    const prompt = getByTestId("review-hub-first-prompt");
+    expect(prompt.textContent).toContain("Only the first 8,000 characters were kept");
+    const toggle = getByRole("button", { name: "Show more" });
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(toggle);
+    expect(getByRole("button", { name: "Show less" }).getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("shows no prompt for a missing-CLI gate, where nothing ran yet", () => {
+    worktrees.set("wt-1", { id: "wt-1", path: "/repo/wt" });
+    panelsById.a = terminal("a", {
+      spawnStatus: "missing-cli",
+      firstPrompt: { text: "Never ran", via: "launch", at: NOW },
+    });
+    const { container } = render(<ReviewHubContext worktreePath="/repo/wt" worktreeId="wt-1" />);
+    expect(container.firstChild).toBeNull();
+  });
+
+  it("orders runs by their latest activity, prompt or handback", () => {
+    panelsById.a = terminal("a", {
+      lastHandback: { message: "older", observedAt: NOW - 3_600_000, truncated: false },
+    });
+    panelsById.b = terminal("b", { firstPrompt: { text: "newer", via: "launch", at: NOW } });
+    const { getAllByTestId } = render(
+      <ReviewHubContext worktreePath="/repo/wt" worktreeId="wt-1" />
+    );
+    const runs = getAllByTestId("review-hub-run");
+    expect(runs[0]!.textContent).toContain("newer");
+    expect(runs[1]!.textContent).toContain("older");
   });
 });

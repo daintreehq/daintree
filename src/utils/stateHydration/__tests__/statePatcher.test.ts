@@ -4385,3 +4385,55 @@ describe("restore provenance and the plugin hold (#14017)", () => {
     );
   });
 });
+
+describe("first prompt restore (#14592)", () => {
+  const firstPrompt = { text: "Fix the flaky test\nthen push", via: "launch" as const, at: 1_000 };
+  const claudePane = {
+    id: "t1",
+    kind: "terminal" as const,
+    launchAgentId: "claude",
+    cwd: "/repo",
+    location: "grid" as const,
+    title: "Claude",
+    firstPrompt,
+  };
+  const settings = { agents: { claude: {} } };
+  const respawn = (snapshot: SavedSnapshot): AddTerminalArgs =>
+    buildArgsForRespawn(snapshot, "terminal", "/repo", settings, false, "/tmp", undefined, {
+      restoredAt: 5_000,
+    });
+
+  it("keeps the record for a pane whose process outlived the view", () => {
+    const backend = { id: "t1", cwd: "/repo", kind: "terminal" as const };
+    expect(buildArgsForBackendTerminal(backend, claudePane, "/repo").firstPrompt).toEqual(
+      firstPrompt
+    );
+    expect(buildArgsForReconnectedFallback(backend, claudePane, "/repo").firstPrompt).toEqual(
+      firstPrompt
+    );
+  });
+
+  it("keeps the record when the respawn resumes the run's conversation", () => {
+    const result = respawn({ ...claudePane, agentSessionId: "sess-c" });
+    expect(result.restoreProvenance?.disposition).toBe("resume");
+    expect(result.firstPrompt).toEqual(firstPrompt);
+  });
+
+  it("keeps the record for a pane held for recovery", () => {
+    const result = respawn({ ...claudePane, restoreRecovery: { reason: "resume-deferred" } });
+    expect(result.restoreProvenance?.disposition).toBe("held");
+    expect(result.firstPrompt).toEqual(firstPrompt);
+  });
+
+  it("drops the record when the respawn starts a new conversation", () => {
+    const result = respawn(claudePane);
+    expect(result.restoreProvenance?.disposition).toBe("fresh");
+    expect(result.firstPrompt).toBeUndefined();
+  });
+
+  it("drops a malformed on-disk record instead of handing it to the pane", () => {
+    const backend = { id: "t1", cwd: "/repo", kind: "terminal" as const };
+    const saved = { ...claudePane, firstPrompt: { text: 42, via: "launch", at: 1 } };
+    expect(buildArgsForBackendTerminal(backend, saved, "/repo").firstPrompt).toBeUndefined();
+  });
+});

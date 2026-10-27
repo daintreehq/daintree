@@ -90,6 +90,9 @@ const PTY_FIELD_CLASSIFICATION = {
   holdOnRestart: true,
   // The terminal's own notes (#12835) — persisted so they outlive a restart.
   scratchpad: true,
+  // What the run was first asked (#14592) — persisted so Review Hub still
+  // shows it after a restart.
+  firstPrompt: true,
   // PtyPanelData runtime-only fields
   pid: false,
   hasPty: false,
@@ -466,6 +469,7 @@ const terminalFixture: PtySerializeInput = {
   launchedByPluginId: "acme.orchestrator",
   holdOnRestart: true,
   scratchpad: { content: "- check CI", collapsed: true, width: 320 },
+  firstPrompt: { text: "Fix the flaky test", via: "launch", at: 1_700_000_000_004 },
   worktreeMoveNotice: { destinationWorktreeId: "wt-feature" },
   createdAt: 1_700_000_000_000,
   lastActiveAt: 1_700_000_000_001,
@@ -658,6 +662,8 @@ describe("panel serializer field coverage", () => {
     // What was last observed for the pane outlives its process (#14017).
     expect(output.restoreProvenance).toEqual(terminalFixture.restoreProvenance);
     expect(output.lastAgentObservation).toEqual(terminalFixture.lastAgentObservation);
+    // So is what the run it holds was first asked (#14592).
+    expect(output.firstPrompt).toEqual(terminalFixture.firstPrompt);
     expect(output).not.toHaveProperty("agentSessionId");
     expect(output).not.toHaveProperty("agentState");
     expect(output).not.toHaveProperty("lastStateChange");
