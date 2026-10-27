@@ -5583,12 +5583,12 @@ describe("OpenAITranscriptionProvider — recovery window (#14796)", () => {
     const service = new OpenAITranscriptionProvider({ maxSegmentMs: 15_000 });
     const { socket } = await bringSessionReady(service);
     latestVadWorker().emitSpeechStart();
-    // 15s of speech whose commit the dead socket took, and 7s more before the
-    // heartbeat noticed: 220 chunks no transcript ever covered.
+    // As much untranscribed audio as a segment at the 15s cap leaves, plus
+    // 7s for the heartbeat to notice the socket died: 220 chunks.
     for (let i = 0; i < 220; i++) service.sendAudioChunk(chunk(1));
 
     socket.simulateClose(1006);
-    // The reconnect window's 33s of audio, up to its last attempt.
+    // Then as much audio as a 33s reconnect window buffers.
     for (let i = 0; i < 330; i++) service.sendAudioChunk(chunk(2));
     const recovered = nextAttemptSucceeds();
 
