@@ -442,6 +442,12 @@ export const REGISTRY: Record<string, Command> = {
     kind: "diagnostic",
     runner: tsxScript("voice-preview-final.ts"),
   },
+  "voice-tuning": {
+    summary:
+      "Replay clips through the real OpenAI provider per delay tier and segmentation: WER, term recall, first/last word, time to final (needs OPENAI_API_KEY)",
+    kind: "diagnostic",
+    runner: tsxScript("voice-tuning.ts"),
+  },
   analyze: {
     summary: "Bundle-size visualizer build (ANALYZE=true vite build)",
     kind: "diagnostic",

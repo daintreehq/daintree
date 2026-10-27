@@ -49,6 +49,8 @@ import {
 import {
   deriveSession,
   installReplayCapture,
+  micProcessingAfter,
+  micProcessingMismatch,
   micOpenedAfter,
   readReplayCapture,
   rendererNow,
@@ -61,6 +63,7 @@ import {
   VOICE_REPLAY_SCHEMA_VERSION,
   VOICE_REPLAY_SCORING_VERSION,
   type ConfigSummary,
+  type MicTrackProcessing,
   type VoiceReplayRun,
 } from "../helpers/voiceReplayScore";
 
@@ -216,6 +219,7 @@ perfDescribe("Perf: dictation replay against real providers", () => {
           ...config.settings,
         },
         dictionary: config.dictionary,
+        micProcessing: config.micProcessing,
       })),
       skippedConfigs,
       clips: clips.map((prepared) => ({
@@ -252,6 +256,7 @@ perfDescribe("Perf: dictation replay against real providers", () => {
                 statuses: session.statuses,
                 endReason: session.endReason,
                 errors: session.errors,
+                mic: session.mic,
               });
               console.log(
                 `[voice-replay] ${tag}: WER ${(score.wer * 100).toFixed(1)}%, ` +
@@ -295,6 +300,7 @@ interface DictatedSession {
   statuses: string[];
   endReason: string | null;
   errors: string[];
+  mic: MicTrackProcessing | null;
 }
 
 async function dictateOnce(
@@ -328,7 +334,7 @@ async function dictateOnce(
     }
 
     const panel = await launchFakeAgent(page);
-    await installReplayCapture(page);
+    await installReplayCapture(page, { micProcessing: config.micProcessing });
     await ensureWindowFocused(ctx.app);
     await panel.locator(SEL.terminal.cmEditor).click();
 
@@ -380,12 +386,15 @@ async function dictateOnce(
         // `endReason: null` saying so.
       });
 
-    const derived = deriveSession(await readReplayCapture(page), {
+    const capture = await readReplayCapture(page);
+    const derived = deriveSession(capture, {
       startAt,
       stopAt,
       plannedStopAt,
       audioMs: prepared.audioMs,
     });
+    // An arm whose processing didn't take hasn't measured what it says it has.
+    const mismatch = micProcessingMismatch(capture, startAt, config.micProcessing);
     const draft = await panel
       .locator(SEL.terminal.cmEditor)
       .textContent()
@@ -396,7 +405,8 @@ async function dictateOnce(
       timing: derived.timing,
       statuses: derived.statuses,
       endReason: derived.endReason,
-      errors: derived.errors,
+      errors: mismatch ? [...derived.errors, mismatch] : derived.errors,
+      mic: micProcessingAfter(capture, startAt),
     };
   } finally {
     if (ctx?.app) {

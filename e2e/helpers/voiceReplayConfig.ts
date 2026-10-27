@@ -11,6 +11,15 @@ export const PROVIDER_KEY_VARIABLE: Readonly<Record<ReplayProvider, string>> = {
   grok: "XAI_API_KEY",
 };
 
+/**
+ * Chromium's default microphone processing (echo cancellation, noise
+ * suppression and automatic gain, since the app asks for no constraints), or
+ * all three off, merged into the app's own request by the capture wrapper.
+ */
+export type MicProcessing = "default" | "off";
+
+const MIC_PROCESSING: readonly MicProcessing[] = ["default", "off"];
+
 /** One arm of the benchmark: a provider, the settings it runs with, and the dictionary it starts with. */
 export interface ReplayConfig {
   id: string;
@@ -18,6 +27,7 @@ export interface ReplayConfig {
   /** Applied over `REPLAY_BASE_SETTINGS`; only `REPLAY_TUNABLE_SETTINGS` may appear. */
   settings: Record<string, unknown>;
   dictionary: string[];
+  micProcessing: MicProcessing;
 }
 
 /**
@@ -38,28 +48,48 @@ export const REPLAY_BASE_SETTINGS: Readonly<Record<string, unknown>> = {
 };
 
 /**
- * The only settings a custom configuration may change. The delay tier, the
- * forced-commit length and microphone processing are constants today, and the
- * app rewrites any `transcriptionModel` to its one supported model, so a config
- * naming them would run unchanged and report a difference that isn't there:
- * they are refused until the app honours them.
+ * The only settings a custom configuration may change. The app rewrites any
+ * `transcriptionModel` to its one supported model, and the OpenAI delay tier
+ * and segmentation aren't settings (`npm run perf voice-tuning` compares
+ * those), so a config naming them would run unchanged and report a difference
+ * that isn't there: they are refused. Microphone processing is varied by
+ * `micProcessing`, beside the settings.
  */
 export const REPLAY_TUNABLE_SETTINGS: ReadonlySet<string> = new Set(["language"]);
 
+const DEFAULT_MIC = { micProcessing: "default" } as const;
+
 export const REPLAY_PRESETS: Readonly<Record<string, Omit<ReplayConfig, "id">>> = {
-  openai: { provider: "openai", settings: {}, dictionary: [] },
-  deepgram: { provider: "deepgram", settings: {}, dictionary: [] },
-  grok: { provider: "grok", settings: {}, dictionary: [] },
-  "openai+terms": { provider: "openai", settings: {}, dictionary: allFixtureTerms() },
-  "deepgram+terms": { provider: "deepgram", settings: {}, dictionary: allFixtureTerms() },
-  "grok+terms": { provider: "grok", settings: {}, dictionary: allFixtureTerms() },
+  openai: { provider: "openai", settings: {}, dictionary: [], ...DEFAULT_MIC },
+  deepgram: { provider: "deepgram", settings: {}, dictionary: [], ...DEFAULT_MIC },
+  grok: { provider: "grok", settings: {}, dictionary: [], ...DEFAULT_MIC },
+  "openai+terms": {
+    provider: "openai",
+    settings: {},
+    dictionary: allFixtureTerms(),
+    ...DEFAULT_MIC,
+  },
+  "deepgram+terms": {
+    provider: "deepgram",
+    settings: {},
+    dictionary: allFixtureTerms(),
+    ...DEFAULT_MIC,
+  },
+  "grok+terms": { provider: "grok", settings: {}, dictionary: allFixtureTerms(), ...DEFAULT_MIC },
+  "openai+mic-off": { provider: "openai", settings: {}, dictionary: [], micProcessing: "off" },
 };
 
 export const DEFAULT_REPLAY_CONFIGS = ["openai", "deepgram", "grok"];
 
 function validate(config: unknown, where: string): ReplayConfig {
   if (typeof config !== "object" || config === null) throw new Error(`${where}: not an object`);
-  const { id, provider, settings = {}, dictionary = [] } = config as Record<string, unknown>;
+  const {
+    id,
+    provider,
+    settings = {},
+    dictionary = [],
+    micProcessing = "default",
+  } = config as Record<string, unknown>;
   if (typeof id !== "string" || id.length === 0) throw new Error(`${where}: missing id`);
   if (!REPLAY_PROVIDERS.includes(provider as ReplayProvider)) {
     throw new Error(
@@ -80,11 +110,17 @@ function validate(config: unknown, where: string): ReplayConfig {
   if (!Array.isArray(dictionary) || dictionary.some((term) => typeof term !== "string")) {
     throw new Error(`${where} (${id}): dictionary must be a list of terms`);
   }
+  if (!MIC_PROCESSING.includes(micProcessing as MicProcessing)) {
+    throw new Error(
+      `${where} (${id}): micProcessing must be ${MIC_PROCESSING.map((m) => `"${m}"`).join(" or ")}`
+    );
+  }
   return {
     id,
     provider: provider as ReplayProvider,
     settings: settings as Record<string, unknown>,
     dictionary,
+    micProcessing: micProcessing as MicProcessing,
   };
 }
 

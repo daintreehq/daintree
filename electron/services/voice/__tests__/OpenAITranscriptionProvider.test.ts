@@ -229,6 +229,9 @@ class MockVadWorker {
   emitSpeechEnd(): void {
     this.fire("message", { type: "speech-end" });
   }
+  emitPause(): void {
+    this.fire("message", { type: "pause" });
+  }
   emitWorkerError(message = "vad failed"): void {
     this.fire("message", { type: "error", message });
   }
@@ -290,9 +293,14 @@ function loggedText(): string {
 }
 
 // Import the service AFTER vi.mock so the mocked `ws` is used.
-const { OpenAITranscriptionProvider, summarizeEchoedSession } =
+const { OpenAITranscriptionProvider, replayMaxBytesFor, summarizeEchoedSession } =
   await import("../OpenAITranscriptionProvider.js");
 const { AUDIO_BUFFER_MAX_CHUNKS } = await import("../TranscriptionProvider.js");
+const { OPENAI_TRANSCRIPTION_TUNING } = await import("../openaiTranscriptionTuning.js");
+// Where production cuts continuous speech the VAD hears no end to.
+const SPEECH_CAP_MS = OPENAI_TRANSCRIPTION_TUNING.maxSegmentMs;
+// How many 100ms chunks production's replay ledger holds.
+const REPLAY_CAP_CHUNKS = replayMaxBytesFor(SPEECH_CAP_MS) / 4_800;
 type OpenAITranscriptionProviderInstance = InstanceType<typeof OpenAITranscriptionProvider>;
 type VoiceTranscriptionEvent = import("../TranscriptionProvider.js").VoiceTranscriptionEvent;
 
@@ -1217,13 +1225,13 @@ describe("OpenAITranscriptionProvider", () => {
     worker.emitSpeechStart(); // backstop timer starts
     expect(socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")).toHaveLength(0);
 
-    // Continuous speech with no detected pause — the 8s backstop fires a commit.
-    vi.advanceTimersByTime(8_000);
+    // Continuous speech with no detected pause — the backstop fires a commit.
+    vi.advanceTimersByTime(SPEECH_CAP_MS);
     expect(socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")).toHaveLength(1);
 
     // And keeps firing while the speech goes on.
     feedCommittableAudio(service);
-    vi.advanceTimersByTime(8_000);
+    vi.advanceTimersByTime(SPEECH_CAP_MS);
     expect(socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")).toHaveLength(2);
 
     service.stop();
@@ -1246,6 +1254,191 @@ describe("OpenAITranscriptionProvider", () => {
     expect(socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")).toHaveLength(2);
 
     service.stop();
+  });
+
+  describe("tuning", () => {
+    function commits(socket: MockWebSocket): number {
+      return socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit").length;
+    }
+
+    it("sends the tuned delay tier and reports it", async () => {
+      const service = new OpenAITranscriptionProvider({ delay: "high" });
+      const { socket } = await bringSessionReady(service);
+      expect(readTranscription(socket).delay).toBe("high");
+      expect(service.getSessionStats().delayTier).toBe("high");
+      service.stop();
+    });
+
+    it("refuses a tuning that can't run", () => {
+      expect(
+        () => new OpenAITranscriptionProvider({ minSegmentMs: 9_000, maxSegmentMs: 8_000 })
+      ).toThrow(/minSegmentMs/);
+    });
+
+    it("ignores a short pause when segments are only capped", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const { socket } = await bringSessionReady(service);
+      const worker = latestVadWorker();
+      feedCommittableAudio(service);
+      worker.emitSpeechStart();
+      vi.advanceTimersByTime(SPEECH_CAP_MS - 1);
+      worker.emitPause();
+      expect(commits(socket)).toBe(0);
+      service.stop();
+    });
+
+    it("cuts continuous speech at the first pause once the segment has run its minimum", async () => {
+      const service = new OpenAITranscriptionProvider({
+        minSegmentMs: 8_000,
+        maxSegmentMs: 15_000,
+      });
+      const { socket } = await bringSessionReady(service);
+      const worker = latestVadWorker();
+      feedCommittableAudio(service);
+      worker.emitSpeechStart();
+
+      vi.advanceTimersByTime(5_000);
+      worker.emitPause();
+      expect(commits(socket)).toBe(0);
+
+      vi.advanceTimersByTime(3_000);
+      expect(commits(socket)).toBe(0);
+      worker.emitPause();
+      expect(commits(socket)).toBe(1);
+
+      // The next segment is measured from the cut, not from the speech-start.
+      feedCommittableAudio(service);
+      worker.emitPause();
+      expect(commits(socket)).toBe(1);
+      vi.advanceTimersByTime(7_000);
+      expect(commits(socket)).toBe(1);
+      vi.advanceTimersByTime(8_000);
+      expect(commits(socket)).toBe(2);
+      service.stop();
+    });
+
+    it("measures the minimum again after a pause with too little audio to commit", async () => {
+      const service = new OpenAITranscriptionProvider({
+        minSegmentMs: 8_000,
+        maxSegmentMs: 15_000,
+      });
+      const { socket } = await bringSessionReady(service);
+      const worker = latestVadWorker();
+      worker.emitSpeechStart();
+      vi.advanceTimersByTime(8_000);
+      worker.emitPause();
+      expect(commits(socket)).toBe(0);
+
+      // Skipped, so the segment still counts from its speech-start.
+      feedCommittableAudio(service);
+      worker.emitPause();
+      expect(commits(socket)).toBe(1);
+      service.stop();
+    });
+
+    it("never marks a segment cut at a short pause as ending at a pause", async () => {
+      const service = new OpenAITranscriptionProvider({
+        minSegmentMs: 8_000,
+        maxSegmentMs: 15_000,
+      });
+      const events: VoiceTranscriptionEvent[] = [];
+      service.onEvent((e) => events.push(e));
+      const { socket } = await bringSessionReady(service);
+      const worker = latestVadWorker();
+      feedCommittableAudio(service);
+      worker.emitSpeechStart();
+      vi.advanceTimersByTime(8_000);
+      worker.emitPause();
+      expect(commits(socket)).toBe(1);
+      socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+      socket.simulateMessage("conversation.item.input_audio_transcription.completed", {
+        item_id: "item-A",
+        transcript: "fix the leak",
+      });
+
+      expect(events.filter((e) => e.type === "complete")).toEqual([
+        { type: "complete", text: "fix the leak", itemId: "item-A" },
+      ]);
+      service.stop();
+    });
+
+    it("commits continuous speech only at the tuned cap", async () => {
+      const service = new OpenAITranscriptionProvider({ maxSegmentMs: 12_000 });
+      const { socket } = await bringSessionReady(service);
+      const worker = latestVadWorker();
+      feedCommittableAudio(service);
+      worker.emitSpeechStart();
+      vi.advanceTimersByTime(11_999);
+      expect(commits(socket)).toBe(0);
+      vi.advanceTimersByTime(1);
+      expect(commits(socket)).toBe(1);
+      service.stop();
+    });
+
+    it("measures a segment from the cap's cut, so a pause just after it waits", async () => {
+      const service = new OpenAITranscriptionProvider({
+        minSegmentMs: 8_000,
+        maxSegmentMs: 12_000,
+      });
+      const { socket } = await bringSessionReady(service);
+      const worker = latestVadWorker();
+      feedCommittableAudio(service);
+      worker.emitSpeechStart();
+      vi.advanceTimersByTime(12_000);
+      expect(commits(socket)).toBe(1);
+
+      feedCommittableAudio(service);
+      vi.advanceTimersByTime(7_000);
+      worker.emitPause();
+      expect(commits(socket)).toBe(1);
+      vi.advanceTimersByTime(1_000);
+      worker.emitPause();
+      expect(commits(socket)).toBe(2);
+      service.stop();
+    });
+
+    it("runs the cap again from a paragraph boundary inside speech", async () => {
+      const service = new OpenAITranscriptionProvider({ maxSegmentMs: 12_000 });
+      const { socket } = await bringSessionReady(service);
+      const worker = latestVadWorker();
+      feedCommittableAudio(service);
+      worker.emitSpeechStart();
+      vi.advanceTimersByTime(6_000);
+      service.commitParagraphBoundary();
+      expect(commits(socket)).toBe(1);
+
+      feedCommittableAudio(service);
+      vi.advanceTimersByTime(6_000);
+      expect(commits(socket)).toBe(1);
+      vi.advanceTimersByTime(6_000);
+      expect(commits(socket)).toBe(2);
+      service.stop();
+    });
+
+    it("keeps the cap where it was when a paragraph boundary has too little to commit", async () => {
+      const service = new OpenAITranscriptionProvider({ maxSegmentMs: 12_000 });
+      const { socket } = await bringSessionReady(service);
+      const worker = latestVadWorker();
+      worker.emitSpeechStart();
+      vi.advanceTimersByTime(6_000);
+      service.commitParagraphBoundary();
+      expect(commits(socket)).toBe(0);
+
+      feedCommittableAudio(service);
+      vi.advanceTimersByTime(6_000);
+      expect(commits(socket)).toBe(1);
+      service.stop();
+    });
+
+    it("keeps the blind cadence in degraded mode whatever the cap", async () => {
+      const service = new OpenAITranscriptionProvider({ maxSegmentMs: 15_000 });
+      const { socket } = await bringSessionReady(service);
+      latestVadWorker().emitWorkerError("model load failed");
+      feedCommittableAudio(service);
+      vi.advanceTimersByTime(8_000);
+      expect(commits(socket)).toBe(1);
+      service.stop();
+    });
   });
 
   it("falls back to degraded mode when the VAD worker cannot be spawned", async () => {
@@ -2046,7 +2239,8 @@ describe("OpenAITranscriptionProvider", () => {
     });
 
     it("holds a backstop commit while connecting", async () => {
-      const service = new OpenAITranscriptionProvider();
+      // A cap inside the connect timeout, so it can fire before the socket is ready.
+      const service = new OpenAITranscriptionProvider({ maxSegmentMs: 8_000 });
       const { socket, worker } = await startConnecting(service);
       worker.emitSpeechStart();
       for (let i = 0; i < 3; i++) service.sendAudioChunk(chunk());
@@ -2060,6 +2254,32 @@ describe("OpenAITranscriptionProvider", () => {
         "input_audio_buffer.commit",
         ...appends(1),
       ]);
+      service.stop();
+    });
+
+    it("holds a short-pause cut while connecting", async () => {
+      const service = new OpenAITranscriptionProvider({
+        minSegmentMs: 8_000,
+        maxSegmentMs: 15_000,
+      });
+      const { socket, worker } = await startConnecting(service);
+      worker.emitSpeechStart();
+      for (let i = 0; i < 3; i++) service.sendAudioChunk(chunk());
+      vi.advanceTimersByTime(8_000);
+      worker.emitPause();
+      service.sendAudioChunk(chunk());
+
+      becomeReady(socket);
+      expect(types(socket)).toEqual([
+        "session.update",
+        ...appends(3),
+        "input_audio_buffer.commit",
+        ...appends(1),
+      ]);
+      // The held cut started a new segment, so the next pause is too soon.
+      for (let i = 0; i < 2; i++) service.sendAudioChunk(chunk());
+      worker.emitPause();
+      expect(types(socket).filter((type) => type === "input_audio_buffer.commit")).toHaveLength(1);
       service.stop();
     });
 
@@ -3215,9 +3435,9 @@ describe("OpenAITranscriptionProvider — item identity and ordering (#13109)", 
     vadCommitSegment(service, worker);
     feedCommittableAudio(service);
     worker.emitSpeechStart();
-    vi.advanceTimersByTime(8_000);
+    vi.advanceTimersByTime(SPEECH_CAP_MS);
     feedCommittableAudio(service);
-    vi.advanceTimersByTime(8_000);
+    vi.advanceTimersByTime(SPEECH_CAP_MS);
     expect(socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")).toHaveLength(3);
 
     socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
@@ -3247,9 +3467,9 @@ describe("OpenAITranscriptionProvider — item identity and ordering (#13109)", 
     vadCommitSegment(service, worker);
     feedCommittableAudio(service);
     worker.emitSpeechStart();
-    vi.advanceTimersByTime(8_000);
+    vi.advanceTimersByTime(SPEECH_CAP_MS);
     feedCommittableAudio(service);
-    vi.advanceTimersByTime(8_000);
+    vi.advanceTimersByTime(SPEECH_CAP_MS);
     expect(socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")).toHaveLength(3);
 
     socket.simulateMessage("conversation.item.done", done("item-A", "fix the bug"));
@@ -3310,7 +3530,8 @@ describe("OpenAITranscriptionProvider — item identity and ordering (#13109)", 
     const worker = latestVadWorker();
     feedCommittableAudio(service);
     worker.emitSpeechStart();
-    vi.advanceTimersByTime(8_000);
+    vi.advanceTimersByTime(SPEECH_CAP_MS);
+    expect(socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")).toHaveLength(1);
     socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
     feedCommittableAudio(service);
     worker.emitSpeechEnd();
@@ -4329,8 +4550,8 @@ describe("OpenAITranscriptionProvider — reconnect replay (#14605)", () => {
     service.sendAudioChunk(chunk(4));
     vad.emitSpeechEnd();
     vad.emitSpeechStart();
-    // REPLAY_MAX_BYTES holds 530 chunks: 527 more evicts the first segment.
-    for (let i = 0; i < 527; i++) service.sendAudioChunk(chunk(9));
+    // Four chunks so far: one past the cap evicts the first segment.
+    for (let i = 0; i < REPLAY_CAP_CHUNKS - 3; i++) service.sendAudioChunk(chunk(9));
     socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
     socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-B" });
     socket.simulateMessage("conversation.item.done", done("item-B", "two"));
@@ -4339,7 +4560,7 @@ describe("OpenAITranscriptionProvider — reconnect replay (#14605)", () => {
     const socket2 = await reconnect();
 
     // Item A's ack is the evicted segment's, so B's transcript releases B's audio.
-    expect(wire(socket2)).toEqual(Array<number>(527).fill(9));
+    expect(wire(socket2)).toEqual(Array<number>(REPLAY_CAP_CHUNKS - 3).fill(9));
     service.stop();
   });
 
@@ -4842,14 +5063,14 @@ describe("OpenAITranscriptionProvider — reconnect replay (#14605)", () => {
       vad.emitSpeechEnd();
       socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
       vad.emitSpeechStart();
-      // One chunk over the 530-chunk cap takes the whole first segment.
-      for (let i = 0; i < 529; i++) service.sendAudioChunk(chunk(9));
+      // One chunk over the cap takes the whole first segment.
+      for (let i = 0; i < REPLAY_CAP_CHUNKS - 1; i++) service.sendAudioChunk(chunk(9));
 
       socket.simulateClose(1006);
       expect(completions(events)).toEqual([{ text: "one", itemId: "item-A" }]);
       const socket2 = await reconnect();
 
-      expect(wire(socket2)).toEqual(Array<number>(529).fill(9));
+      expect(wire(socket2)).toEqual(Array<number>(REPLAY_CAP_CHUNKS - 1).fill(9));
       expect(service.getSessionStats().droppedReplay).toBe(2);
       expect(draftAtStop(events)).toBe("one");
       service.stop();
@@ -4867,14 +5088,14 @@ describe("OpenAITranscriptionProvider — reconnect replay (#14605)", () => {
       delta(socket, "item-A", "alpha beta");
       vad.emitSpeechEnd();
       vad.emitSpeechStart();
-      for (let i = 0; i < 529; i++) service.sendAudioChunk(chunk(9));
+      for (let i = 0; i < REPLAY_CAP_CHUNKS - 1; i++) service.sendAudioChunk(chunk(9));
       socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
 
       socket.simulateClose(1006);
       expect(completions(events)).toEqual([{ text: "alpha beta", itemId: "item-A" }]);
       const socket2 = await reconnect();
 
-      expect(wire(socket2)).toEqual(Array<number>(529).fill(9));
+      expect(wire(socket2)).toEqual(Array<number>(REPLAY_CAP_CHUNKS - 1).fill(9));
       service.stop();
     });
 
@@ -4889,12 +5110,12 @@ describe("OpenAITranscriptionProvider — reconnect replay (#14605)", () => {
       delta(socket, "item-A", "one");
       vad.emitSpeechEnd();
       vad.emitSpeechStart();
-      for (let i = 0; i < 530; i++) service.sendAudioChunk(chunk(9));
+      for (let i = 0; i < REPLAY_CAP_CHUNKS; i++) service.sendAudioChunk(chunk(9));
 
       socket.simulateClose(1006);
       expect(completions(events)).toEqual([{ text: "one", itemId: "item-A" }]);
       const socket2 = await reconnect();
-      expect(wire(socket2)).toEqual(Array<number>(530).fill(9));
+      expect(wire(socket2)).toEqual(Array<number>(REPLAY_CAP_CHUNKS).fill(9));
       latestVadWorker().emitSpeechStart();
       latestVadWorker().emitSpeechEnd();
       socket2.simulateMessage("input_audio_buffer.committed", { item_id: "item-B" });
@@ -4932,11 +5153,26 @@ describe("OpenAITranscriptionProvider — reconnect replay (#14605)", () => {
       expect(service.getSessionStats().reconnects).toBe(0);
     });
 
+    it("sizes the replay ledger from the segment cap", async () => {
+      const short = new OpenAITranscriptionProvider({ maxSegmentMs: 8_000 });
+      await bringSessionReady(short);
+      const shortCap = replayMaxBytesFor(8_000) / 4_800;
+      for (let i = 0; i < shortCap + 1; i++) short.sendAudioChunk(chunk(9));
+      expect(short.getSessionStats().droppedReplay).toBe(1);
+      short.stop();
+
+      // A segment can run longer before it commits, so as much more is kept.
+      const long = new OpenAITranscriptionProvider({ maxSegmentMs: 15_000 });
+      await bringSessionReady(long);
+      for (let i = 0; i < shortCap + 1; i++) long.sendAudioChunk(chunk(9));
+      expect(long.getSessionStats().droppedReplay).toBe(0);
+      long.stop();
+    });
+
     it("counts each replay chunk the cap evicts", async () => {
       const service = new OpenAITranscriptionProvider();
       await bringSessionReady(service);
-      // REPLAY_MAX_BYTES holds 530 chunks.
-      for (let i = 0; i < 533; i++) service.sendAudioChunk(chunk(9));
+      for (let i = 0; i < REPLAY_CAP_CHUNKS + 3; i++) service.sendAudioChunk(chunk(9));
 
       expect(service.getSessionStats().droppedReplay).toBe(3);
       service.stop();
@@ -5324,14 +5560,15 @@ describe("OpenAITranscriptionProvider — recovery window (#14796)", () => {
     service.onEvent((e) => events.push(e));
     const { socket } = await bringSessionReady(service);
     latestVadWorker().emitSpeechStart();
-    // 500 unacknowledged chunks leave room in REPLAY_MAX_BYTES (530) for 30.
-    for (let i = 0; i < 500; i++) service.sendAudioChunk(chunk(1));
+    // The unacknowledged chunks leave room in the ledger for 30.
+    const held = REPLAY_CAP_CHUNKS - 30;
+    for (let i = 0; i < held; i++) service.sendAudioChunk(chunk(1));
 
     socket.simulateClose(1006);
     for (let i = 0; i < 50; i++) service.sendAudioChunk(chunk(2));
     const recovered = nextAttemptSucceeds();
 
-    const resent = [...Array<number>(500).fill(1), ...Array<number>(30).fill(2)];
+    const resent = [...Array<number>(held).fill(1), ...Array<number>(30).fill(2)];
     expect(wire(recovered)).toEqual(resent);
     expect(service.getSessionStats()).toMatchObject({ droppedConnect: 20, droppedReplay: 0 });
 
@@ -5339,6 +5576,27 @@ describe("OpenAITranscriptionProvider — recovery window (#14796)", () => {
     recovered.simulateClose(1006);
     expect(wire(nextAttemptSucceeds())).toEqual(resent);
     expect(service.getSessionStats().droppedReplay).toBe(0);
+    service.stop();
+  });
+
+  it("resends a whole 15s segment and its drop's detection beside a full outage", async () => {
+    const service = new OpenAITranscriptionProvider({ maxSegmentMs: 15_000 });
+    const { socket } = await bringSessionReady(service);
+    latestVadWorker().emitSpeechStart();
+    // As much untranscribed audio as a segment at the 15s cap leaves, plus
+    // 7s for the heartbeat to notice the socket died: 220 chunks.
+    for (let i = 0; i < 220; i++) service.sendAudioChunk(chunk(1));
+
+    socket.simulateClose(1006);
+    // Then as much audio as a 33s reconnect window buffers.
+    for (let i = 0; i < 330; i++) service.sendAudioChunk(chunk(2));
+    const recovered = nextAttemptSucceeds();
+
+    const resent = [...Array<number>(220).fill(1), ...Array<number>(330).fill(2)];
+    expect(wire(recovered)).toEqual(resent);
+    recovered.simulateClose(1006);
+    expect(wire(nextAttemptSucceeds())).toEqual(resent);
+    expect(service.getSessionStats()).toMatchObject({ droppedConnect: 0, droppedReplay: 0 });
     service.stop();
   });
 

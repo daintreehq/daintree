@@ -33,6 +33,8 @@ export interface VadObservation {
   ready: number;
   speechStarts: number;
   speechEnds: number;
+  /** Short pauses inside speech, which can close a segment (absent from runs that predate them). */
+  pauses?: number;
   errors: number;
   /** Children that exited before the provider asked them to. */
   unexpectedExits: number;
@@ -54,6 +56,8 @@ export interface SessionObservation {
   readyMs: number | null;
   /** The pump's worst lateness against a 100 ms capture clock. */
   maxChunkLateMs: number;
+  /** Start to the `stopGracefully()` call (absent from runs that predate it). */
+  stopMs?: number;
   /** `stopGracefully()` call to its return. */
   drainMs: number;
 }

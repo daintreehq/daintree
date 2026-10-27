@@ -87,6 +87,23 @@ type RealTimeVADInstance = Awaited<ReturnType<RealTimeVADClass["new"]>>;
 
 let vad: RealTimeVADInstance | null = null;
 let destroyed = false;
+
+// A short pause inside speech: avr-vad's own end-of-speech count reaching
+// PAUSE_FRAMES of the 24 it needs. Like avr-vad, it counts frames scored
+// below the silence threshold and starts over only on a speech frame. About
+// 160ms: longer than the closures inside words, short enough to catch the
+// break between sentences. The provider may cut a long segment here instead of
+// mid-word.
+const PAUSE_FRAMES = 5;
+const SILENCE_PROBABILITY = 0.35;
+const SPEECH_PROBABILITY = 0.5;
+let speaking = false;
+let quietFrames = 0;
+
+function endSpeech(): void {
+  speaking = false;
+  post({ type: "speech-end" });
+}
 // Audio that arrived before the model finished loading. The provider starts
 // this process as its socket starts connecting and feeds it from the first
 // chunk, so the opening speech is analysed rather than dropped. The cap matches
@@ -109,12 +126,23 @@ async function init(): Promise<void> {
       // 0.5/0.35) are tuned for dictation; only the input sample rate differs.
       model: "v5",
       sampleRate: 24000,
-      onSpeechStart: () => post({ type: "speech-start" }),
-      onSpeechEnd: () => post({ type: "speech-end" }),
+      onFrameProcessed: ({ isSpeech }) => {
+        if (isSpeech >= SPEECH_PROBABILITY) {
+          quietFrames = 0;
+        } else if (isSpeech < SILENCE_PROBABILITY && speaking && ++quietFrames === PAUSE_FRAMES) {
+          post({ type: "pause" });
+        }
+      },
+      onSpeechStart: () => {
+        speaking = true;
+        quietFrames = 0;
+        post({ type: "speech-start" });
+      },
+      onSpeechEnd: endSpeech,
       // A misfire is a sub-`minSpeechFrames` blip that avr-vad discards without
       // an end event. Surface it as speech-end so the provider always returns
       // to the not-speaking state (the undersized buffer commit is skipped).
-      onVADMisfire: () => post({ type: "speech-end" }),
+      onVADMisfire: endSpeech,
     });
     if (destroyed) return;
     vad.start();

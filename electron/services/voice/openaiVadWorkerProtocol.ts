@@ -38,6 +38,13 @@ export type VadWorkerOutbound =
       type: "speech-start";
     }
   | {
+      /**
+       * A short pause inside speech, well before the end-of-speech holdover
+       * runs out. Once per pause; the speaker may go straight on.
+       */
+      type: "pause";
+    }
+  | {
       /** End of speech after the holdover — provider commits the segment. */
       type: "speech-end";
     }

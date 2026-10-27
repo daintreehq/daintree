@@ -12,6 +12,7 @@ import {
   type SessionResult,
   type SessionTiming,
   type VoiceReplayClipRecord,
+  type VoiceReplayConfigRecord,
   type VoiceReplayRun,
 } from "../voiceReplayScore";
 
@@ -326,8 +327,13 @@ describe("compareRuns", () => {
     expect(metric(comparison, "openai", "pooled WER").run).toBe(0);
   });
 
-  it("flags a config whose provider, settings or dictionary moved, and only then", () => {
-    const base = { id: "x", provider: "openai", settings: { language: "en" }, dictionary: ["A1"] };
+  it("flags a config whose provider, settings, dictionary or mic processing moved, and only then", () => {
+    const base: VoiceReplayConfigRecord = {
+      id: "x",
+      provider: "openai",
+      settings: { language: "en" },
+      dictionary: ["A1"],
+    };
     const differs = (change: Partial<typeof base>) =>
       compareRuns(makeRun({ configs: [base] }), makeRun({ configs: [{ ...base, ...change }] }))
         .configs[0]!.settingsDiffer;
@@ -335,6 +341,8 @@ describe("compareRuns", () => {
     expect(differs({ provider: "deepgram" })).toBe(true);
     expect(differs({ settings: { language: "de" } })).toBe(true);
     expect(differs({ dictionary: ["A1", "B1"] })).toBe(true);
+    expect(differs({ micProcessing: "default" })).toBe(false);
+    expect(differs({ micProcessing: "off" })).toBe(true);
   });
 
   it("reports configs on one side only", () => {

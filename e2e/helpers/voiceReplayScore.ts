@@ -287,6 +287,13 @@ export const TIMING_KEYS = [
 
 export type TimingKey = (typeof TIMING_KEYS)[number];
 
+/** The processing the session's microphone track reported running. */
+export interface MicTrackProcessing {
+  echoCancellation?: boolean;
+  noiseSuppression?: boolean;
+  autoGainControl?: boolean;
+}
+
 export interface SessionResult {
   clip: string;
   config: string;
@@ -302,6 +309,8 @@ export interface SessionResult {
   /** `session-ended` reason. `stopped` means it drained, not that every word arrived. */
   endReason: string | null;
   errors: string[];
+  /** Null when no microphone opened; absent from runs that predate it. */
+  mic?: MicTrackProcessing | null;
 }
 
 export interface TimingStat {
@@ -397,6 +406,8 @@ export interface VoiceReplayConfigRecord {
   settings: Record<string, unknown>;
   /** Terms added to the dictionary before dictating, in order. */
   dictionary: string[];
+  /** Absent from runs that predate it, which all ran Chromium's default. */
+  micProcessing?: "default" | "off";
 }
 
 export interface VoiceReplayClipRecord {
@@ -560,7 +571,8 @@ export function compareRuns(baseline: VoiceReplayRun, run: VoiceReplayRun): RunC
       settingsDiffer:
         baselineConfig.provider !== runConfig.provider ||
         JSON.stringify(baselineConfig.settings) !== JSON.stringify(runConfig.settings) ||
-        JSON.stringify(baselineConfig.dictionary) !== JSON.stringify(runConfig.dictionary),
+        JSON.stringify(baselineConfig.dictionary) !== JSON.stringify(runConfig.dictionary) ||
+        (baselineConfig.micProcessing ?? "default") !== (runConfig.micProcessing ?? "default"),
       metrics,
     });
   }

@@ -180,6 +180,35 @@ export const REPLAY_CLIPS: readonly ReplayClip[] = [
   },
 ];
 
+/**
+ * Longer single utterances for segmentation runs (`npm run perf voice-tuning`):
+ * sentences run on with only the short breaks a speaker takes between them,
+ * none long enough to end the utterance, so continuous speech has somewhere to
+ * be cut other than mid-word. Kept out of `REPLAY_CLIPS`, which the cleanup
+ * corpus and saved replay baselines follow clip for clip. They carry no bias
+ * terms; their identifiers still count as words.
+ */
+export const LONG_SPEECH_CLIPS: readonly ReplayClip[] = [
+  {
+    id: "long-sentences",
+    speech:
+      "The worktree monitor polls git status for every worktree on a timer. When an agent is busy, that poll competes with it for the disk, and on a large monorepo one poll can take two seconds. Move the poll behind the elevation tier, so only the focused worktree and the ones with an active agent refresh every few seconds, and everything else waits for the file watcher.",
+    reference:
+      "The WorktreeMonitor polls git status for every worktree on a timer. When an agent is busy, that poll competes with it for the disk, and on a large monorepo one poll can take two seconds. Move the poll behind the elevation tier, so only the focused worktree and the ones with an active agent refresh every few seconds, and everything else waits for the file watcher.",
+    terms: [],
+    tags: ["long"],
+  },
+  {
+    id: "long-instruction",
+    speech:
+      "Open the use voice recording hook and look at how it handles the stop key while a send is waiting on cleanup. Pressing escape during that wait drops the passage that was still being cleaned up. Keep the passage, cancel only the send, and add a test in its test file that presses escape after the stop and checks the draft still holds every word.",
+    reference:
+      "Open the useVoiceRecording hook and look at how it handles the stop key while a send is waiting on cleanup. Pressing Escape during that wait drops the passage that was still being cleaned up. Keep the passage, cancel only the send, and add a test in its test file that presses Escape after the stop and checks the draft still holds every word.",
+    terms: [],
+    tags: ["long"],
+  },
+];
+
 /** Every term across the fixture set, for configurations that seed them as dictionary entries. */
 export function allFixtureTerms(clips: readonly ReplayClip[] = REPLAY_CLIPS): string[] {
   const seen = new Map<string, string>();

@@ -6,6 +6,7 @@ import { MAX_DICTIONARY_KEYTERMS } from "../../../shared/config/voiceKeyterms";
 import {
   allFixtureTerms,
   encodePcm16Wav,
+  LONG_SPEECH_CLIPS,
   longestUtteranceMs,
   prepareClip,
   readPcm16Wav,
@@ -28,6 +29,27 @@ function segment(ms: number, amplitude: number): number[] {
 const pcm = (...parts: number[][]): Pcm16 => ({
   sampleRate: RATE,
   samples: Int16Array.from(parts.flat()),
+});
+
+describe("the long-speech clips", () => {
+  it("are single long utterances, with ids no replay clip uses", () => {
+    const ids = [...REPLAY_CLIPS, ...LONG_SPEECH_CLIPS].map((clip) => clip.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const clip of LONG_SPEECH_CLIPS) {
+      expect(clip.tags, clip.id).toEqual(["long"]);
+      expect(clip.speech, clip.id).not.toMatch(/\[\[slnc/);
+      // Still past the 15s cap at a brisk 200 words a minute.
+      expect(clip.speech.split(/\s+/).length, clip.id).toBeGreaterThanOrEqual(50);
+    }
+  });
+
+  it("say each clip so that a faithful transcript of the speech scores perfectly", () => {
+    for (const clip of LONG_SPEECH_CLIPS) {
+      const score = scoreClip(clip.reference, clip.speech, clip.terms);
+      expect(score.wer, clip.id).toBe(0);
+      expect([score.firstWordKept, score.lastWordKept], clip.id).toEqual([true, true]);
+    }
+  });
 });
 
 describe("the fixture corpus", () => {

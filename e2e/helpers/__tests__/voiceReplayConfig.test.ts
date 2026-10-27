@@ -27,8 +27,26 @@ describe("resolveReplayConfigs", () => {
     ]);
     const configs = resolveReplayConfigs({ VOICE_REPLAY_CONFIG_FILE: "c.json" }, () => file);
     expect(configs).toEqual([
-      { id: "german", provider: "openai", settings: { language: "de" }, dictionary: ["Zod"] },
+      {
+        id: "german",
+        provider: "openai",
+        settings: { language: "de" },
+        dictionary: ["Zod"],
+        micProcessing: "default",
+      },
     ]);
+  });
+
+  it("turns microphone processing off by preset or by config, and nothing else", () => {
+    const [preset] = resolveReplayConfigs({ VOICE_REPLAY_CONFIGS: "openai+mic-off" }, noFile);
+    expect(preset).toMatchObject({ provider: "openai", dictionary: [], micProcessing: "off" });
+    const file = JSON.stringify([{ id: "raw", provider: "deepgram", micProcessing: "off" }]);
+    const [config] = resolveReplayConfigs({ VOICE_REPLAY_CONFIG_FILE: "c" }, () => file);
+    expect(config!.micProcessing).toBe("off");
+    const bad = JSON.stringify([{ id: "raw", provider: "openai", micProcessing: "agc-only" }]);
+    expect(() => resolveReplayConfigs({ VOICE_REPLAY_CONFIG_FILE: "c" }, () => bad)).toThrow(
+      /micProcessing/
+    );
   });
 
   it("refuses a setting the app doesn't read, rather than reporting a difference that isn't there", () => {

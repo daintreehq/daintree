@@ -305,8 +305,8 @@ Per configuration it reports pooled and mean WER over normalised words, term rec
 
 | Variable | Default | Effect |
 | --- | --- | --- |
-| `VOICE_REPLAY_CONFIGS` | `openai,deepgram` | Presets to run; `openai+terms` and `deepgram+terms` also add every fixture term to the dictionary |
-| `VOICE_REPLAY_CONFIG_FILE` | unset | JSON array of `{ id, provider, settings?, dictionary? }`; `settings` may only change `language` |
+| `VOICE_REPLAY_CONFIGS` | `openai,deepgram` | Presets to run; `openai+terms` and `deepgram+terms` also add every fixture term to the dictionary, and `openai+mic-off` turns microphone processing off |
+| `VOICE_REPLAY_CONFIG_FILE` | unset | JSON array of `{ id, provider, settings?, dictionary?, micProcessing? }`; `settings` may only change `language`, and `micProcessing` is `default` or `off` |
 | `VOICE_REPLAY_CLIPS` | all | Comma-separated clip ids |
 | `VOICE_REPLAY_REPEATS` | `1` | Passes over every clip and config |
 | `VOICE_REPLAY_STOP_TAIL_MS` | `0` | Extra time between the clip ending and the stop press |
@@ -314,7 +314,7 @@ Per configuration it reports pooled and mean WER over normalised words, term rec
 | `VOICE_REPLAY_RECORDINGS_DIR` | unset | Real recordings that replace synthesis |
 | `VOICE_REPLAY_LABEL` | `run` | Prefix of the result file |
 
-The OpenAI `delay` tier, the 8 s forced commit and microphone processing are constants in the app today, so a config can't vary them and one that tries is refused rather than run unchanged; #14625 adds those knobs.
+The OpenAI `delay` tier and segmentation aren't settings, so a config can't vary them and one that tries is refused rather than run unchanged; `voice-tuning` compares them. Microphone processing is: the app asks for none of its own, so Chromium's echo cancellation, noise suppression and automatic gain are on, and `micProcessing: "off"` merges all three off into every microphone request the app makes. Each session records what its track reported running, and an `off` session whose track doesn't report all three off carries an error, since it may have measured the default under the other arm's name.
 
 Results land in `.tmp/perf-results/voice-replay/<label>-<timestamp>.json`, rewritten after every session with `complete: false` until the run finishes. Each session keeps its transcript, the composer draft, every status and error, and the end reason; a harness failure (a launch that threw) goes to `failures` and stays out of every score. `npm run perf voice-replay-compare -- --save [run.json]` makes a complete run the baseline, and `npm run perf voice-replay-compare [-- run.json] [--baseline other.json]` compares a run (default: the newest complete one) config by config over the sessions both runs have, leaving out clips whose reference or audio changed and flagging a config whose settings moved.
 
@@ -374,9 +374,9 @@ What the numbers can't claim: the raw transcripts are written to imitate each pr
 
 ## OpenAI's preview against its final (`voice-preview-final`, #14852)
 
-`OPENAI_API_KEY=… npm run perf voice-preview-final` asks whether the words where OpenAI's final transcript of a segment differs from its live preview are the words it misheard, which would make them a free low-confidence hint for cleanup. It plays every replay clip (the same 18 prompts and cached `say` audio as `voice-replay`, or `VOICE_REPLAY_RECORDINGS_DIR` recordings) into the real `OpenAITranscriptionProvider`, against the live socket, three passes by default with the clip order shuffled from `--seed`. It costs about $0.017 per minute of audio, under ten cents for a default run, and never runs in CI. It refuses to start while `DAINTREE_REALTIME_WS_URL` points the provider at a mock, and refuses a recording that isn't 24 kHz, since audio goes to the provider as it is.
+`OPENAI_API_KEY=… npm run perf voice-preview-final` asks whether the words where OpenAI's final transcript of a segment differs from its live preview are the words it misheard, which would make them a free low-confidence hint for cleanup. It plays every replay clip (the same prompts and cached `say` audio as `voice-replay`, or `VOICE_REPLAY_RECORDINGS_DIR` recordings) into the real `OpenAITranscriptionProvider`, against the live socket, three passes by default with the clip order shuffled from `--seed`. It costs about $0.017 per minute of audio, under ten cents for a default run, and never runs in CI. It refuses to start while `DAINTREE_REALTIME_WS_URL` points the provider at a mock, and refuses a recording that isn't 24 kHz, since audio goes to the provider as it is.
 
-Everything between the audio and the events is production's: the session config, the `delay` tier, the client-side Silero VAD that cuts segments at pauses, the 8 s forced commit, the drain. Only Electron is swapped out. Under Node `electron` is a path string, so the script resolves it to a stub whose `utilityProcess.fork` runs the unmodified VAD worker in a Node child (`voice-preview-final-vad.ts`) and reports what the child says. Audio goes in as 100 ms chunks on the capture clock from the moment `start()` is called, as the microphone opens while the socket connects, and the stop comes as the clip runs out, as in `voice-replay`. Each session gets a fresh provider and counts only its own VAD child's messages, and the run stops if that child hasn't exited before the next session would start. Bias terms are off unless `--terms` sends every fixture term.
+Everything between the audio and the events is production's: the session config, the `delay` tier, the client-side Silero VAD that cuts segments at pauses, the forced commit when speech runs long, the drain. Only Electron is swapped out. Under Node `electron` is a path string, so the script resolves it to a stub whose `utilityProcess.fork` runs the unmodified VAD worker in a Node child (`voice-live-vad.ts`, shared with `voice-tuning` through `lib/voiceLiveSession.ts`) and reports what the child says. Audio goes in as 100 ms chunks on the capture clock from the moment `start()` is called, as the microphone opens while the socket connects, and the stop comes as the clip runs out, as in `voice-replay`. Each session gets a fresh provider and counts only its own VAD child's messages, and the run stops if that child hasn't exited before the next session would start. Bias terms are off unless `--terms` sends every fixture term.
 
 A segment's preview is every delta the provider emitted for its item before the completion, which is what the composer showed; its final is the completion. A session is scored whole or not at all: a failed start, a reconnect, dropped audio, a VAD that never came up or failed, an error, a delta or completion without an item, or a segment settled without a final excludes it, and the report lists it with the reason.
 
@@ -404,7 +404,29 @@ The finals are then joined in order and aligned against the clip's reference, an
 
 Results land in `.tmp/perf-results/voice-preview-final/<label>-<timestamp>.json`, rewritten after every session with `complete: false` until the run finishes (Ctrl+C keeps what was paid for), with the Markdown report beside it. Both quote previews and finals, so they stay in `.tmp/`: the terminal gets only counts, and provider logging is held at warnings, which carry ids and lengths.
 
-What the numbers can't claim: the clips are synthesised speech, which a model hears more cleanly than a person in a room; a reference is the prompt the speaker meant, so a final can be marked wrong for writing a word the way it was said; 18 clips over a few passes are repeats of the same audio, not independent dictations; and a flag that points at the right words still doesn't show that cleanup fixes more with it.
+What the numbers can't claim: the clips are synthesised speech, which a model hears more cleanly than a person in a room; a reference is the prompt the speaker meant, so a final can be marked wrong for writing a word the way it was said; a few passes over the clips are repeats of the same audio, not independent dictations; and a flag that points at the right words still doesn't show that cleanup fixes more with it.
+
+## OpenAI delay tier and segmentation (`voice-tuning`, #14625)
+
+`OPENAI_API_KEY=… npm run perf voice-tuning -- --arms low,medium,high` plays every replay clip, and the two longer single utterances in `LONG_SPEECH_CLIPS` (sentences run together with only the short breaks between them, kept out of `REPLAY_CLIPS` so the cleanup corpus and replay baselines don't have to carry them), into the real `OpenAITranscriptionProvider` once per arm, through the same session loop, VAD child and capture clock as `voice-preview-final`, and scores what would land in the draft: the finals, joined in completion order, against the clip's reference with the replay benchmark's scoring. The provider takes the arm's tuning (`OpenAITranscriptionTuning`) through its constructor, so every arm runs production's code with one thing changed; production runs `OPENAI_TRANSCRIPTION_TUNING`. It costs about $0.017 per minute of audio per arm, and never runs in CI. It refuses a mock `DAINTREE_REALTIME_WS_URL` and any recording that isn't 24 kHz.
+
+An arm is `<delay>` (production's segmentation at that tier), `<delay>:cap<s>` (continuous speech cut only at `<s>` seconds) or `<delay>:gap<a>-<b>` (cut at the first short pause the VAD hears once the segment has run `<a>` seconds, or at `<b>`). A short pause is five frames, about 160 ms, of avr-vad's own end-of-speech count; a cut there isn't a pause commit, so break commands and a spoken send still wait for the end of speech. The first arm is the reference. Every arm plays a clip back to back, in an order shuffled per clip, so a slow minute on the network lands on all of them.
+
+Per arm the report gives pooled and mean WER, term recall, first and last word kept, segments per session, finals that came back empty, and median and p95 of the first delta, the first final, the stop to the last final and the drain, all over the clip-and-pass pairs every arm scored, so a session one arm lost can't flatter it. A session is excluded on the same anomalies as `voice-preview-final`. Each arm is then compared with the first session by session: mean edits, how many sessions it did better, worse and the same on, and the median change in the stop to the last final.
+
+| Option | Default | Effect |
+| --- | --- | --- |
+| `--arms` | `low,medium,high` | Arms to compare, the first the reference |
+| `--repeats` | `3` | Passes over the clips |
+| `--clips` | all | Only these clip ids, from either list |
+| `--terms` | off | Sends every fixture term as a bias term |
+| `--seed` | `14625` | Clip and arm order |
+| `--label` | `run` | Prefix of the result file |
+| `--rescore <run.json>` |  | Scores a saved run again with today's references and scoring, sending nothing; a session whose clip is gone is excluded |
+
+Results land in `.tmp/perf-results/voice-tuning/<label>-<timestamp>.json`, rewritten after every session, with the Markdown report beside it listing every clip's reference and each arm's finals for reading through where they differ. Both quote transcripts, so the terminal gets only the table.
+
+What the numbers can't claim: synthesised speech pauses less, and more evenly, than a person does, so a gap rule has fewer places to cut and the cut lands closer to the next word (a commit takes everything sent up to the chunk the VAD heard the pause in); the renderer, Chromium's capture and microphone processing are left out (`voice-replay` covers those); and passes are repeats of the same audio.
 
 ## Recovery and session scenarios (PERF-260..264, 280..285)
 
