@@ -323,6 +323,8 @@ describe("agentActions adversarial", () => {
     expect(code).toEqual(expect.stringMatching(/^[a-z0-9]{6}$/));
     expect(options).toMatchObject({
       prompt: `Fix the flaky test\n\n${buildHandbackInstruction(String(code))}`,
+      // The pane records what the caller wrote, never the instruction (#14592).
+      promptAsWritten: "Fix the flaky test",
     });
     // The public result is unchanged: the caller never sees the code.
     expect(result).toEqual(launchedResult());

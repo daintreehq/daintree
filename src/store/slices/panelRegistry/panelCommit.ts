@@ -211,13 +211,25 @@ export function showsLostTerminal(panel: CarrierPanel | undefined, restartKey: n
  * being launched — carries restore-time or snapshot notes that can be older than
  * what the user has typed since (#12835). The live record's notes win; the
  * incoming ones only fill a record that has none.
+ *
+ * The run's first prompt (#14592) is carried the same way only while the same
+ * run goes on. A launch that replaces the pane's process (a held pane started,
+ * a lost terminal relaunched) decides it from its own options, since starting
+ * over must clear it.
  */
-export function carryLiveScratchpad(
+export function carryLivePaneRecords(
   incoming: CarrierPanel,
-  existing: PtyPanelData | undefined
+  existing: PtyPanelData | undefined,
+  replacesRun: boolean
 ): CarrierPanel {
-  if (!existing?.scratchpad || !isPtyPanel(incoming)) return incoming;
-  return { ...incoming, scratchpad: existing.scratchpad };
+  if (!existing || !isPtyPanel(incoming)) return incoming;
+  const firstPrompt = replacesRun ? undefined : existing.firstPrompt;
+  if (!existing.scratchpad && !firstPrompt) return incoming;
+  return {
+    ...incoming,
+    ...(existing.scratchpad && { scratchpad: existing.scratchpad }),
+    ...(firstPrompt && { firstPrompt }),
+  };
 }
 
 export function gridFocusPatch(
@@ -322,7 +334,7 @@ export function commitPtyPanel(
               // preserve the existing entry if a partial reconnect omits it.
             }
           : ptyTerminal;
-      const carried = carryLiveScratchpad(preservedTerminal, existingPty);
+      const carried = carryLivePaneRecords(preservedTerminal, existingPty, false);
       return {
         panelsById: { ...state.panelsById, [id]: carried },
         panelIdsByWorktreeId: existing
@@ -415,7 +427,11 @@ export function commitPtyPanel(
             : ptyTerminal;
         const newById = {
           ...state.panelsById,
-          [id]: carryLiveScratchpad(preservedTerminal, existingPty2),
+          [id]: carryLivePaneRecords(
+            preservedTerminal,
+            existingPty2,
+            options.replacesRestoreRecovery === true || replacesLost !== undefined
+          ),
         };
         const newIndex = transferBetweenWorktreeIndex(
           state.panelIdsByWorktreeId,

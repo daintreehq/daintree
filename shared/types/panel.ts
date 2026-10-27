@@ -507,6 +507,29 @@ export interface TerminalScratchpad {
   width?: number;
 }
 
+/** How a {@link TerminalFirstPrompt} reached the run. */
+export type TerminalFirstPromptVia = "launch" | "send";
+
+/**
+ * The first prompt Daintree itself delivered to a run (#14592): the launch
+ * argument, or for a run launched with none, the first send through Daintree.
+ * Stored as the caller wrote it, before any handback instruction was appended,
+ * and never read back out of the command line, the scrollback or an agent's
+ * session files. Later prompts never replace it. It rides the panel record, so
+ * restarting, resuming or moving the pane keeps it and permanently removing
+ * the terminal discards it. Persisted, and never sent off the machine: not
+ * logged, not in diagnostics, not returned by any MCP tool.
+ */
+export interface TerminalFirstPrompt {
+  /** The prompt text, cut at `FIRST_PROMPT_MAX_CHARS`. */
+  text: string;
+  via: TerminalFirstPromptVia;
+  /** Epoch ms of the delivery. */
+  at: number;
+  /** The text was cut at the cap. */
+  truncated?: true;
+}
+
 export interface PanelRestoreRecovery {
   reason: RestoreRecoveryReason;
   /**
@@ -838,6 +861,8 @@ export interface PtyPanelData extends BasePanelData {
   holdOnRestart?: true;
   /** Notes column beside the terminal (#12835). Persisted. */
   scratchpad?: TerminalScratchpad;
+  /** See {@link TerminalFirstPrompt}. Persisted. */
+  firstPrompt?: TerminalFirstPrompt;
 }
 
 export interface BrowserPanelData extends BasePanelData {

@@ -4385,3 +4385,111 @@ describe("restore provenance and the plugin hold (#14017)", () => {
     );
   });
 });
+
+describe("first prompt restore (#14592)", () => {
+  const firstPrompt = { text: "Fix the flaky test\nthen push", via: "launch" as const, at: 1_000 };
+  const claudePane = {
+    id: "t1",
+    kind: "terminal" as const,
+    launchAgentId: "claude",
+    cwd: "/repo",
+    location: "grid" as const,
+    title: "Claude",
+    firstPrompt,
+  };
+  const settings = { agents: { claude: {} } };
+  const respawn = (snapshot: SavedSnapshot): AddTerminalArgs =>
+    buildArgsForRespawn(snapshot, "terminal", "/repo", settings, false, "/tmp", undefined, {
+      restoredAt: 5_000,
+    });
+
+  it("keeps the record for a pane whose process outlived the view", () => {
+    const backend = { id: "t1", cwd: "/repo", kind: "terminal" as const };
+    expect(buildArgsForBackendTerminal(backend, claudePane, "/repo").firstPrompt).toEqual(
+      firstPrompt
+    );
+    expect(buildArgsForReconnectedFallback(backend, claudePane, "/repo").firstPrompt).toEqual(
+      firstPrompt
+    );
+  });
+
+  it("keeps the record when the respawn resumes the run's conversation", () => {
+    const result = respawn({ ...claudePane, agentSessionId: "sess-c" });
+    expect(result.restoreProvenance?.disposition).toBe("resume");
+    expect(result.firstPrompt).toEqual(firstPrompt);
+  });
+
+  it("keeps the record for a pane held for recovery", () => {
+    const result = respawn({ ...claudePane, restoreRecovery: { reason: "resume-deferred" } });
+    expect(result.restoreProvenance?.disposition).toBe("held");
+    expect(result.firstPrompt).toEqual(firstPrompt);
+  });
+
+  it("drops the record when the respawn starts a new conversation", () => {
+    const result = respawn(claudePane);
+    expect(result.restoreProvenance?.disposition).toBe("fresh");
+    expect(result.firstPrompt).toBeUndefined();
+  });
+
+  it("keeps the record when the respawn runs the saved launch command again", () => {
+    // No settings to rebuild from and no resume path: the saved command, prompt
+    // included, is what launches.
+    const saved = { ...claudePane, command: "claude 'Fix the flaky test then push'" };
+    const result = buildArgsForRespawn(saved, "terminal", "/repo", undefined, false, "/tmp");
+    expect(result.command).toBe(saved.command);
+    expect(result.firstPrompt).toEqual(firstPrompt);
+  });
+
+  it("never keeps a sent prompt, or one with no saved command, for a run that starts over", () => {
+    const sent = { ...firstPrompt, via: "send" as const };
+    const replayed = buildArgsForRespawn(
+      { ...claudePane, command: "claude", firstPrompt: sent },
+      "terminal",
+      "/repo",
+      undefined,
+      false,
+      "/tmp"
+    );
+    expect(replayed.command).toBe("claude");
+    expect(replayed.firstPrompt).toBeUndefined();
+
+    const shell = buildArgsForRespawn(
+      { id: "s1", kind: "terminal" as const, cwd: "/repo", location: "grid", firstPrompt },
+      "terminal",
+      "/repo",
+      undefined,
+      false,
+      "/tmp"
+    );
+    expect(shell.command).toBeUndefined();
+    expect(shell.firstPrompt).toBeUndefined();
+  });
+
+  describe("an untrusted on-disk record", () => {
+    const backend = { id: "t1", cwd: "/repo", kind: "terminal" as const };
+    const builders: Array<[string, (saved: SavedSnapshot) => AddTerminalArgs]> = [
+      ["a live PTY", (saved) => buildArgsForBackendTerminal(backend, saved, "/repo")],
+      ["a reconnect fallback", (saved) => buildArgsForReconnectedFallback(backend, saved, "/repo")],
+      ["a resumed respawn", (saved) => respawn({ ...saved, agentSessionId: "sess-c" })],
+      [
+        "a held respawn",
+        (saved) => respawn({ ...saved, restoreRecovery: { reason: "resume-deferred" } }),
+      ],
+    ];
+
+    it.each(builders)("is dropped when malformed, for %s", (_label, build) => {
+      expect(
+        build({ ...claudePane, firstPrompt: { text: 42, via: "launch", at: 1 } }).firstPrompt
+      ).toBeUndefined();
+    });
+
+    it.each(builders)("is cut to the cap when oversized, for %s", (_label, build) => {
+      const restored = build({
+        ...claudePane,
+        firstPrompt: { text: "y".repeat(9_000), via: "launch", at: 1 },
+      }).firstPrompt;
+      expect(restored?.text.length).toBe(8_000);
+      expect(restored?.truncated).toBe(true);
+    });
+  });
+});

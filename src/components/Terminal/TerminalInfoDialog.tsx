@@ -3,6 +3,7 @@ import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { ChevronRight, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { pluralize } from "@/lib/pluralize";
 import { SkeletonBone } from "@/components/ui/Skeleton";
 import {
   readTerminalPaneInfo,
@@ -88,6 +89,29 @@ function formatSyncMode(value: boolean | null): string {
 function formatYesNo(value: boolean | undefined, absent: string): string {
   if (value === undefined) return absent;
   return value ? "Yes" : "No";
+}
+
+/**
+ * A copied report leaves out the launch command, which can hold the prompt the
+ * run launched with, and a pane's argv once it has a command, since the startup
+ * wrapper carries the command there (#14592). Both stay on screen; only the
+ * text that gets pasted into an issue drops them.
+ */
+const LEFT_OUT_FOR_PROMPT = "(left out: can hold the launch prompt)";
+
+function formatCommandForClipboard(command: string | undefined): string {
+  return command ? LEFT_OUT_FOR_PROMPT : NONE;
+}
+
+function formatSpawnArgsForClipboard(
+  args: string[] | undefined,
+  command: string | undefined,
+  absent: string
+): string {
+  if (!command || args === undefined || args.length === 0) {
+    return formatArgsForClipboard(args, absent);
+  }
+  return `${pluralize(args.length, "argument")} ${LEFT_OUT_FOR_PROMPT}`;
 }
 
 function formatArgsForClipboard(args: string[] | undefined, absent: string): string {
@@ -579,7 +603,7 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
 
 Agent launch:
   Launch agent: ${launchAgentId ?? NONE}
-  Command: ${command ?? NONE}
+  Command: ${formatCommandForClipboard(command)}
   Launch flags: ${formatArgsForClipboard(agentLaunchFlags, NONE)}
   Model: ${agentModelId ?? NONE}
   Preset: ${agentPresetId ?? NONE}
@@ -622,8 +646,8 @@ ${startedByAssistant ? "  Started by: Daintree Assistant\n" : ""}  Started via M
 
 How it launched:
   Shell: ${info?.shell || UNAVAILABLE}
-  Command: ${command ?? NONE}
-  Args: ${formatArgsForClipboard(info?.spawnArgs, info ? NONE : UNAVAILABLE)}${agentSection}
+  Command: ${formatCommandForClipboard(command)}
+  Args: ${formatSpawnArgsForClipboard(info?.spawnArgs, command, info ? NONE : UNAVAILABLE)}${agentSection}
 
 Terminal internals:
   Agent launch hint: ${launchAgentId ? "Yes" : "No"}

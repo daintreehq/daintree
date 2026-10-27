@@ -38,6 +38,7 @@ import {
 } from "../../../shared/utils/agentSystemPrompt.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { appendHandbackInstruction, mintHandbackCode } from "../../../shared/utils/handback.js";
+import { buildFirstPrompt } from "../../../shared/utils/firstPrompt.js";
 import {
   buildPanelLimitSnapshot,
   computeHardwareDefaults,
@@ -422,7 +423,10 @@ export async function runAgentLaunch(
   // What a view's persistence would write for this panel the moment it was
   // added: the shared base fields, then the PTY fragment through the same
   // serializer. Never fatal — the agent is running either way, and hydration
-  // still finds it through the pty-host.
+  // still finds it through the pty-host. Only an agent is handed the prompt as
+  // its launch argument, recorded as the caller wrote it (#14592).
+  const firstPrompt =
+    launchAgentId !== undefined ? buildFirstPrompt(args.prompt, "launch", Date.now()) : undefined;
   const panel: PtySnapshotSource = {
     cwd,
     launchAgentId,
@@ -436,6 +440,7 @@ export async function runAgentLaunch(
     originalPresetId: plan.preset?.id,
     env: plan.env,
     spawnedBy,
+    ...(firstPrompt && { firstPrompt }),
   };
   const snapshot: PanelSnapshot = {
     id,

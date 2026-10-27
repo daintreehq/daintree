@@ -312,3 +312,62 @@ describe("useAgentLauncher — no host agent ceiling (#14810)", () => {
     expect(onDecline).not.toHaveBeenCalled();
   });
 });
+
+describe("useAgentLauncher — the launch prompt record (#14592)", () => {
+  beforeEach(() => {
+    addPanel.mockReset();
+    addPanel.mockResolvedValue("terminal-1");
+    setElectron(true);
+  });
+
+  afterEach(() => {
+    setElectron(false);
+  });
+
+  const launchedOptions = (): Record<string, unknown> =>
+    addPanel.mock.calls[0]?.[0] as Record<string, unknown>;
+
+  it("records the prompt as the caller wrote it, not with the handback instruction", async () => {
+    const { result } = renderHook(() => useAgentLauncher());
+
+    await act(async () => {
+      await result.current.launchAgent("claude", {
+        force: true,
+        prompt: "Fix the flaky test\n\nWhen you have finished…",
+        promptAsWritten: "Fix the flaky test",
+        handbackCode: "abc123",
+      });
+    });
+
+    expect(launchedOptions().launchPrompt).toEqual({
+      text: "Fix the flaky test",
+      via: "launch",
+      at: expect.any(Number),
+    });
+  });
+
+  it("records a prompt passed with no handback as it is", async () => {
+    const { result } = renderHook(() => useAgentLauncher());
+
+    await act(async () => {
+      await result.current.launchAgent("claude", { force: true, prompt: "Line one\nline two" });
+    });
+
+    expect(launchedOptions().launchPrompt).toMatchObject({ text: "Line one\nline two" });
+  });
+
+  it("writes no record for a launch with no prompt, or one that starts no agent", async () => {
+    const { result } = renderHook(() => useAgentLauncher());
+
+    await act(async () => {
+      await result.current.launchAgent("claude", { force: true });
+    });
+    await act(async () => {
+      await result.current.launchAgent("terminal", { prompt: "ls" });
+    });
+
+    expect(addPanel).toHaveBeenCalledTimes(2);
+    expect(addPanel.mock.calls[0]?.[0]).not.toHaveProperty("launchPrompt");
+    expect(addPanel.mock.calls[1]?.[0]).not.toHaveProperty("launchPrompt");
+  });
+});

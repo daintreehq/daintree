@@ -11,6 +11,11 @@ export type ResolvedRecipeAgentStep =
       ok: true;
       /** The first turn as launch sends it: variables substituted, one trimmed line. */
       initialPrompt: string | undefined;
+      /**
+       * The same first turn with its line breaks kept, as the recipe wrote it:
+       * what the pane records as its first prompt (#14592).
+       */
+      promptAsWritten: string | undefined;
       /** The standing instruction as the agent receives it, for showing. */
       systemPrompt: string | undefined;
       /** Its launch arguments; empty when the step has none. */
@@ -45,13 +50,12 @@ export function resolveRecipeAgentStep(
       : undefined,
   };
   const rawPrompt = terminal.initialPrompt?.trim();
+  const promptAsWritten =
+    (rawPrompt ? replaceRecipeVariables(rawPrompt, stepContext) : "").trim() || undefined;
   // The command builder sends the first turn as one trimmed line; resolve it
   // to exactly that here, so a dialog showing it shows what launches.
   const initialPrompt =
-    (rawPrompt ? replaceRecipeVariables(rawPrompt, stepContext) : "")
-      .replace(/\r\n/g, " ")
-      .replace(/\n/g, " ")
-      .trim() || undefined;
+    promptAsWritten?.replace(/\r\n/g, " ").replace(/\n/g, " ").trim() || undefined;
   if (fromPlugin && initialPrompt?.startsWith("-")) {
     return {
       ok: false,
@@ -70,6 +74,7 @@ export function resolveRecipeAgentStep(
   return {
     ok: true,
     initialPrompt,
+    promptAsWritten,
     systemPrompt: normalizeSystemPrompt(systemPromptText),
     systemPromptArgs: systemPromptArgs.args,
   };

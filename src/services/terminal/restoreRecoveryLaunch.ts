@@ -118,6 +118,13 @@ export function buildRestoreRecoveryLaunchOptions(
       disposition: resuming ? "resume" : "fresh",
     },
     lastAgentObservation: panel.lastAgentObservation,
+    // Resuming the conversation the pane was held with carries on the run its
+    // first prompt belongs to; another picked conversation, or a fresh start
+    // running the held command, was never handed it (#14592).
+    firstPrompt:
+      choice.kind === "resume" && choice.sessionId === recovery.sessionId
+        ? panel.firstPrompt
+        : undefined,
     launchedByPluginId: panel.launchedByPluginId,
     // The user's choice to start the pane outranks the plugin's standing request
     // to hold it; the plugin can ask again (#14017).

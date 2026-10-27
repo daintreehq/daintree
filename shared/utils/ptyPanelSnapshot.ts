@@ -41,6 +41,7 @@ export type PtySnapshotSource = Pick<
   | "launchedByPluginId"
   | "holdOnRestart"
   | "scratchpad"
+  | "firstPrompt"
   | "agentState"
   | "lastStateChange"
 >;
@@ -87,6 +88,8 @@ export function serializePtyPanel(t: PtySnapshotSource): Partial<PanelSnapshot> 
     ...(t.holdOnRestart === true && { holdOnRestart: true as const }),
     // Written for a held pane too: the notes belong to the pane, not its process.
     ...(t.scratchpad && { scratchpad: t.scratchpad }),
+    // Written for a held pane too: it is what the run was asked, not a process.
+    ...(t.firstPrompt && { firstPrompt: t.firstPrompt }),
     // worktreeMoveNotice intentionally omitted — it's a live prompt to tell a
     // running agent where to go (#11853). Persisting it would resurface the
     // banner for a process that no longer exists after a restart.

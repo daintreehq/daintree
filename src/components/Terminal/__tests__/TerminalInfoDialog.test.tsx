@@ -348,6 +348,27 @@ describe("TerminalInfoDialog", () => {
       expect(text).toContain("could not be read");
     });
 
+    // The command and the argv carrying it can hold the launch prompt (#14592).
+    it("leaves the launch command and the argv carrying it out of the copy", async () => {
+      const command = "claude 'Fix the canary-7f3 login bug'";
+      mockPanelsById = {
+        "test-id": { id: "test-id", kind: "terminal", launchAgentId: "claude", command },
+      };
+      dispatchMock.mockResolvedValue({
+        ok: true,
+        result: makePayload({ spawnArgs: ["-l", "-c", command] }),
+      });
+      renderDialog();
+      await screen.findByTestId("terminal-info-body");
+
+      // Still on screen for the person looking at it.
+      expect(screen.getAllByText(command).length).toBeGreaterThan(0);
+      const text = await copyPayload();
+      expect(text).not.toContain("canary-7f3");
+      expect(text).toMatch(/Command: \(left out: can hold the launch prompt\)/);
+      expect(text).toContain("Args: 3 arguments (left out: can hold the launch prompt)");
+    });
+
     it("names the assistant and the transport separately (#11808)", async () => {
       mockPanelsById = { "test-id": { id: "test-id", kind: "terminal", spawnedBy: "assistant" } };
       dispatchMock.mockResolvedValue({ ok: true, result: makePayload() });

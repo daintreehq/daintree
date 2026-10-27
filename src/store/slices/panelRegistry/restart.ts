@@ -906,6 +906,22 @@ export const createRestartActions = (
       }
 
       const spawnCommand = commandToRun;
+      // The record of what the run was first asked (#14592) stays only while
+      // that run goes on: a resume of the pane's own conversation (a forced
+      // resume may name another one), or a start-over that replays the stored
+      // launch command, which carries a launch prompt (never a sent one). A new
+      // conversation, or the bare shell a demoted pane restarts as, was never
+      // handed it.
+      const startsOver = !consumedSessionId && !usedResumeLatest;
+      const keepsFirstPrompt =
+        isAgent &&
+        (startsOver
+          ? currentTerminal.firstPrompt?.via === "launch" &&
+            freshCommand !== undefined &&
+            freshCommand === currentTerminal.command
+          : usedResumeLatest ||
+            !forcedResume ||
+            consumedSessionId === currentTerminal.agentSessionId);
       // Resume commands are transient: keep the original command as the
       // durable stored command so a later restart doesn't replay a consumed
       // session id or re-run resume-latest instead of launching fresh. The
@@ -971,6 +987,7 @@ export const createRestartActions = (
           agentSessionId: nextSessionId,
           // A fresh conversation begins where this pane runs.
           conversationCwd: consumedSessionId ? t.conversationCwd : undefined,
+          firstPrompt: keepsFirstPrompt ? t.firstPrompt : undefined,
           isRestarting: true,
           restartError: undefined,
           // Answered only once the replacement is actually spawning, so a
@@ -1154,9 +1171,9 @@ export const createRestartActions = (
         code: errorCode,
         timestamp: Date.now(),
         recoverable: errorCode === "ENOENT" || phase === "frontend-readiness",
+        // Never the command: an agent's carries its launch prompt (#14592).
         context: {
           failedCwd: currentTerminal.cwd,
-          command: commandToRun,
           phase,
           isAgent,
           agentId: effectiveAgentId,
@@ -1183,7 +1200,6 @@ export const createRestartActions = (
         id,
         phase,
         cwd: currentTerminal.cwd,
-        command: commandToRun,
         isAgent,
         agentId: effectiveAgentId,
       });
@@ -1726,8 +1742,10 @@ async function respawnAgentOnPreset(
         agentLaunchFlags: nextLaunchFlags,
         callerLaunchFlags: callerLaunchFlags.length > 0 ? callerLaunchFlags : undefined,
         agentSessionId: undefined,
-        // The fallback starts a new conversation where the pane runs.
+        // The fallback starts a new conversation where the pane runs, and is
+        // never handed the prompt the last one launched with (#14592).
         conversationCwd: undefined,
+        firstPrompt: undefined,
         isRestarting: true,
         restartError: undefined,
         exitCode: undefined,

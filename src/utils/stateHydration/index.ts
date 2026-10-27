@@ -157,6 +157,7 @@ export interface HydrationOptions {
     launchedByPluginId?: string;
     holdOnRestart?: true;
     scratchpad?: import("@shared/types/panel").TerminalScratchpad;
+    firstPrompt?: import("@shared/types/panel").TerminalFirstPrompt;
     env?: Record<string, string>;
     extensionState?: Record<string, unknown>;
     pluginId?: string;

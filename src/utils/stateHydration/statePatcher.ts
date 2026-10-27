@@ -12,6 +12,7 @@ import type {
   PanelTitleMode,
   RestoreRecoveryReason,
   SessionLostReason,
+  TerminalFirstPrompt,
   TerminalRestoreProvenance,
   TerminalSpawnSource,
 } from "@shared/types/panel";
@@ -72,6 +73,7 @@ import {
   sanitizeLiveRestoreProvenance,
 } from "@shared/utils/restoreProvenance";
 import { sanitizeScratchpad } from "@/lib/terminalScratchpad";
+import { sanitizeFirstPrompt } from "@shared/utils/firstPrompt";
 
 /**
  * Args for building addPanel options from hydration data.
@@ -218,6 +220,8 @@ export interface SavedTerminalData {
   restoreRecovery?: unknown;
   /** Untrusted on-disk value (#12835) — sanitized via `sanitizeScratchpad`. */
   scratchpad?: unknown;
+  /** Untrusted on-disk value (#14592) — sanitized via `sanitizeFirstPrompt`. */
+  firstPrompt?: unknown;
   /**
    * Untrusted on-disk values (#14017), sanitized in `restoreProvenance.ts` and
    * {@link readLaunchedByPluginId}. The saved `agentState` pair is never read as
@@ -493,6 +497,7 @@ export function buildArgsForBackendTerminal(
     ...pluginHoldArgs(saved),
     lastActiveAt: sanitizeLastActiveAt(saved.lastActiveAt),
     scratchpad: sanitizeScratchpad(saved.scratchpad),
+    firstPrompt: sanitizeFirstPrompt(saved.firstPrompt),
   };
 }
 
@@ -584,6 +589,7 @@ export function buildArgsForReconnectedFallback(
     ...pluginHoldArgs(saved),
     lastActiveAt: sanitizeLastActiveAt(saved.lastActiveAt),
     scratchpad: sanitizeScratchpad(saved.scratchpad),
+    firstPrompt: sanitizeFirstPrompt(saved.firstPrompt),
   };
 }
 
@@ -645,6 +651,23 @@ export interface BuildArgsForRespawnOptions {
    * panes from one pass share one time. Absent means now.
    */
   restoredAt?: number;
+}
+
+/**
+ * The first prompt a respawned pane keeps (#14592). One that resumes or is held
+ * carries on its run. One that starts over keeps a launch record only when it
+ * runs the saved launch command again, which carries that prompt; a sent
+ * prompt never rides a command, and a new conversation was never handed one.
+ */
+function restoredFirstPrompt(
+  saved: SavedTerminalData,
+  command: string | undefined,
+  continuesRun: boolean
+): TerminalFirstPrompt | undefined {
+  const record = sanitizeFirstPrompt(saved.firstPrompt);
+  if (!record || continuesRun) return record;
+  const savedCommand = saved.command?.trim();
+  return record.via === "launch" && savedCommand && command === savedCommand ? record : undefined;
 }
 
 export function buildArgsForRespawn(
@@ -1118,6 +1141,7 @@ export function buildArgsForRespawn(
     restore: true,
     lastActiveAt: sanitizeLastActiveAt(saved.lastActiveAt),
     scratchpad: sanitizeScratchpad(saved.scratchpad),
+    firstPrompt: restoredFirstPrompt(saved, command, Boolean(restoreRecovery) || resumed),
   };
 }
 
