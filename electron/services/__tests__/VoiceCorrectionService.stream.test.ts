@@ -211,6 +211,50 @@ describe("VoiceCorrectionService streaming", () => {
     expect(result).toMatchObject({ action: "no_change", failed: true });
   });
 
+  it("reads its text from the first part only, as an unstreamed reply is read", async () => {
+    const json = reply("Fix the parser now.");
+    const frames = replyFrames(json).map((frame) =>
+      frame.type === "response.output_text.delta"
+        ? { ...frame, output_index: 0, content_index: 0 }
+        : frame
+    );
+    frames.splice(2, 0, {
+      type: "response.output_text.delta",
+      output_index: 1,
+      content_index: 0,
+      delta: "stray",
+    });
+    stubFetch(streamed(frames));
+
+    const result = await new VoiceCorrectionService().correct(
+      { rawText: "fix the parser now" },
+      SETTINGS,
+      undefined,
+      vi.fn()
+    );
+
+    expect(result.correctedText).toBe("Fix the parser now.");
+  });
+
+  it("takes an error event's code from the top level too", async () => {
+    const frames = replyFrames(reply("Fix the parser now."), null).slice(0, 3);
+    frames.push({ type: "error", code: "rate_limit_exceeded", message: "fix the parser now" });
+    stubFetch(streamed(frames));
+
+    const result = await new VoiceCorrectionService().correct(
+      { rawText: "fix the parser now" },
+      SETTINGS,
+      undefined,
+      vi.fn()
+    );
+
+    expect(result).toMatchObject({ failed: true });
+    expect(logWarn).toHaveBeenCalledWith(
+      expect.stringContaining("Correction failed"),
+      expect.objectContaining({ code: "rate_limit_exceeded" })
+    );
+  });
+
   it("fails on an error event mid-stream, logging its code and nothing else", async () => {
     const frames = replyFrames(reply("Fix the parser now."), null).slice(0, 3);
     frames.push({

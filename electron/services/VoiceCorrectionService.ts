@@ -232,7 +232,10 @@ interface CorrectionReply {
 interface CorrectionStreamEvent {
   type?: string;
   delta?: string;
+  output_index?: number;
+  content_index?: number;
   response?: CorrectionReply & { error?: { code?: unknown } | null };
+  code?: unknown;
   error?: { code?: unknown };
 }
 
@@ -1135,6 +1138,8 @@ export class VoiceCorrectionService {
     const decoder = new TextDecoder();
     let buffer = "";
     let text = "";
+    // The first text part only, as a whole reply is read.
+    let part: string | null = null;
     let reply: CorrectionReply | null = null;
     let reported = "";
     let reportedAt = -Infinity;
@@ -1146,11 +1151,13 @@ export class VoiceCorrectionService {
         buffer = rest;
         for (const event of events) {
           if (event.type === "response.output_text.delta" && typeof event.delta === "string") {
-            text += event.delta;
+            const at = `${event.output_index ?? 0}:${event.content_index ?? 0}`;
+            part ??= at;
+            if (at === part) text += event.delta;
           } else if (event.type === "response.completed" || event.type === "response.incomplete") {
             reply = event.response ?? {};
           } else if (event.type === "response.failed" || event.type === "error") {
-            const code = event.response?.error?.code ?? event.error?.code;
+            const code = event.response?.error?.code ?? event.error?.code ?? event.code;
             throw new OpenAIRequestError(
               response.status,
               typeof code === "string" ? code : undefined

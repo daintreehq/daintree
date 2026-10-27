@@ -1203,6 +1203,69 @@ describe("pendingAIField", () => {
     view.destroy();
   });
 
+  it("drops the rewrite in the same transaction as typing inside the words it hides", () => {
+    const view = makeView("um so fix the bug");
+    view.dispatch({
+      effects: setPendingAIRanges.of([{ from: 0, to: 17, rewrite: { to: 9, text: "So fix" } }]),
+    });
+    view.dispatch({ changes: { from: 6, insert: "x" } });
+
+    expect(spans(view).filter((span) => span.widget)).toEqual([]);
+    expect(view.contentDOM.textContent).toBe("um so xfix the bug");
+    view.destroy();
+  });
+
+  it("keeps the rewrite over typing at its edges", () => {
+    const view = makeView("um so fix the bug");
+    view.dispatch({
+      effects: setPendingAIRanges.of([{ from: 0, to: 17, rewrite: { to: 9, text: "So fix" } }]),
+    });
+    view.dispatch({ changes: { from: 0, insert: "Hey " } });
+
+    expect(spans(view)).toEqual([
+      { from: 4, to: 13, widget: true },
+      { from: 13, to: 21, widget: false },
+    ]);
+    view.destroy();
+  });
+
+  it("lays a rewritten list out on its own lines", () => {
+    const view = makeView("first fix the parser second ship it");
+    view.dispatch({
+      effects: setPendingAIRanges.of([
+        { from: 0, to: 35, rewrite: { to: 26, text: "1. Fix the parser\n2." } },
+      ]),
+    });
+
+    expect(view.contentDOM.querySelector(".cm-voice-rewrite")?.textContent).toBe(
+      "1. Fix the parser\n2."
+    );
+    view.destroy();
+  });
+
+  it("covers a file chip inside the words it rewrote, and gives it back after", () => {
+    const parent = document.createElement("div");
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc: "open @src/a.ts now please",
+        extensions: [pendingAIField, createFileChipField()],
+      }),
+    });
+    view.dispatch({
+      effects: setPendingAIRanges.of([
+        { from: 0, to: 25, rewrite: { to: 18, text: "Open @src/a.ts now" } },
+      ]),
+    });
+
+    expect(view.contentDOM.querySelector(".cm-file-chip")).toBeNull();
+    expect(view.contentDOM.textContent).toBe("Open @src/a.ts now please");
+
+    view.dispatch({ effects: setPendingAIRanges.of([]) });
+    expect(view.contentDOM.querySelector(".cm-file-chip")?.textContent).toBe("@src/a.ts");
+    view.destroy();
+  });
+
   it("drops the rewrite when the correction lands over it", () => {
     const view = makeView("um so fix the bug");
     view.dispatch({

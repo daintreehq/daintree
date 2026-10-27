@@ -8,8 +8,9 @@
  * laid out and a command can move to the front. So the newest stretch of the
  * stream is aligned against a window of the passage just past what's already
  * been replaced: every streamed word is accounted for, dropped and added words
- * are affine gaps, and a commit happens only on a word both sides share. A
- * commit is final, so the rewrite only ever moves forward.
+ * are affine gaps, and a commit happens only on a word both sides share that
+ * the alignment around it confirms. A commit is final, so the rewrite only
+ * ever moves forward.
  */
 
 /** What the stream has replaced so far: the passage up to `rawTo` shows as `text`. */
@@ -31,6 +32,12 @@ interface Token {
   to: number;
 }
 
+/** One step of an alignment: a streamed unit against a dictated one, or either alone. */
+type Step =
+  | { kind: "pair"; s: number; d: number; score: number }
+  | { kind: "added" }
+  | { kind: "dropped" };
+
 const MATCH = 2;
 const FUZZY = 1;
 const MISMATCH = -1.5;
@@ -39,6 +46,9 @@ const GAP_EXTEND = -0.5;
 // The stream's last complete word may still pair better with what follows.
 // Main already holds back a word cut off mid-token.
 const PROVISIONAL_WORDS = 1;
+// Dictated words dropped between two matches with nothing added, the shape of
+// removed filler, that still leave the second match confirmed.
+const MAX_FILLER_DROPPED = 2;
 // Bounds each update's alignment, however long the passage or the stretch.
 const MAX_STRETCH_UNITS = 48;
 const WINDOW_SLACK = 12;
@@ -179,13 +189,13 @@ function pairScore(a: Unit, b: Unit): number {
 }
 
 /**
- * The matched pairs, as [streamed, dictated] unit indexes in order, of the
- * best alignment that accounts for every streamed unit. Skipping dictated
- * units at the start costs a gap, since the stream picks up where the last
- * commit left off; dictated units after the alignment's end are free, since
- * the stream hasn't got there. Ties go to the end that consumes least.
+ * The steps, in order, of the best alignment that accounts for every streamed
+ * unit. Skipping dictated units at the start costs a gap, since the stream
+ * picks up where the last commit left off; dictated units after the
+ * alignment's end are free, since the stream hasn't got there. Ties go to the
+ * end that consumes least.
  */
-function alignStretch(streamed: Unit[], dictated: Unit[]): Array<[number, number]> {
+function alignStretch(streamed: Unit[], dictated: Unit[]): Step[] {
   const m = streamed.length;
   const n = dictated.length;
   const w = n + 1;
@@ -231,13 +241,13 @@ function alignStretch(streamed: Unit[], dictated: Unit[]): Array<[number, number
   let i = m;
   let k = i * w + j;
   let state = matrices.findIndex((matrix) => matrix[k] === best);
-  const pairs: Array<[number, number]> = [];
+  const steps: Step[] = [];
   while (i > 0 || j > 0) {
     k = i * w + j;
     const value = matrices[state]![k]!;
     if (state === 0) {
       const score = pairScore(streamed[i - 1]!, dictated[j - 1]!);
-      if (score > 0) pairs.push([i - 1, j - 1]);
+      steps.push({ kind: "pair", s: i - 1, d: j - 1, score });
       const diag = k - w - 1;
       state = matrices.findIndex((matrix) => matrix[diag]! + score === value);
       i--;
@@ -247,16 +257,41 @@ function alignStretch(streamed: Unit[], dictated: Unit[]): Array<[number, number
       state = [pair[up]! + GAP_OPEN, added[up]! + GAP_EXTEND, dropped[up]! + GAP_OPEN].indexOf(
         value
       );
+      steps.push({ kind: "added" });
       i--;
     } else {
       const left = k - 1;
       state = [pair[left]! + GAP_OPEN, added[left]! + GAP_OPEN, dropped[left]! + GAP_EXTEND].indexOf(
         value
       );
+      steps.push({ kind: "dropped" });
       j--;
     }
   }
-  return pairs.reverse();
+  return steps.reverse();
+}
+
+/**
+ * Whether the step at `index` is a match the alignment has confirmed: the
+ * match before it (or the last commit, when there's none) sits right behind
+ * it, with at most a little filler dropped between them and nothing added. A
+ * common word matching on its own across a longer gap is chance until the
+ * next word matches too, and a near spelling only counts beside an exact match.
+ */
+function confirmsMatch(steps: Step[], index: number, originExact: boolean): boolean {
+  const step = steps[index]!;
+  if (step.kind !== "pair" || step.score <= 0) return false;
+  let dropped = 0;
+  let k = index - 1;
+  for (; k >= 0 && steps[k]!.kind !== "pair"; k--) {
+    if (steps[k]!.kind === "added") return false;
+    dropped++;
+  }
+  if (dropped > MAX_FILLER_DROPPED) return false;
+  const prev = steps[k];
+  if (prev?.kind === "pair" && prev.score <= 0) return false;
+  const prevExact = prev?.kind === "pair" ? prev.score === MATCH : originExact;
+  return step.score === MATCH || prevExact;
 }
 
 /**
@@ -269,6 +304,9 @@ export class CorrectionStreamAligner {
   private readonly units: Unit[];
   private unitsDone = 0;
   private streamedDone = 0;
+  // Whether the last commit ended on an exact match, which a near spelling
+  // straight after it can lean on.
+  private committedExact = false;
   private rewrite: StreamedRewrite | null = null;
 
   constructor(private readonly dictated: string) {
@@ -295,14 +333,17 @@ export class CorrectionStreamAligner {
     );
     if (window.length === 0) return this.rewrite;
 
-    const pairs = alignStretch(streamedUnits, window);
-    let commit: [number, number] | null = null;
-    for (const [s, d] of pairs) {
-      if (streamedUnits[s]!.last && window[d]!.last) commit = [s, d];
+    const steps = alignStretch(streamedUnits, window);
+    let commit: { s: number; d: number; score: number } | null = null;
+    for (let i = 0; i < steps.length; i++) {
+      const step = steps[i]!;
+      if (step.kind !== "pair" || !confirmsMatch(steps, i, this.committedExact)) continue;
+      if (streamedUnits[step.s]!.last && window[step.d]!.last) commit = step;
     }
     if (!commit) return this.rewrite;
 
-    const [s, d] = commit;
+    const { s, d } = commit;
+    this.committedExact = commit.score === MATCH;
     const streamedTo = stable[streamedUnits[s]!.token]!.to;
     this.streamedDone = streamedTo;
     this.unitsDone += d + 1;

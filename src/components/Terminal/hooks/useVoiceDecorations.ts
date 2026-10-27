@@ -61,15 +61,24 @@ export function useVoiceDecorations({ terminalId, editorViewRef }: UseVoiceDecor
 
     const docLen = view.state.doc.length;
     const pendingRanges = correctionRanges.filter(
-      (range) =>
-        range.from >= 0 &&
-        range.to <= docLen &&
-        range.from < range.to &&
-        (!range.rewrite || (range.rewrite.to > range.from && range.rewrite.to <= range.to))
+      (range) => range.from >= 0 && range.to <= docLen && range.from < range.to
+    );
+    // A rewrite hides the words under it, so it is only drawn over the text
+    // its positions were taken in; until the editor and the store agree, the
+    // passage shows as dictated.
+    const rewritesHold =
+      pendingRanges.some((range) => range.rewrite) &&
+      view.state.doc.toString() ===
+        useTerminalInputStore.getState().getDraftInput(terminalId, projectId);
+    const shownRanges = pendingRanges.map((range) =>
+      range.rewrite &&
+      (!rewritesHold || range.rewrite.to <= range.from || range.rewrite.to > range.to)
+        ? { from: range.from, to: range.to }
+        : range
     );
 
     view.dispatch({
-      effects: [setInterimText.of(preview), setPendingAIRanges.of(pendingRanges)],
+      effects: [setInterimText.of(preview), setPendingAIRanges.of(shownRanges)],
     });
   }, [
     transcriptPhase,

@@ -1,5 +1,5 @@
 import { EditorView, Decoration, WidgetType, keymap, placeholder } from "@codemirror/view";
-import type { Extension, Range } from "@codemirror/state";
+import type { ChangeDesc, Extension, Range } from "@codemirror/state";
 import { StateField, StateEffect, Prec } from "@codemirror/state";
 import { insertNewline } from "@codemirror/commands";
 import type { ITheme } from "@xterm/xterm";
@@ -446,10 +446,32 @@ class CorrectionRewriteWidget extends WidgetType {
     span.textContent = this.text;
     return span;
   }
+  // The rewrite grows a stretch at a time; the same node takes each stretch.
+  updateDOM(dom: HTMLElement): boolean {
+    dom.textContent = this.text;
+    return true;
+  }
+  // A spoken list is laid out on lines of its own.
+  get lineBreaks(): number {
+    return this.text.split("\n").length - 1;
+  }
   // A click lands at the edge of the rewritten words, as on any text.
   ignoreEvent(): boolean {
     return false;
   }
+}
+
+/**
+ * Whether `changes` edit inside the range, not just at its edges: typing in
+ * the dictated words a rewrite hides drops the rewrite in the same
+ * transaction, so the keystroke is never hidden under it.
+ */
+function editsInside(changes: ChangeDesc, from: number, to: number): boolean {
+  let inside = false;
+  changes.iterChangedRanges((fromA, toA) => {
+    if (fromA === toA ? fromA > from && fromA < to : fromA < to && toA > from) inside = true;
+  });
+  return inside;
 }
 
 export interface PendingAIRange {
@@ -467,7 +489,13 @@ export const pendingAIField = StateField.define({
   },
   update(value, tr) {
     if (tr.docChanged) {
-      value = value.map(tr.changes);
+      value = value
+        .update({
+          filter: (from, to, decoration) =>
+            !(decoration.spec.widget instanceof CorrectionRewriteWidget) ||
+            !editsInside(tr.changes, from, to),
+        })
+        .map(tr.changes);
     }
     for (const effect of tr.effects) {
       if (effect.is(setPendingAIRanges)) {

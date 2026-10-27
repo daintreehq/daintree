@@ -99,13 +99,18 @@ describe("CorrectionStreamAligner", () => {
 
   it("follows the stream past removed filler", () => {
     const dictated = "um so I think we should uh refactor the parser";
-    const seen = stream(dictated, "So I think we should refactor the parser.");
-    expect(seen.at(-1)).toEqual({
+    const seen = stream(dictated, "So I think we should refactor the parser now.");
+    // Dropped filler takes the word after it along, never more.
+    expect(seen[0]).toEqual({ text: "So", rawTo: rawTo(dictated, "um so") });
+    expect(seen).toContainEqual({ text: "So I think we should", rawTo: rawTo(dictated, "should") });
+    expect(seen).toContainEqual({
       text: "So I think we should refactor",
       rawTo: rawTo(dictated, "uh refactor"),
     });
-    // The filler before a kept word goes with it, never ahead of it.
-    expect(seen.some((r) => r.text === "So I think we should" && r.rawTo === rawTo(dictated, "should"))).toBe(true);
+    expect(seen.at(-1)).toEqual({
+      text: "So I think we should refactor the",
+      rawTo: rawTo(dictated, "uh refactor the"),
+    });
     expect(shown(dictated, seen.at(-1))).toBe("So I think we should refactor the parser");
   });
 
@@ -114,9 +119,10 @@ describe("CorrectionStreamAligner", () => {
     const seen = stream(dictated, "Open the Daintree settings and check the Postgres config now.");
     // "Daintree" matches neither heard word; it lands with the next shared one.
     expect(seen.some((r) => r.text === "Open the Daintree")).toBe(false);
+    expect(seen.some((r) => r.text === "Open the Daintree settings")).toBe(false);
     expect(seen).toContainEqual({
-      text: "Open the Daintree settings",
-      rawTo: rawTo(dictated, "settings"),
+      text: "Open the Daintree settings and",
+      rawTo: rawTo(dictated, "settings and"),
     });
     // A near spelling is the same word.
     expect(seen.at(-1)).toEqual({
@@ -129,6 +135,7 @@ describe("CorrectionStreamAligner", () => {
     const dictated = "send it to John no wait send it to Mary and copy Bob on it";
     const seen = stream(dictated, "Send it to Mary and copy Bob on it.");
     expect(seen[2]).toEqual({ text: "Send it to", rawTo: rawTo(dictated, "send it to") });
+    expect(seen[3]).toEqual({ text: "Send it to Mary and", rawTo: rawTo(dictated, "Mary and") });
     for (const rewrite of seen) {
       // Either "John" still shows or "Mary" has replaced it: never neither.
       const display = shown(dictated, rewrite);
@@ -144,7 +151,7 @@ describe("CorrectionStreamAligner", () => {
   it("keeps a command moved to the front from reaching for its spoken words", () => {
     const dictated = "fix the login bug and then run the review skill";
     const seen = stream(dictated, "/review fix the login bug");
-    expect(seen.map((r) => r.text)).toEqual(["/review fix", "/review fix the"]);
+    expect(seen.map((r) => r.text)).toEqual(["/review fix the"]);
     expect(seen.at(-1)!.rawTo).toBe(rawTo(dictated, "fix the"));
     expect(shown(dictated, seen.at(-1))).toBe("/review fix the login bug and then run the review skill");
   });
@@ -161,6 +168,11 @@ describe("CorrectionStreamAligner", () => {
       text: "1. Install the deps\n2. Run the tests\n3.",
       rawTo: rawTo(dictated, "third"),
     });
+  });
+
+  it("doesn't jump ahead on one common word matching by chance", () => {
+    const aligner = new CorrectionStreamAligner("alpha beta gamma the delta epsilon");
+    expect(aligner.advance("Zeta eta the theta iota kappa ")).toBeNull();
   });
 
   it("commits nothing when the stream shares no words with the passage", () => {
