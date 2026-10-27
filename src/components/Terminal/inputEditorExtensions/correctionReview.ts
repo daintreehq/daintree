@@ -7,6 +7,7 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import {
+  Annotation,
   StateEffect,
   StateField,
   Transaction,
@@ -98,6 +99,13 @@ export const correctionReverted = StateEffect.define<CorrectionReview>({ map: ma
 const advanceReview = StateEffect.define<null>();
 
 /**
+ * Marks a write from outside the composer: dictated words, a cleanup, a file
+ * link. A long dictation's chunks are cleaned while it runs (#14772), so the
+ * words dictated after one land while its review is still showing.
+ */
+export const outsideWrite = Annotation.define<true>();
+
+/**
  * `marked`: the changed words are underlined. `fading`: the underline is on its
  * way out. `settled`: only the restore control is left, until the next edit.
  */
@@ -119,16 +127,29 @@ function reviewFor(doc: Text, review: CorrectionReview): ReviewState | null {
 }
 
 /**
- * The correction that last landed in this draft. Any edit ends the review: the
- * marks and the restore control describe that one swap, and after an edit the
- * passage is either the user's or no longer what the correction wrote.
+ * The review carried through an outside write that left its words alone, or
+ * null once the write reached them.
+ */
+function carryReview(state: ReviewState, tr: Transaction): ReviewState | null {
+  const { review } = state;
+  const from = tr.changes.mapPos(review.from, 1);
+  const to = from + review.correctedText.length;
+  if (tr.state.doc.sliceString(from, to) !== review.correctedText) return null;
+  return from === review.from ? state : { ...state, review: { ...review, from } };
+}
+
+/**
+ * The correction that last landed in this draft. An edit of the user's ends
+ * the review: the marks and the restore control describe that one swap, and
+ * after an edit the passage is either the user's or no longer what the
+ * correction wrote. An outside write that leaves the passage alone moves it.
  */
 export const correctionReviewField = StateField.define<ReviewState | null>({
   create() {
     return null;
   },
   update(value, tr) {
-    if (value && tr.docChanged) value = null;
+    if (value && tr.docChanged) value = tr.annotation(outsideWrite) ? carryReview(value, tr) : null;
     for (const effect of tr.effects) {
       if (effect.is(correctionLanded)) value = reviewFor(tr.state.doc, effect.value);
       else if (effect.is(correctionReverted)) value = null;
@@ -293,7 +314,10 @@ const reviewTimers = ViewPlugin.fromClass(
     update(update: ViewUpdate) {
       const before = update.startState.field(correctionReviewField, false) ?? null;
       const after = update.state.field(correctionReviewField, false) ?? null;
-      if (before !== after) this.schedule(after);
+      // A review only moved by a write elsewhere keeps its deadline.
+      if (before?.changes !== after?.changes || before?.phase !== after?.phase) {
+        this.schedule(after);
+      }
     }
 
     private schedule(state: ReviewState | null) {
