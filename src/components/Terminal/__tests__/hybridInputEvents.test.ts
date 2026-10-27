@@ -76,7 +76,10 @@ describe("agentAltChordKey", () => {
 
   it("falls back to the physical key for a dead key, which carries no letter code", () => {
     expect(
-      agentAltChordKey(press({ key: "Dead", code: "KeyO", keyCode: 0, altKey: true }), CLAUDE_CHORDS)
+      agentAltChordKey(
+        press({ key: "Dead", code: "KeyO", keyCode: 0, altKey: true }),
+        CLAUDE_CHORDS
+      )
     ).toBe("alt+o");
   });
 
@@ -87,7 +90,10 @@ describe("agentAltChordKey", () => {
       agentAltChordKey(press({ key: "@", code: "KeyL", keyCode: 76, altKey: true }), CLAUDE_CHORDS)
     ).toBeNull();
     expect(
-      agentAltChordKey(press({ key: "[", code: "Digit5", keyCode: 53, altKey: true }), CLAUDE_CHORDS)
+      agentAltChordKey(
+        press({ key: "[", code: "Digit5", keyCode: 53, altKey: true }),
+        CLAUDE_CHORDS
+      )
     ).toBeNull();
     expect(
       agentAltChordKey(press({ key: "∫", code: "KeyB", keyCode: 66, altKey: true }), CLAUDE_CHORDS)
@@ -120,8 +126,12 @@ describe("agentAltChordKey", () => {
 
   it("leaves the chord alone with another modifier held or no Alt at all", () => {
     const base = { key: "π", code: "KeyP", keyCode: 80 };
-    expect(agentAltChordKey(press({ ...base, altKey: true, shiftKey: true }), CLAUDE_CHORDS)).toBeNull();
-    expect(agentAltChordKey(press({ ...base, altKey: true, metaKey: true }), CLAUDE_CHORDS)).toBeNull();
+    expect(
+      agentAltChordKey(press({ ...base, altKey: true, shiftKey: true }), CLAUDE_CHORDS)
+    ).toBeNull();
+    expect(
+      agentAltChordKey(press({ ...base, altKey: true, metaKey: true }), CLAUDE_CHORDS)
+    ).toBeNull();
     expect(agentAltChordKey(press({ ...base, key: "p" }), CLAUDE_CHORDS)).toBeNull();
   });
 
@@ -136,10 +146,16 @@ describe("agentAltChordKey", () => {
 
   it("finds no letter in a press that carries neither a letter code nor a dead letter key", () => {
     expect(
-      agentAltChordKey(press({ key: "Process", code: "KeyP", keyCode: 229, altKey: true }), CLAUDE_CHORDS)
+      agentAltChordKey(
+        press({ key: "Process", code: "KeyP", keyCode: 229, altKey: true }),
+        CLAUDE_CHORDS
+      )
     ).toBeNull();
     expect(
-      agentAltChordKey(press({ key: "Dead", code: "Digit6", keyCode: 0, altKey: true }), CLAUDE_CHORDS)
+      agentAltChordKey(
+        press({ key: "Dead", code: "Digit6", keyCode: 0, altKey: true }),
+        CLAUDE_CHORDS
+      )
     ).toBeNull();
   });
 
