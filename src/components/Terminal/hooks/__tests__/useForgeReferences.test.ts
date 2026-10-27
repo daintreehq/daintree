@@ -305,7 +305,7 @@ describe("useForgeReferences", () => {
       expect(listPRs).toHaveBeenCalledTimes(2);
     });
 
-    it("never shows or keeps an answer asked of the remote before it changed", async () => {
+    it("never shows an answer asked of the remote before it changed", async () => {
       let finishFirst: (value: Page<PR>) => void = () => {};
       listPRs.mockImplementationOnce(
         () =>
