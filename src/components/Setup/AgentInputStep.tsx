@@ -40,16 +40,9 @@ export function AgentInputStep({ onBusyChange }: { onBusyChange: (busy: boolean)
   const [failed, setFailed] = useState<FailedWrite | null>(null);
   const inFlightRef = useRef(0);
   const latestAttemptRef = useRef<Partial<Record<InputAction, number>>>({});
+  const queueRef = useRef<Promise<void>>(Promise.resolve());
 
-  // Writes overlap as they do on the Settings page, and the actions roll their
-  // own value back on failure. Only the newest pick of a setting decides
-  // whether a retry is on offer.
-  const persist = async (actionId: InputAction, enabled: boolean): Promise<void> => {
-    if (!isPresent) return;
-    const attempt = (latestAttemptRef.current[actionId] ?? 0) + 1;
-    latestAttemptRef.current[actionId] = attempt;
-    inFlightRef.current += 1;
-    onBusyChange(true);
+  const write = async (actionId: InputAction, enabled: boolean, attempt: number) => {
     try {
       const result = await actionService.dispatch(actionId, { enabled }, { source: "user" });
       if (!result.ok) throw new Error(result.error.message);
@@ -63,6 +56,19 @@ export function AgentInputStep({ onBusyChange }: { onBusyChange: (busy: boolean)
       inFlightRef.current -= 1;
       if (inFlightRef.current === 0) onBusyChange(false);
     }
+  };
+
+  // One write at a time. Each action rolls back to the value it found when it
+  // ran, which is only the saved value while no other write is in flight; a
+  // pick made meanwhile waits its turn rather than being dropped. Only the
+  // newest pick of a setting decides whether a retry is on offer.
+  const persist = (actionId: InputAction, enabled: boolean) => {
+    if (!isPresent) return;
+    const attempt = (latestAttemptRef.current[actionId] ?? 0) + 1;
+    latestAttemptRef.current[actionId] = attempt;
+    inFlightRef.current += 1;
+    onBusyChange(true);
+    queueRef.current = queueRef.current.then(() => write(actionId, enabled, attempt));
   };
 
   // Nothing is left to retry once the setting reads the pick (another window
@@ -81,7 +87,7 @@ export function AgentInputStep({ onBusyChange }: { onBusyChange: (busy: boolean)
         <SettingsLoadErrorBanner
           title="Couldn't save that change"
           message="The setting is back to its previous value."
-          onRetry={() => void persist(retry.actionId, retry.enabled)}
+          onRetry={() => persist(retry.actionId, retry.enabled)}
         />
       )}
       <SettingsGroup>
@@ -89,7 +95,7 @@ export function AgentInputStep({ onBusyChange }: { onBusyChange: (busy: boolean)
           title="Hybrid input"
           subtitle="Show the multi-line input at the bottom of agent terminals. With it off, you type straight into the agent's own prompt, without dictation or Insert file reference."
           isEnabled={hybridInputEnabled}
-          onChange={() => void persist("terminalConfig.setHybridInputEnabled", !hybridInputEnabled)}
+          onChange={() => persist("terminalConfig.setHybridInputEnabled", !hybridInputEnabled)}
         />
         <SettingsDependents
           disabled={!hybridInputEnabled}
@@ -103,7 +109,7 @@ export function AgentInputStep({ onBusyChange }: { onBusyChange: (busy: boolean)
             onChange={(value) => {
               const enabled = value === "hybrid";
               if (enabled === hybridInputAutoFocus) return;
-              void persist("terminalConfig.setHybridInputAutoFocus", enabled);
+              persist("terminalConfig.setHybridInputAutoFocus", enabled);
             }}
           />
         </SettingsDependents>

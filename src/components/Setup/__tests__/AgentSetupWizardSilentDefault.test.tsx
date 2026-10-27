@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import React from "react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, act, screen } from "@testing-library/react";
 
 const { notifyMock } = vi.hoisted(() => ({
@@ -800,8 +800,14 @@ function describedText(element: Element): string {
     .join(" ");
 }
 
-function writeInputSetting(actionId: unknown, enabled: boolean): void {
-  if (actionId === "terminalConfig.setHybridInputEnabled") {
+type InputField = "hybridInputEnabled" | "hybridInputAutoFocus";
+type Outcome = "ok" | "fail";
+
+// What the stand-in actions have saved, as opposed to what the store shows.
+const saved = new Map<InputField, boolean>();
+
+function writeInputSetting(field: InputField, enabled: boolean): void {
+  if (field === "hybridInputEnabled") {
     useTerminalInputStore.setState({ hybridInputEnabled: enabled });
   } else {
     useTerminalInputStore.setState({ hybridInputAutoFocus: enabled });
@@ -810,25 +816,39 @@ function writeInputSetting(actionId: unknown, enabled: boolean): void {
 
 /**
  * Stands in for the two terminalConfig actions: the optimistic store write,
- * then success, or a rollback to the previous value and a failed result.
+ * then a save, or a rollback to the value it found and a failed result.
+ * Anything else dispatched resolves untouched.
  */
-function inputAction(outcome: "ok" | "fail" | (() => Promise<void>)) {
+function inputAction(outcome: Outcome | (() => Promise<Outcome>)) {
   return async (...args: unknown[]) => {
     const [actionId, payload] = args;
+    const field: InputField | null =
+      actionId === "terminalConfig.setHybridInputEnabled"
+        ? "hybridInputEnabled"
+        : actionId === "terminalConfig.setHybridInputAutoFocus"
+          ? "hybridInputAutoFocus"
+          : null;
+    if (field === null) return { ok: true };
     const enabled = Boolean(
       payload && typeof payload === "object" && "enabled" in payload && payload.enabled
     );
-    const { hybridInputEnabled, hybridInputAutoFocus } = useTerminalInputStore.getState();
-    const previous =
-      actionId === "terminalConfig.setHybridInputEnabled"
-        ? hybridInputEnabled
-        : hybridInputAutoFocus;
-    writeInputSetting(actionId, enabled);
-    if (typeof outcome === "function") await outcome();
-    if (outcome !== "fail") return { ok: true };
-    writeInputSetting(actionId, previous);
+    const previous = useTerminalInputStore.getState()[field];
+    writeInputSetting(field, enabled);
+    if ((typeof outcome === "function" ? await outcome() : outcome) === "ok") {
+      saved.set(field, enabled);
+      return { ok: true };
+    }
+    writeInputSetting(field, previous);
     return { ok: false, error: { message: "IPC down" } };
   };
+}
+
+/** Settles one deferred write, then lets whatever it queued start. */
+async function settleWrite(settles: ((outcome: Outcome) => void)[], outcome: Outcome) {
+  await act(async () => {
+    settles.shift()!(outcome);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
 }
 
 describe("AgentSetupWizard input step", () => {
@@ -836,7 +856,12 @@ describe("AgentSetupWizard input step", () => {
     dispatchMock.mockClear();
     dispatchMock.mockImplementation(inputAction("ok"));
     presence.isPresent = true;
+    saved.clear();
     useTerminalInputStore.setState({ hybridInputEnabled: true, hybridInputAutoFocus: true });
+  });
+
+  afterEach(() => {
+    dispatchMock.mockImplementation(() => Promise.resolve({ ok: true }));
   });
 
   it("starts on today's defaults and writes nothing when clicked straight through", async () => {
@@ -897,7 +922,8 @@ describe("AgentSetupWizard input step", () => {
 
     const description = describedText(hybridInputSwitch());
     expect(description).toMatch(/dictation/i);
-    expect(description).toMatch(/file reference/i);
+    // The command, not every file reference: a drop onto the terminal still inserts one.
+    expect(description).toContain("Insert file reference");
   });
 
   it("takes the focus choice away, and says why, while the hybrid input is off", async () => {
@@ -921,23 +947,20 @@ describe("AgentSetupWizard input step", () => {
   });
 
   it("holds Continue, Back and closing until every write has settled", async () => {
-    const settles: (() => void)[] = [];
+    const settles: ((outcome: Outcome) => void)[] = [];
     dispatchMock.mockImplementation(
-      inputAction(() => new Promise<void>((resolve) => settles.push(resolve)))
+      inputAction(() => new Promise<Outcome>((resolve) => settles.push(resolve)))
     );
     const onClose = vi.fn();
     await gotoInputStep(onClose);
-    // Two picks in a row both land, as they would on the Settings page.
+    // A pick made while another saves waits its turn rather than being dropped.
     await act(async () => {
       hybridInputSwitch().click();
     });
     await act(async () => {
       hybridInputSwitch().click();
     });
-    expect(inputSettingDispatches().map(([, args]) => args)).toEqual([
-      { enabled: false },
-      { enabled: true },
-    ]);
+    expect(inputSettingDispatches()).toHaveLength(1);
 
     const attemptToLeave = async () => {
       await clickButton("Continue");
@@ -947,18 +970,45 @@ describe("AgentSetupWizard input step", () => {
       });
     };
     await attemptToLeave();
-    await act(async () => {
-      settles[0]!();
-    });
+    await settleWrite(settles, "ok");
+    expect(inputSettingDispatches().map(([, args]) => args)).toEqual([
+      { enabled: false },
+      { enabled: true },
+    ]);
     await attemptToLeave();
     expect(document.querySelector("h3")?.textContent).toBe("Agent input");
     expect(onClose).not.toHaveBeenCalled();
 
-    await act(async () => {
-      settles[1]!();
-    });
+    await settleWrite(settles, "ok");
     await clickButton("Continue");
     expect(document.querySelector("h3")?.textContent).toBe("Setup complete");
+  });
+
+  it("keeps the switch on what was saved when an early write of several fails", async () => {
+    const settles: ((outcome: Outcome) => void)[] = [];
+    dispatchMock.mockImplementation(
+      inputAction(() => new Promise<Outcome>((resolve) => settles.push(resolve)))
+    );
+    await gotoInputStep();
+    for (let pick = 0; pick < 3; pick++) {
+      await act(async () => {
+        hybridInputSwitch().click();
+      });
+    }
+    // Each rollback restores the value its action found, which is only the
+    // saved one if no other write of the setting was in flight.
+    await settleWrite(settles, "fail");
+    // Newer picks are already queued, so retrying the one that failed would undo them.
+    expect(screen.queryByRole("alert")).toBeNull();
+    while (settles.length > 0) await settleWrite(settles, "ok");
+
+    expect(saved.has("hybridInputEnabled")).toBe(true);
+    expect(useTerminalInputStore.getState().hybridInputEnabled).toBe(
+      saved.get("hybridInputEnabled")
+    );
+    expect(hybridInputSwitch().getAttribute("aria-checked")).toBe(
+      String(saved.get("hybridInputEnabled"))
+    );
   });
 
   it("refuses a write from a step that is animating out", async () => {
