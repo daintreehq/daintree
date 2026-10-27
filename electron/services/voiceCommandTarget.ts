@@ -41,6 +41,46 @@ async function withinDeadline<T>(
   }
 }
 
+interface AgentFields {
+  detectedAgentId?: string;
+  launchAgentId?: string;
+  agentState?: string;
+}
+
+// An agent that has exited leaves its launch id behind on a shell, which
+// takes no commands.
+function commandAgentOf(terminal: AgentFields): string | undefined {
+  return (
+    terminal.detectedAgentId ??
+    (terminal.agentState === "exited" ? undefined : terminal.launchAgentId)
+  );
+}
+
+/**
+ * The built-in agent `terminalId` runs now, found as the lookup below finds
+ * it but without discovering its commands. Null for none; undefined when the
+ * terminal couldn't be read in time, so the caller can't tell.
+ */
+export async function readVoiceCommandAgent(
+  ptyClient: PtyClient | undefined,
+  terminalId: string | undefined,
+  timeoutMs: number
+): Promise<BuiltInAgentId | null | undefined> {
+  if (!ptyClient || !terminalId) return null;
+  try {
+    const terminal = await withinDeadline(
+      ptyClient.getTerminalAsync(terminalId),
+      performance.now() + timeoutMs
+    );
+    if (terminal === TIMED_OUT) return undefined;
+    if (!terminal) return null;
+    const agentId = commandAgentOf(terminal);
+    return isBuiltInAgentId(agentId) ? agentId : null;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * The agent running in `terminalId` and the commands its composer offers there,
  * discovered the way autocomplete does (built-in, user and project), so its
@@ -59,11 +99,7 @@ export async function resolveVoiceCommandTarget(
   try {
     const terminal = await withinDeadline(ptyClient.getTerminalAsync(terminalId), deadline);
     if (terminal === TIMED_OUT || !terminal) return null;
-    // An agent that has exited leaves its launch id behind on a shell, which
-    // takes no commands.
-    const agentId =
-      terminal.detectedAgentId ??
-      (terminal.agentState === "exited" ? undefined : terminal.launchAgentId);
+    const agentId = commandAgentOf(terminal);
     if (!isBuiltInAgentId(agentId)) return null;
     const config = getAgentConfig(agentId);
     const sources = config?.completionSources;

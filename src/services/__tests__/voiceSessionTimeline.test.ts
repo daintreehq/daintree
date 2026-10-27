@@ -215,6 +215,23 @@ describe("VoiceSessionTimeline", () => {
     expect(JSON.stringify(line)).not.toMatch(/login/);
   });
 
+  it("ignores a reply that lands after its correction ended", () => {
+    const t = timeline();
+    t.expectReport();
+    t.beginCorrection();
+    t.finish("user");
+    clock = 1_300;
+    t.endCorrection("discarded");
+    t.noteCorrectionReplies({ prepMs: 4, requestMs: 900 });
+    t.reportEnded("stopped", report);
+    expect(logged()).toMatchObject({
+      correctionMs: 300,
+      correctionPrepMs: null,
+      correctionRequestMs: null,
+      correctionApplyMs: null,
+    });
+  });
+
   it("leaves the parts unknown for a correction that never heard back", () => {
     const t = timeline();
     t.beginCorrection();

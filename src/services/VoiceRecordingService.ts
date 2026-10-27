@@ -73,6 +73,7 @@ import {
   collectCorrectionPassages,
   joinPassageTexts,
   locatePassage,
+  settlePassageReplies,
   transcribedPassageText,
   type CorrectionPassage,
 } from "@/services/voiceCorrectionPassages";
@@ -2772,16 +2773,8 @@ class VoiceRecordingService {
   }
 
   private async requestCorrection(correction: PendingCorrection): Promise<void> {
-    // The passages go out together, so the last reply back is the one the
-    // draft waited on.
-    let lastTiming: unknown = null;
-    const results = await Promise.all(
-      correction.passages.map((passage) =>
-        this.requestPassageCorrection(passage, correction).then((result) => {
-          lastTiming = result.timing;
-          return result;
-        })
-      )
+    const { results, lastTiming } = await settlePassageReplies(
+      correction.passages.map((passage) => this.requestPassageCorrection(passage, correction))
     );
     correction.timeline?.noteCorrectionReplies(lastTiming);
 

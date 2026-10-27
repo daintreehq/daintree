@@ -53,6 +53,7 @@ import { readProjectVoiceDictionary } from "../../services/projectVoiceDictionar
 import { flattenDictationNames, gatherDictationNames } from "../../services/voiceContextNames.js";
 import { collectHeardAsRules, createHeardAsRewriter } from "../../../shared/utils/voiceHeardAs.js";
 import {
+  readVoiceCommandAgent,
   resolveVoiceCommandTarget,
   type VoiceCommandTarget,
 } from "../../services/voiceCommandTarget.js";
@@ -937,14 +938,17 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
   ): Promise<{ rawText: string | null }> => {
     // The renderer cleans up what was dictated once this resolves, so its
     // socket and the terminal's output are got ready while the drain runs.
-    if (reason === "stopped" && session.intent === "dictation" && mayCorrect(getVoiceSettings())) {
+    const readyCorrection = (): boolean => {
+      if (reason !== "stopped" || session.intent !== "dictation" || session.ended) return false;
+      if (!mayCorrect(getVoiceSettings())) return false;
       correctionService ??= new VoiceCorrectionService();
       correctionService.preconnect();
-      const prep = session.correctionPrep;
-      if (prep && !prep.terminalOutput) {
-        const target = resolveKeytermTarget(session.projectId, session.terminalId, deps.ptyClient);
-        prep.terminalOutput = readTerminalOutputForCorrection(deps.ptyClient, target.terminalId);
-      }
+      return true;
+    };
+    const prep = session.correctionPrep;
+    if (readyCorrection() && prep && !prep.terminalOutput) {
+      const target = resolveKeytermTarget(session.projectId, session.terminalId, deps.ptyClient);
+      prep.terminalOutput = readTerminalOutputForCorrection(deps.ptyClient, target.terminalId);
     }
     session.stopPromise = (async () => {
       // The renderer sends every chunk it captured before this stop, so audio
@@ -973,6 +977,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       // resolving then. Each job is bounded, and ending the session another
       // way aborts them.
       await Promise.allSettled(session.fileLinkJobs);
+      // A drain long enough to outlast the first probe's socket opens another.
+      readyCorrection();
       endSession(session, reason);
       return { rawText: null };
     })();
@@ -1729,6 +1735,25 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     return validateOpenAIKey(apiKey, settings.organizationId, settings.projectId);
   };
 
+  // The commands found at the start, unless the terminal has moved on to
+  // another agent or to none: one that exited mid-dictation leaves a shell,
+  // which takes no commands. Telling needs no discovery scan.
+  const currentCommandTarget = async (
+    prep: CorrectionPrep,
+    terminalId: string | undefined
+  ): Promise<VoiceCommandTarget | null> => {
+    const [target, agentId] = await Promise.all([
+      prep.commandTarget,
+      readVoiceCommandAgent(deps.ptyClient, terminalId, COMMAND_TARGET_START_BUDGET_MS),
+    ]);
+    if (agentId === undefined || agentId === (target?.agentId ?? null)) return target;
+    return resolveVoiceCommandTarget(
+      deps.ptyClient,
+      terminalId,
+      COMMAND_TARGET_CORRECTION_BUDGET_MS
+    );
+  };
+
   // Whole-passage cleanup pass. The renderer calls this once after recording
   // stops, with the full dictated text; correction runs as a single gpt-6-luna
   // request rather than the old per-segment streaming pipeline.
@@ -1765,7 +1790,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     if (prep) {
       [vocabulary, commandTarget, terminalOutput] = await Promise.all([
         prep.vocabulary,
-        prep.commandTarget,
+        currentCommandTarget(prep, terminalId),
         prep.terminalOutput ?? readTerminalOutputForCorrection(deps.ptyClient, terminalId),
       ]);
       knownNames = prep.names.names;

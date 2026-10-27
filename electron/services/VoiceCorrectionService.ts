@@ -58,8 +58,9 @@ const FILE_LINK_CACHE_PREFIX = "voice-file-link-v2";
 const PROMPT_TAG_OPEN_RE = /<(?=\/?(?:terminal_output|target|job|confirmed_history|uncertain)\b)/gi;
 const OPENAI_ORIGIN = "https://api.openai.com/";
 const RESPONSES_URL = "https://api.openai.com/v1/responses";
-// OpenAI keeps an unused prefix cached for five to ten minutes.
-const PROMPT_WARM_FOR_MS = 4 * 60_000;
+// OpenAI keeps an unused prefix cached for five to ten minutes. Checked once a
+// minute, a prompt goes out again within four of its last use.
+const PROMPT_WARM_FOR_MS = 3 * 60_000;
 const PROMPT_USE_MEMORY = 16;
 const WARM_TIMEOUT_MS = 10_000;
 // The API's floor. The reply is thrown away, cut off or not.
@@ -67,6 +68,9 @@ const WARM_MAX_OUTPUT_TOKENS = 16;
 const WARM_USER_MESSAGE = "<job>\nreason=warmup\n</job>\n\n<target>\n</target>";
 const PRECONNECT_TIMEOUT_MS = 3000;
 const PRECONNECT_WAIT_MS = 250;
+// Fetch keeps an idle socket for four seconds; one this fresh will still be
+// there for a passage sent now.
+const PRECONNECT_FRESH_MS = 2000;
 const LEADING_FILLER_RE = /^(?:\s*(?:um|uh)[\s,.;:!-]+)+/i;
 
 const FILE_LINK_DETECTION_SCHEMA = {
@@ -234,6 +238,7 @@ export class VoiceCorrectionService {
   private readonly promptUsedAt = new Map<string, number>();
   private readonly warming = new Set<string>();
   private preconnecting: Promise<void> | null = null;
+  private preconnectedAt: number | null = null;
 
   setSessionSignal(signal: AbortSignal | null): void {
     this.sessionSignal = signal;
@@ -825,9 +830,10 @@ export class VoiceCorrectionService {
       .digest("hex");
   }
 
-  private notePromptUsed(identity: string): void {
+  // Stamped when the request went out: OpenAI caches the prefix as it reads it.
+  private notePromptUsed(identity: string, sentAt: number): void {
     this.promptUsedAt.delete(identity);
-    this.promptUsedAt.set(identity, performance.now());
+    this.promptUsedAt.set(identity, sentAt);
     for (const oldest of this.promptUsedAt.keys()) {
       if (this.promptUsedAt.size <= PROMPT_USE_MEMORY) break;
       this.promptUsedAt.delete(oldest);
@@ -850,6 +856,7 @@ export class VoiceCorrectionService {
     // Its own deadline: a session ending mustn't abort it, which would throw
     // away the socket it opened.
     const deadline = createTimeoutSignal(WARM_TIMEOUT_MS);
+    const sentAt = performance.now();
     try {
       const response = await fetch(RESPONSES_URL, {
         method: "POST",
@@ -865,7 +872,7 @@ export class VoiceCorrectionService {
       });
       // Read to the end, so the socket goes back to the pool.
       await response.arrayBuffer();
-      if (response.ok) this.notePromptUsed(identity);
+      if (response.ok) this.notePromptUsed(identity, sentAt);
       logDebug(`${P} Prompt warm-up`, { status: response.status });
     } catch (error) {
       logDebug(`${P} Prompt warm-up failed`, voiceErrorLogFields(error));
@@ -883,6 +890,8 @@ export class VoiceCorrectionService {
    */
   preconnect(): void {
     if (this.preconnecting) return;
+    const openedAt = this.preconnectedAt;
+    if (openedAt !== null && performance.now() - openedAt < PRECONNECT_FRESH_MS) return;
     const deadline = createTimeoutSignal(PRECONNECT_TIMEOUT_MS);
     const probe: Promise<void> = fetch(OPENAI_ORIGIN, {
       redirect: "manual",
@@ -890,7 +899,9 @@ export class VoiceCorrectionService {
     })
       .then((response) => response.arrayBuffer())
       .then(
-        () => undefined,
+        () => {
+          this.preconnectedAt = performance.now();
+        },
         () => undefined
       )
       .finally(() => {
@@ -928,11 +939,16 @@ export class VoiceCorrectionService {
     const body = JSON.stringify(
       this.correctionBody(settings, systemPrompt, userMessage, maxOutputTokens)
     );
-    if (this.preconnecting) await this.awaitPreconnect(this.preconnecting);
-    trace.sentAt = performance.now();
+    if (this.preconnecting) {
+      await this.awaitPreconnect(this.preconnecting);
+      // Nothing went out, so there is no round trip to report.
+      signal.throwIfAborted();
+    }
+    const sentAt = performance.now();
+    trace.sentAt = sentAt;
     try {
       const result = await this.sendCorrection(request, settings, body, signal, maxOutputTokens);
-      this.notePromptUsed(this.promptIdentity(settings, systemPrompt));
+      this.notePromptUsed(this.promptIdentity(settings, systemPrompt), sentAt);
       return result;
     } finally {
       trace.settledAt = performance.now();

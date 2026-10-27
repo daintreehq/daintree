@@ -160,7 +160,12 @@ export class VoiceSessionTimeline {
    * `timing` is main's account of the last one back, checked like its report.
    */
   noteCorrectionReplies(timing: unknown): void {
-    if (this.done || this.correctionStartedAt === null || this.correctionRepliedAt !== null) {
+    if (
+      this.done ||
+      this.correctionStartedAt === null ||
+      this.correctionRepliedAt !== null ||
+      this.correctionMs !== null
+    ) {
       return;
     }
     this.correctionRepliedAt = this.deps.now();

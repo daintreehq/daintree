@@ -734,6 +734,7 @@ describe("voiceInput — keyterm target", () => {
     shared.names = null;
     shared.correctionNames = null;
     shared.correctionTerminalOutput = undefined;
+    shared.drainPromise = null;
     sender.destroyed = false;
     fakeEvent.sender = makeSender();
     const win = { webContents: { send: vi.fn() }, isDestroyed: vi.fn(() => false) };
@@ -938,8 +939,15 @@ describe("voiceInput — keyterm target", () => {
     it("reads a dictation's output while its stop drains, never before", async () => {
       await startWith({ terminalId: "t-1" });
       expect(ptyClient.getTerminalSnapshot).not.toHaveBeenCalled();
-      await stop();
+      let finishDrain!: () => void;
+      shared.drainPromise = new Promise((resolve) => {
+        finishDrain = resolve;
+      });
+      const stopping = stop();
+      await vi.waitFor(() => expect(shared.calls).toContain("stopGracefully"));
       expect(ptyClient.getTerminalSnapshot).toHaveBeenCalledTimes(1);
+      finishDrain();
+      await stopping;
 
       for (const rawText of ["go with the shin", "and the second passage"]) {
         await getHandler("voice-input:correct")(fakeEvent, {
@@ -955,6 +963,13 @@ describe("voiceInput — keyterm target", () => {
     it("reads none at the stop with cleanup off", async () => {
       shared.voiceInput = { correctionEnabled: false };
       await startWith({ terminalId: "t-1" });
+      await stop();
+      expect(ptyClient.getTerminalSnapshot).not.toHaveBeenCalled();
+    });
+
+    it("reads none at the stop once cleanup was turned off mid-dictation", async () => {
+      await startWith({ terminalId: "t-1" });
+      shared.voiceInput = { correctionEnabled: false };
       await stop();
       expect(ptyClient.getTerminalSnapshot).not.toHaveBeenCalled();
     });

@@ -1684,6 +1684,24 @@ describe("VoiceCorrectionService timing and warm-up", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("sends a prompt again within four minutes of its last use, checked once a minute", async () => {
+    // Each warm-up takes a while to come back; the cache was written as it went out.
+    const fetchMock = vi.fn(async () => {
+      now += 1_500;
+      return drainedResponse();
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const svc = new VoiceCorrectionService();
+
+    const start = now;
+    await svc.warm(SETTINGS);
+    for (let minute = 1; minute <= 4; minute++) {
+      now = start + minute * 60_000;
+      await svc.warm(SETTINGS);
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("counts a passage that went out as the prompt's use", async () => {
     const fetchMock = vi
       .fn()
@@ -1737,6 +1755,43 @@ describe("VoiceCorrectionService timing and warm-up", () => {
     expect(init.headers).toBeUndefined();
     expect(init.body).toBeUndefined();
     expect(init.redirect).toBe("manual");
+  });
+
+  it("leaves a socket opened moments ago alone, and opens another once it may be gone", async () => {
+    const fetchMock = vi.fn(async () => drainedResponse(false, 421));
+    vi.stubGlobal("fetch", fetchMock);
+    const svc = new VoiceCorrectionService();
+    const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    svc.preconnect();
+    await settle();
+    now += 500;
+    svc.preconnect();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // Fetch has closed an idle socket by now.
+    now += 5_000;
+    svc.preconnect();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("sends nothing, and reports no round trip, for a passage cancelled while it waited", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const fetchMock = vi.fn().mockImplementationOnce(() => new Promise(() => {}));
+    vi.stubGlobal("fetch", fetchMock);
+    const svc = new VoiceCorrectionService();
+    const controller = new AbortController();
+    svc.setSessionSignal(controller.signal);
+
+    svc.preconnect();
+    const result = svc.correct({ rawText: "fix it" }, BASE_SETTINGS);
+    controller.abort();
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    const settled = await result;
+    expect(settled.failed).toBe(true);
+    expect(settled.roundTrip).toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("sends the passage once a probe still opening its socket is done", async () => {

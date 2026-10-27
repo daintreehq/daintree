@@ -6,13 +6,14 @@ import { VOICE_REPORT_WAIT_MS } from "../voiceSessionTimeline";
 // Drives real sessions through the service and reads the one summary line
 // each leaves (#14617).
 
-const draftState = vi.hoisted(() => ({ draft: "" }));
+const draftState = vi.hoisted(() => ({ draft: "", onWrite: null as (() => void) | null }));
 
 vi.mock("@/store/terminalInputStore", () => {
   const fns = {
     getDraftInput: vi.fn(() => draftState.draft),
     setDraftInput: vi.fn((_panelId: string, value: string) => {
       draftState.draft = value;
+      draftState.onWrite?.();
     }),
     bumpExternalDraftRevision: vi.fn(),
   };
@@ -319,6 +320,7 @@ describe("VoiceRecordingService — session summary (#14617)", () => {
     vi.resetModules();
     vi.clearAllMocks();
     draftState.draft = "";
+    draftState.onWrite = null;
   });
 
   afterEach(() => {
@@ -788,6 +790,13 @@ describe("VoiceRecordingService — session summary (#14617)", () => {
     expect(harness.voiceInput.correct).toHaveBeenCalledTimes(1);
     expect(harness.voiceInput.correct).toHaveBeenCalledWith(expect.objectContaining({ sessionId }));
     expect(summaries()).toHaveLength(0);
+    // The clock moves only as the draft takes the result, so that is all the
+    // apply time can hold.
+    let clock = performance.now();
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+    draftState.onWrite = () => {
+      clock += 40;
+    };
     correction.resolve({
       action: "replace",
       correctedText: "Deploy the canopy branch to staging.",
@@ -802,9 +811,9 @@ describe("VoiceRecordingService — session summary (#14617)", () => {
       correction: "applied",
       correctionPrepMs: 14,
       correctionRequestMs: 1381,
+      correctionApplyMs: 40,
     });
     expect(typeof summaries()[0]!.correctionMs).toBe("number");
-    expect(typeof summaries()[0]!.correctionApplyMs).toBe("number");
     expect(JSON.stringify(summaries()[0])).not.toContain("canopy");
   });
 

@@ -58,6 +58,10 @@ const shared = vi.hoisted(() => ({
   dictionary: [] as unknown[],
   /** Settings each prompt warm-up was asked to send. */
   warmCalls: [] as unknown[],
+  /** The agent the terminal runs when correction looks again. */
+  liveAgent: "claude" as string | null | undefined,
+  /** What the fake correction says about its request. */
+  roundTrip: undefined as { sentAt: number; ms: number } | undefined,
   preconnects: 0,
   /** Stored settings laid over the defaults below. */
   settingsOverride: {} as Record<string, unknown>,
@@ -92,6 +96,7 @@ vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
       return Promise.resolve();
     };
     this.sendAudioChunk = function () {};
+    this.stop = function () {};
     this.destroy = function () {};
     this.commitParagraphBoundary = function () {};
     this.getSessionStats = () => null;
@@ -107,6 +112,7 @@ vi.mock("../../../services/VoiceCorrectionService.js", () => ({
         correctedText: "hello world",
         confidence: "high",
         confirmedText: "hello world",
+        ...(shared.roundTrip ? { roundTrip: shared.roundTrip } : {}),
       });
     };
     this.detectFileLinkTokens = function () {
@@ -137,6 +143,9 @@ vi.mock("../../../services/voiceCommandTarget.js", () => ({
       shared.resolveCalls.push({ terminalId, timeoutMs });
       return terminalId ? shared.commandTarget : null;
     }
+  ),
+  readVoiceCommandAgent: vi.fn(async (_pty: unknown, terminalId: string | undefined) =>
+    terminalId ? shared.liveAgent : null
   ),
 }));
 
@@ -320,6 +329,8 @@ describe("voiceInput — the target agent's commands", () => {
     shared.warmCalls = [];
     shared.preconnects = 0;
     shared.settingsOverride = {};
+    shared.liveAgent = "claude";
+    shared.roundTrip = undefined;
 
     const win = buildMainWindow();
     cleanup = registerVoiceInputHandlers({
@@ -523,6 +534,10 @@ describe("voiceInput — cleanup context read while the dictation runs (#14771)"
     shared.warmCalls = [];
     shared.preconnects = 0;
     shared.settingsOverride = {};
+    shared.liveAgent = "claude";
+    shared.roundTrip = undefined;
+    shared.useDeferredDrain = false;
+    shared.drainResolve = null;
 
     const win = buildMainWindow();
     cleanup = registerVoiceInputHandlers({
@@ -556,6 +571,59 @@ describe("voiceInput — cleanup context read while the dictation runs (#14771)"
     expect(shared.correctionCalls[0]?.settings).toMatchObject({
       commandTarget: { agentId: "claude" },
     });
+  });
+
+  it("looks for the commands again when the agent has left the terminal since the start", async () => {
+    await start();
+    await stop();
+    const before = shared.resolveCalls.length;
+    // Claude exited mid-dictation, leaving a shell.
+    shared.liveAgent = null;
+    shared.commandTarget = null;
+
+    const handleCorrect = getHandler("voice-input:correct") as CorrectHandler;
+    await handleCorrect(fakeEvent, {
+      rawText: "please run the review skill",
+      terminalId: TERMINAL,
+      sessionId: currentSessionId,
+    });
+    expect(shared.resolveCalls).toHaveLength(before + 1);
+    expect(shared.correctionCalls[0]?.settings).not.toHaveProperty("commandTarget");
+  });
+
+  it("keeps the start's commands when the terminal can't say which agent it runs", async () => {
+    await start();
+    await stop();
+    const before = shared.resolveCalls.length;
+    shared.liveAgent = undefined;
+
+    const handleCorrect = getHandler("voice-input:correct") as CorrectHandler;
+    await handleCorrect(fakeEvent, {
+      rawText: "compact it",
+      terminalId: TERMINAL,
+      sessionId: currentSessionId,
+    });
+    expect(shared.resolveCalls).toHaveLength(before);
+    expect(shared.correctionCalls[0]?.settings).toMatchObject({
+      commandTarget: { agentId: "claude" },
+    });
+  });
+
+  it("reports main's share of the wait: up to the request, and its round trip", async () => {
+    let clock = 1_000;
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+    shared.roundTrip = { sentAt: 1_200, ms: 700 };
+    const handleCorrect = getHandler("voice-input:correct") as CorrectHandler;
+    const reply = handleCorrect(fakeEvent, { rawText: "compact it", terminalId: TERMINAL });
+    clock = 1_950;
+    expect(await reply).toMatchObject({ timing: { prepMs: 200, requestMs: 700 } });
+
+    // With nothing sent, all of main's time was preparation.
+    clock = 5_000;
+    shared.roundTrip = undefined;
+    const unsent = handleCorrect(fakeEvent, { rawText: "compact it", terminalId: TERMINAL });
+    clock = 5_030;
+    expect(await unsent).toMatchObject({ timing: { prepMs: 30, requestMs: null } });
   });
 
   it("reads the context at the passage for one that names no session, or another's", async () => {
@@ -609,9 +677,26 @@ describe("voiceInput — cleanup context read while the dictation runs (#14771)"
     expect(whileRunning).toBeGreaterThan(1);
 
     await stop();
+    expect(vi.getTimerCount()).toBe(0);
     vi.advanceTimersByTime(30 * 60_000);
     await flushPromises();
     expect(shared.warmCalls).toHaveLength(whileRunning);
+  });
+
+  it("clears the check when a dictation is cancelled or the handlers go away", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    await start();
+    expect(vi.getTimerCount()).toBe(1);
+    await (getHandler("voice-input:cancel") as (e: unknown, id: string) => Promise<unknown>)(
+      fakeEvent,
+      currentSessionId
+    );
+    expect(vi.getTimerCount()).toBe(0);
+
+    await start();
+    expect(vi.getTimerCount()).toBe(1);
+    cleanup();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("stops warming once cleanup is turned off mid-dictation", async () => {
@@ -626,11 +711,17 @@ describe("voiceInput — cleanup context read while the dictation runs (#14771)"
     expect(shared.warmCalls).toHaveLength(1);
   });
 
-  it("opens a socket at the stop for the passage to come", async () => {
+  it("opens a socket while the stop drains, and asks again as the drain ends", async () => {
+    shared.useDeferredDrain = true;
     await start();
     expect(shared.preconnects).toBe(0);
-    await stop();
+    const stopping = stop();
+    await flushPromises();
     expect(shared.preconnects).toBe(1);
+    // The service skips the second ask while the first socket is fresh.
+    shared.drainResolve?.();
+    await stopping;
+    expect(shared.preconnects).toBe(2);
   });
 
   it.each([
