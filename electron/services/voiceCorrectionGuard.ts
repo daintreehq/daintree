@@ -140,14 +140,16 @@ export interface CorrectionGuardLimits {
 }
 
 // Cleanup removes filler and merges misheard phrases into one term, so it may
-// drop more words than it adds.
+// drop more words than it adds. Set on the cleanup benchmark (#14786): spoken
+// symbols, not the budget, were what held back cleanups that kept the meaning,
+// and a wider budget let a dropped clause through.
 export const CORRECTION_GUARD_LIMITS: CorrectionGuardLimits = {
   removedRatio: 0.15,
   addedRatio: 0.15,
   minRemoved: 4,
   minAdded: 2,
   minAllowanceRemoved: 2,
-  spokenSymbols: false,
+  spokenSymbols: true,
 };
 
 // The symbols a speaker names aloud in paths, flags and identifiers. A dot or
@@ -248,14 +250,36 @@ function isSubsequence(needle: readonly string[], haystack: readonly string[]): 
   return found === needle.length;
 }
 
-/** The flags `raw` spells out word by word, written as they're typed, lowercase. */
-function spelledFlags(raw: string): string[] {
+/** Where `raw` spells a flag out word by word, and the flag as it's typed, lowercase. */
+function spelledFlags(raw: string): Array<{ start: number; flag: string }> {
   return Array.from(raw.matchAll(SPOKEN_FLAG_RE), (match) => {
     const { long, name } = match.groups!;
     const parts = name.split(/\s+(?:dash|hyphen)\s+/iu);
     if (!long && (parts.length > 1 || parts[0].length > 1)) return null;
-    return `${long ? "--" : "-"}${parts.join("-")}`.toLowerCase();
-  }).filter((flag) => flag !== null);
+    return { start: match.index, flag: `${long ? "--" : "-"}${parts.join("-")}`.toLowerCase() };
+  }).filter((spelled) => spelled !== null);
+}
+
+/**
+ * Whether `typed` is `required` in order, with each `optional` text present
+ * or not where it falls among them: a spelled-out flag may be written as a
+ * flag or left as words, but only in its own place.
+ */
+function sameWithOptional(
+  expected: ReadonlyArray<{ text: string; optional: boolean }>,
+  typed: readonly string[]
+): boolean {
+  const matches = (entry: { text: string; optional: boolean }, text: string) =>
+    entry.text === (entry.optional ? text.toLowerCase() : text);
+  let next = 0;
+  for (const text of typed) {
+    while (next < expected.length && expected[next].optional && !matches(expected[next], text)) {
+      next++;
+    }
+    if (next >= expected.length || !matches(expected[next], text)) return false;
+    next++;
+  }
+  return expected.slice(next).every((entry) => entry.optional);
 }
 
 /**
@@ -269,17 +293,17 @@ function keepsProtectedSpans(raw: string, corrected: string, spokenSymbols: bool
   const correctedSpans = scanProtectedSpans(corrected);
   const texts = (spans: ProtectedSpan[], strict: boolean) =>
     spans.filter((span) => (span.kind !== "path") === strict).map((span) => span.text);
-  const spelled = spokenSymbols ? spelledFlags(raw) : [];
-  const typed = correctedSpans.filter((span) => {
-    if (span.kind !== "flag") return true;
-    const at = spelled.indexOf(span.text.toLowerCase());
-    if (at < 0) return true;
-    spelled.splice(at, 1);
-    return false;
-  });
-  return (
-    sameSequence(texts(rawSpans, true), texts(typed, true)) &&
-    isSubsequence(texts(rawSpans, false), texts(correctedSpans, false))
+  if (!isSubsequence(texts(rawSpans, false), texts(correctedSpans, false))) return false;
+  if (!spokenSymbols) return sameSequence(texts(rawSpans, true), texts(correctedSpans, true));
+  const expected = [
+    ...rawSpans
+      .filter((span) => span.kind !== "path")
+      .map((span) => ({ at: span.start, text: span.text, optional: false })),
+    ...spelledFlags(raw).map(({ start, flag }) => ({ at: start, text: flag, optional: true })),
+  ].sort((a, b) => a.at - b.at);
+  return sameWithOptional(
+    expected,
+    correctedSpans.filter((span) => span.kind !== "path").map((span) => span.text)
   );
 }
 

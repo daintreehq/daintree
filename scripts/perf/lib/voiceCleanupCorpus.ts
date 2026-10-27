@@ -759,6 +759,7 @@ const TICS: readonly AuthoredCase[] = [
       "The commit message generator is writing whole paragraphs for a one-line change. I want it to match the size of the diff, so a small diff gets a one-line subject and nothing else, and it only adds a body when more than one file changed.",
     alsoAccept: [
       "The commit message generator is writing whole paragraphs for a one-line change. And I want it to match the size of the diff, so a small diff gets a one-line subject and nothing else, and it only adds a body when more than one file changed.",
+      "The commit message generator is writing whole paragraphs for a one-line change, and I want it to match the size of the diff, so a small diff gets a one-line subject and nothing else. It only adds a body when more than one file changed.",
     ],
     drops: ["yeah", "so"],
     keep: ["nothing else", "only adds a body", "more than one file"],

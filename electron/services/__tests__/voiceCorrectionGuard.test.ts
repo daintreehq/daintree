@@ -241,6 +241,72 @@ describe("validateCorrection", () => {
     ).toEqual({ ok: false, reason: "edit_size" });
   });
 
+  describe("with spoken symbols", () => {
+    const symbols = { ...CORRECTION_GUARD_LIMITS, spokenSymbols: true };
+    // No budget at all, so any word left unaccounted for is an edit.
+    const strict = { ...symbols, minRemoved: 0, removedRatio: 0, minAdded: 0, addedRatio: 0 };
+
+    it("reads a typed symbol as the word it was spoken as", () => {
+      const raw =
+        "add a project underscore id column then run npm run db colon generate and open electron slash ipc slash handlers";
+      const corrected =
+        "Add a project_id column, then run npm run db:generate and open electron/ipc/handlers.";
+      expect(validateCorrection(raw, corrected)).toEqual({ ok: false, reason: "edit_size" });
+      expect(validateCorrection(raw, corrected, symbols)).toEqual({ ok: true });
+      expect(validateCorrection(raw, corrected, strict)).toEqual({ ok: true });
+    });
+
+    it("never takes a sentence's own full stop or colon for a spoken one", () => {
+      expect(validateCorrection("open the readme dot md", "Open the readme.md.", strict)).toEqual({
+        ok: true,
+      });
+      expect(validateCorrection("open the readme dot", "Open the readme.", strict)).toEqual({
+        ok: false,
+        reason: "edit_size",
+      });
+      expect(validateCorrection("two things colon tests", "Two things: tests.", strict)).toEqual({
+        ok: false,
+        reason: "edit_size",
+      });
+    });
+
+    it("lets a flag the speaker spelled out appear, and no other", () => {
+      const raw = "run npm test dash dash watch and dash v on the voice tests";
+      expect(validateCorrection(raw, "Run npm test --watch and -v on the voice tests.")).toEqual({
+        ok: false,
+        reason: "protected_span",
+      });
+      expect(
+        validateCorrection(raw, "Run npm test --watch and -v on the voice tests.", symbols)
+      ).toEqual({ ok: true });
+      expect(
+        validateCorrection(
+          "commit with dash dash no dash verify",
+          "Commit with --no-verify.",
+          symbols
+        )
+      ).toEqual({ ok: true });
+      expect(
+        validateCorrection(
+          raw,
+          "Run npm test --watch --coverage and -v on the voice tests.",
+          symbols
+        )
+      ).toEqual({ ok: false, reason: "protected_span" });
+      // A single dash takes a single letter.
+      expect(validateCorrection("rerun it dash verbose", "Rerun it -verbose.", symbols)).toEqual({
+        ok: false,
+        reason: "protected_span",
+      });
+    });
+
+    it("still holds a flag the raw text typed to its place", () => {
+      expect(
+        validateCorrection("run --watch then dash dash run", "Run --run then --watch.", symbols)
+      ).toEqual({ ok: false, reason: "protected_span" });
+    });
+  });
+
   it("gives a resolved self-correction its own floor for the rest", () => {
     const raw = "um so use the old api, no wait, the new one, and log the calls";
     const corrected = "Use the new one.";
