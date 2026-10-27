@@ -2643,6 +2643,26 @@ describe("DeepgramTranscriptionProvider", () => {
       expect(instances).toHaveLength(2);
     });
 
+    it("reports what the fresh socket held when Deepgram fails it before answering", async () => {
+      const provider = new DeepgramTranscriptionProvider();
+      const events: VoiceTranscriptionEvent[] = [];
+      provider.onEvent((e) => events.push(e));
+      const { socket } = await bringSessionReady(provider);
+      socket.respondsToPing = false;
+      for (let i = 0; i < 8; i++) provider.sendAudioChunk(chunk(i));
+
+      const stopPromise = provider.stopGracefully();
+      vi.advanceTimersByTime(3_000);
+      const fresh = latestInstance();
+      fresh.respondsToPing = false;
+      fresh.simulateOpen();
+      fresh.simulateMessage({ type: "Error", description: "Something went wrong" });
+      await stopPromise;
+
+      expect(lossReportsOf(events)).toHaveLength(1);
+      expect(statusesOf(events).at(-1)).toBe("idle");
+    });
+
     it("doesn't take a result that was already in flight as the stop's answer", async () => {
       const provider = new DeepgramTranscriptionProvider();
       const { socket } = await bringSessionReady(provider);

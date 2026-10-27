@@ -967,6 +967,8 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     this.reconnectDeadlineAt = null;
     this.lastReconnectError = null;
     this.clearReconnectTimer();
+    // Counted before the discard empties what a draining stop still held.
+    const stopLostBytes = this.stopLostBytes();
     this.discardHeldAudio();
     const conn = this.connection;
     this.cleanupConnection();
@@ -980,7 +982,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     this.emit({ type: "error", error });
     this.emit({ type: "status", status: "error" });
     this.settlePendingStart(mySessionId, { ok: false, error: error.message });
-    this.settleDrain("fatal-error");
+    this.settleDrain("fatal-error", stopLostBytes);
   }
 
   private handleServerEvent(
@@ -1308,18 +1310,19 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     }
   }
 
-  private settleDrain(reason: string): void {
+  /**
+   * What a drain settling now leaves untranscribed. Still waiting on a socket,
+   * what the stop was holding never went out. A socket that never showed the
+   * stop arrived may not have had what it didn't confirm; a ready one only
+   * settles that way once its fresh socket is spent.
+   */
+  private stopLostBytes(): number {
+    if (this.stopPendingReady) return this.stopHeldBytes;
+    return this.stopUnanswered ? this.unconfirmedBytes : 0;
+  }
+
+  private settleDrain(reason: string, lostBytes = this.stopLostBytes()): void {
     const resolve = this.drainResolve;
-    // Still waiting on a socket, what the stop was holding never went out. A
-    // socket that never showed the stop arrived may not have had what it
-    // didn't confirm; a ready one only gets here once its fresh socket is spent.
-    const lostBytes = !resolve
-      ? 0
-      : this.stopPendingReady
-        ? this.stopHeldBytes
-        : this.stopUnanswered
-          ? this.unconfirmedBytes
-          : 0;
     this.clearDrainTimeout();
     this.isDraining = false;
     this.stopPendingReady = false;
