@@ -54,6 +54,10 @@ interface VoiceInputButtonProps {
   projectName?: string;
   worktreeId?: string;
   worktreeLabel?: string;
+  /** A Canopy reply's: see `VoiceRecordingTarget`. */
+  surface?: "canopy-reply";
+  terminalId?: string;
+  otherHostId?: string;
   disabled?: boolean;
 }
 
@@ -64,6 +68,9 @@ export function VoiceInputButton({
   projectName,
   worktreeId,
   worktreeLabel,
+  surface,
+  terminalId,
+  otherHostId,
   disabled = false,
 }: VoiceInputButtonProps) {
   const status = useVoiceRecordingStore((state) => state.status);
@@ -259,6 +266,9 @@ export function VoiceInputButton({
       projectName,
       worktreeId,
       worktreeLabel,
+      ...(surface !== undefined ? { surface } : {}),
+      ...(terminalId !== undefined ? { terminalId } : {}),
+      ...(otherHostId !== undefined ? { otherHostId } : {}),
     });
   }, [
     disabled,
@@ -270,6 +280,9 @@ export function VoiceInputButton({
     projectName,
     worktreeId,
     worktreeLabel,
+    surface,
+    terminalId,
+    otherHostId,
   ]);
 
   const tooltipText = !isConfigured

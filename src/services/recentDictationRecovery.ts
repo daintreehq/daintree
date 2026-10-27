@@ -19,6 +19,8 @@ import {
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { recentDictationText, type RecentDictationVersion } from "@/store/recentDictationsStore";
 import { copyWithToast } from "@/lib/copyWithToast";
+import { useCanopyStore } from "@/store/canopyStore";
+import { resolveCanopyReplyDictation } from "@/services/canopyReplyDictation";
 
 /** The pill for sighted users and a polite announcement, as the other draft writes report. */
 function report(message: TypingLocatorMessage): void {
@@ -47,11 +49,17 @@ export function insertRecentDictation(
   dictation: RecentDictation,
   version: RecentDictationVersion = "cleaned"
 ): string | null {
-  // Judged by where the user last worked, not by the palette or menu that
-  // holds the keyboard now.
-  const target = voiceRecordingService.getFocusedComposerTarget(
-    isAssistantFocused() || wasAssistantLastFocused()
-  );
+  // Canopy covers the grid while it's open: the dictation goes to the selected
+  // row's reply, as the dictation key does, or nowhere.
+  const reply = useCanopyStore.getState().isOpen ? resolveCanopyReplyDictation() : null;
+  if (reply && !reply.ok) return refuse("Canopy has no reply to add it to");
+  // Otherwise judged by where the user last worked, not by the palette or
+  // menu that holds the keyboard now.
+  const target = reply?.ok
+    ? reply.target
+    : voiceRecordingService.getFocusedComposerTarget(
+        isAssistantFocused() || wasAssistantLastFocused()
+      );
   if (!target) return refuse("focus an agent's input first");
   const { panelId, projectId } = target;
 
@@ -63,14 +71,17 @@ export function insertRecentDictation(
 
   const inputStore = useTerminalInputStore.getState();
   if (inputStore.isVoiceSubmitting(panelId)) return refuse("that agent is sending dictation");
-  const panel = usePanelStore.getState().panelsById[panelId];
-  if (panel && isPtyPanel(panel) && panel.isInputLocked === true) {
-    return refuse("that agent's input is locked");
-  }
-  const armed = useFleetArmingStore.getState().armedIds;
-  if (armed.size >= 2 && armed.has(panelId)) return refuse("that agent is in an armed fleet");
-  if (getTerminalInputBlock()?.kind === "driven-elsewhere") {
-    return refuse("another screen is driving this project");
+  // A reply's draft is its own: the pane's lock, fleet and driver don't reach it.
+  if (!reply) {
+    const panel = usePanelStore.getState().panelsById[panelId];
+    if (panel && isPtyPanel(panel) && panel.isInputLocked === true) {
+      return refuse("that agent's input is locked");
+    }
+    const armed = useFleetArmingStore.getState().armedIds;
+    if (armed.size >= 2 && armed.has(panelId)) return refuse("that agent is in an armed fleet");
+    if (getTerminalInputBlock()?.kind === "driven-elsewhere") {
+      return refuse("another screen is driving this project");
+    }
   }
 
   const draft = inputStore.getDraftInput(panelId, projectId);
@@ -96,6 +107,11 @@ export function insertRecentDictation(
  * terminal was last focused. Call it once the menu or palette has closed.
  */
 export function focusRecoveredComposer(panelId: string): void {
+  if (useCanopyStore.getState().isOpen) {
+    const reply = resolveCanopyReplyDictation();
+    if (reply.ok && reply.target.panelId === panelId) reply.focus();
+    return;
+  }
   const helpState = useHelpPanelStore.getState();
   // The assistant's composer lives in its own panel, which takes focus its way.
   if (selectActiveSlot(helpState).terminalId === panelId) {

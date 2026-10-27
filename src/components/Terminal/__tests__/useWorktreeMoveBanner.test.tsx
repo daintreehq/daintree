@@ -117,6 +117,7 @@ function stubBar(behaviour: (submit: (text: string) => Promise<boolean>) => Prom
   const ref = createRef<HybridInputBarHandle>() as RefObject<HybridInputBarHandle | null>;
   ref.current = {
     focus: vi.fn(),
+    focusForDictation: vi.fn(),
     focusWithCursorAtEnd: vi.fn().mockReturnValue(true),
     cancelPendingFocus: vi.fn(),
     submitWithInstruction,

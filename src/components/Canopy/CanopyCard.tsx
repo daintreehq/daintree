@@ -66,6 +66,18 @@ import { CanopyTerminal, type CanopyStreamState } from "./CanopyTerminal";
 import { CanopyTitle } from "./CanopyTitle";
 import type { CanopyAsideActions } from "./CanopyRowMenu";
 import { ownCanopyTerminalApi, type CanopyTerminalApi } from "./canopyHostSource";
+import {
+  DICTATION_OWNER_ATTR,
+  canopyReplyVoiceId,
+  type CanopyReplyDictation,
+} from "@/services/canopyReplyDictation";
+import {
+  selectMicNoticeForPanel,
+  useVoiceRecordingStore,
+  type VoiceRecordingTarget,
+} from "@/store/voiceRecordingStore";
+import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
+import { VoiceMicNoticeBanner } from "@/components/Terminal/VoiceMicNoticeBanner";
 
 const LazyHybridInputBar = lazy(() =>
   import("@/components/Terminal/HybridInputBar").then((m) => ({ default: m.HybridInputBar }))
@@ -108,6 +120,8 @@ export interface CanopyCardHandle {
    * there is no reply, in the live terminal. Always lands somewhere in the pane.
    */
   focusComposer: () => boolean;
+  /** Where the dictation key dictates for this agent: its reply, or why not. */
+  dictation: () => CanopyReplyDictation;
 }
 
 /** Where the keyboard lands in the pane when it opens: what the user was in on the agent before. */
@@ -486,7 +500,7 @@ export function CanopyCard({
   // and its listeners together.
   const stopHandoffRef = useRef<() => void>(() => {});
   useEffect(() => () => stopHandoffRef.current(), []);
-  const focusComposer = (): boolean => {
+  const focusComposer = (forDictation = false): boolean => {
     stopHandoffRef.current();
     // No reply here (a secret is being asked for, perhaps before the card
     // knows it): the keyboard goes to the live terminal, where it is typed,
@@ -509,17 +523,22 @@ export function CanopyCard({
       cancelAnimationFrame(frame);
       cancelAnimationFrame(listenFrame);
       window.removeEventListener("pointerdown", stop, true);
-      window.removeEventListener("keydown", stop, true);
+      window.removeEventListener("keydown", onKey, true);
     };
     stopHandoffRef.current = stop;
-    // Listened for after this frame, so the press that chose Reply isn't one.
+    // Listened for after this frame, so the press that chose Reply isn't one,
+    // nor the auto-repeat of a key still held from it (the dictation key, held to talk).
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (!event.repeat) stop();
+    };
     listenFrame = requestAnimationFrame(() => {
       window.addEventListener("pointerdown", stop, true);
-      window.addEventListener("keydown", stop, true);
+      window.addEventListener("keydown", onKey, true);
     });
     const attempt = (tries: number) => {
       if (!canReplyRef.current) return stop();
-      composerRef.current?.focus();
+      if (forDictation) composerRef.current?.focusForDictation();
+      else composerRef.current?.focus();
       const landed = sectionRef.current
         ?.querySelector(".cm-editor")
         ?.contains(document.activeElement);
@@ -529,7 +548,55 @@ export function CanopyCard({
     frame = requestAnimationFrame(() => attempt(1));
     return true;
   };
-  useImperativeHandle(ref, () => ({ handleKey, focusComposer }));
+  // Its own dictation, apart from the grid pane's composer on the same terminal.
+  // Main reads keyterms, vocabulary and file links from the terminal only when
+  // this view's project owns it: another project's or host's gives it none.
+  const ownsContext = otherHostId === undefined && run.workspaceId === getViewWorkspaceId();
+  const voiceTarget: VoiceRecordingTarget = {
+    panelId: canopyReplyVoiceId(item.runId, otherHostId),
+    panelTitle: `Reply to ${row.title}`,
+    surface: "canopy-reply",
+    ...(otherHostId !== undefined ? { otherHostId } : {}),
+    ...(ownsContext ? { terminalId: item.runId } : {}),
+  };
+  const voiceMicNotice = useVoiceRecordingStore((s) =>
+    selectMicNoticeForPanel(s, voiceTarget.panelId)
+  );
+  const dictation = (): CanopyReplyDictation => {
+    if (!canReply) {
+      return {
+        ok: false,
+        message: "It's asking for a secret. Type it straight into the terminal above.",
+      };
+    }
+    if (reconnecting) {
+      return {
+        ok: false,
+        message: "Its host is reconnecting. Try dictation again once it's back.",
+      };
+    }
+    if (stream.watchId === null) {
+      return {
+        ok: false,
+        message: stream.ended
+          ? "Its terminal has ended, so there's nothing to reply to."
+          : "Its terminal is still connecting. Try dictation again in a moment.",
+      };
+    }
+    return {
+      ok: true,
+      target: voiceTarget,
+      focus: () => {
+        // Already in the reply, expanded or not: there is nothing to hand over.
+        const active = document.activeElement;
+        if (active?.closest(".cm-editor") && active.closest(`[${DICTATION_OWNER_ATTR}]`)) return;
+        // The words go in at the caret the reply showed, not wherever a fresh
+        // editor's focus would put it.
+        focusComposer(true);
+      },
+    };
+  };
+  useImperativeHandle(ref, () => ({ handleKey, focusComposer: () => focusComposer(), dictation }));
 
   const agentId = isBuiltInAgentId(run.agentId) ? run.agentId : undefined;
   // The grid's chip rules: nothing while idle, and a settled agent keeps its
@@ -610,7 +677,7 @@ export function CanopyCard({
       aria-label={`${row.title}, ${KIND_LABEL[item.kind]}`}
       aria-describedby={describedBy}
       data-canopy-detail=""
-      {...{ [CLOSE_OWNER_ATTR]: "" }}
+      {...{ [CLOSE_OWNER_ATTR]: "", [DICTATION_OWNER_ATTR]: "" }}
       onFocusCapture={() => setFocused(true)}
       onBlurCapture={(event) => {
         const next = event.relatedTarget;
@@ -913,6 +980,7 @@ export function CanopyCard({
             </span>
           </div>
         )}
+        {canReply && voiceMicNotice && <VoiceMicNoticeBanner notice={voiceMicNotice} />}
         {canReply ? (
           <div ref={replyHostRef} data-keybindings-isolated="" className="contents">
             <Suspense fallback={null}>
@@ -920,6 +988,7 @@ export function CanopyCard({
                 ref={composerRef}
                 isolated
                 otherHostId={otherHostId}
+                voiceTarget={voiceTarget}
                 terminalId={item.runId}
                 cwd={otherHost ? "" : (run.cwd ?? "")}
                 agentId={agentId}

@@ -34,10 +34,25 @@ afterAll(() => {
 
 const dispatchMock = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: dispatchMock } }));
-const terminalApis = vi.hoisted(() => [] as Array<{ runId: string; api: unknown }>);
+type StreamReport = (state: {
+  watchId: number | null;
+  ended: boolean;
+  secretPrompt: boolean;
+}) => void;
+const terminalApis = vi.hoisted(
+  () => [] as Array<{ runId: string; api: unknown; onStreamChange?: StreamReport }>
+);
 vi.mock("../CanopyTerminal", () => ({
-  CanopyTerminal: ({ runId, api }: { runId: string; api?: unknown }) => {
-    terminalApis.push({ runId, api });
+  CanopyTerminal: ({
+    runId,
+    api,
+    onStreamChange,
+  }: {
+    runId: string;
+    api?: unknown;
+    onStreamChange?: StreamReport;
+  }) => {
+    terminalApis.push({ runId, api, onStreamChange });
     return <div data-canopy-terminal="" data-run={runId} />;
   },
 }));
@@ -60,6 +75,7 @@ import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { useProjectStore } from "@/store/projectStore";
 import { __resetCanopySeenForTests } from "@/lib/canopySeen";
 import { __resetCanopyPlaceForTests } from "../CanopyPlace";
+import { canopyReplyVoiceId, resolveCanopyReplyDictation } from "@/services/canopyReplyDictation";
 
 const NOW = Date.now();
 /** Past the panel's wait on the typing before it reads terminals for a search. */
@@ -365,6 +381,37 @@ describe("CanopyView role filter", () => {
     fireEvent.keyDown(assistantRows()[0]!, { key: "ArrowUp" });
     expect(document.activeElement).toBe(last);
     expect(document.querySelector("[data-testid=canopy-assistant-pane]")).toBeNull();
+  });
+
+  it("dictates into the selected worker's reply, and into nothing while an assistant is selected", async () => {
+    const view = render(<CanopyView />);
+    await settle();
+    const search = document.querySelector<HTMLInputElement>(
+      "[data-testid=canopy-dialog] input[role=combobox]"
+    )!;
+    fireEvent.keyDown(search, { key: "Tab" });
+    const first = document.getElementById("canopy-card-waiting")!;
+    expect(document.activeElement).toBe(first);
+    const stream = terminalApis.filter((entry) => entry.runId === "waiting").at(-1)!;
+    await act(async () =>
+      stream.onStreamChange?.({ watchId: 7, ended: false, secretPrompt: false })
+    );
+
+    const reply = resolveCanopyReplyDictation();
+    expect(reply.ok).toBe(true);
+    if (reply.ok) expect(reply.target.panelId).toBe(canopyReplyVoiceId("waiting"));
+
+    const last = document.getElementById("canopy-card-working")!;
+    fireEvent.keyDown(first, { key: "ArrowDown" });
+    fireEvent.keyDown(last, { key: "ArrowDown" });
+    expect(document.querySelector("[data-testid=canopy-assistant-pane]")).not.toBeNull();
+    expect(resolveCanopyReplyDictation()).toMatchObject({
+      ok: false,
+      message: expect.stringContaining("Select an agent"),
+    });
+
+    view.unmount();
+    expect(resolveCanopyReplyDictation().ok).toBe(false);
   });
 
   it("opens the exact lane on Enter, and offers no worker action on an assistant row", async () => {

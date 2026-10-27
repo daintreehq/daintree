@@ -347,6 +347,22 @@ describe("voiceInput — spoken file references", () => {
     expect(shared.currentView.sent).toEqual([]);
   });
 
+  it("resolves nothing for a terminal outside the view, not even in the view's own project", async () => {
+    await getHandler(CHANNELS.VOICE_INPUT_START)({ sender: owner }, "a", { outsideView: true });
+    shared.detect.mockResolvedValue([{ description: "router" }]);
+    shared.resolve.mockResolvedValue("src/router.ts");
+
+    emitComplete("Link to the router.");
+    await stop(owner, "a");
+
+    expect(shared.detect).not.toHaveBeenCalled();
+    expect(shared.resolve).not.toHaveBeenCalled();
+    expect(fileReferences()).toEqual([]);
+    expect(completes()).toHaveLength(1);
+    expect(completes()[0]).toMatchObject({ text: expect.stringContaining("router") });
+    expect(completes()[0]!.transcriptId).toBeUndefined();
+  });
+
   it("sends nothing for a reference that didn't resolve", async () => {
     await start(owner, "a");
     shared.detect.mockResolvedValueOnce([{ description: "the old API" }]);

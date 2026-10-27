@@ -46,6 +46,7 @@ import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { useCommandStore } from "@/store/commandStore";
 import { useProjectStore } from "@/store/projectStore";
 import { usePanelStore, useVoiceRecordingStore } from "@/store";
+import type { VoiceRecordingTarget } from "@/store/voiceRecordingStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
@@ -136,7 +137,8 @@ import { takeLandedCorrection } from "@/services/voiceCorrectionLanding";
 import { takeScratchLanded } from "@/services/voiceScratchCommand";
 import { registerComposerSelectionSource } from "@/services/voiceRewriteSelection";
 import { readComposerSelection, takePendingComposerSelection } from "@/lib/composerCaret";
-import { makeDraftKey } from "@/lib/draftKey";
+import { isolatedComposerScope, makeDraftKey } from "@/lib/draftKey";
+import { DICTATION_OWNER_ATTR } from "@/services/canopyReplyDictation";
 import { useHostReparent } from "./hooks/useHostReparent";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { SelectedFileMenuItems } from "./SelectedFileMenuItems";
@@ -147,6 +149,12 @@ import { isScratchpadElement } from "@/lib/terminalScratchpad";
 
 export interface HybridInputBarHandle {
   focus: () => void;
+  /**
+   * Focus for dictation starting here from a surface with no pane to ask
+   * through (Canopy's reply): the caret stays where the composer last showed
+   * it, else goes to the end, as a pane's does on a dictation focus (#14770).
+   */
+  focusForDictation: () => void;
   /** Returns whether an editor was mounted to take the focus. */
   focusWithCursorAtEnd: () => boolean;
   cancelPendingFocus: () => void;
@@ -225,13 +233,18 @@ export interface HybridInputBarProps {
    * unset and follow the pane frame's own rule.
    */
   selected?: boolean;
+  /**
+   * The dictation an isolated composer takes (Canopy's reply), kept apart from
+   * the pane composer typing to the same terminal: its id addresses this
+   * composer's own draft. Without it an isolated composer takes none.
+   */
+  voiceTarget?: VoiceRecordingTarget;
 }
-
-/** The draft and history scope of an isolated composer, apart from every project's. */
-const ISOLATED_COMPOSER_SCOPE = "isolated-composer";
 
 interface LatestState {
   terminalId: string;
+  /** The id dictation into this composer is kept under (`voiceTarget`). */
+  voiceId: string;
   projectId?: string;
   disabled: boolean;
   isInitializing: boolean;
@@ -333,6 +346,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       otherHostId,
       submitText,
       selected,
+      voiceTarget,
     },
     ref
   ) => {
@@ -351,12 +365,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // An isolated composer types to a terminal that may live in another
     // project, beside that terminal's own composer: its draft and history are
     // its own, so neither leaks into the pane's (or, through it, the fleet's).
-    const projectId = isolated
-      ? thisMachineOff
-        ? `${ISOLATED_COMPOSER_SCOPE}:${otherHostId}`
-        : ISOLATED_COMPOSER_SCOPE
-      : currentProjectId;
+    const projectId = isolated ? isolatedComposerScope(otherHostId) : currentProjectId;
     const draftKey = makeDraftKey(terminalId, projectId);
+    // Where dictation into this composer is kept: the pane's own by terminal,
+    // a reply's by its own id, which names the same draft with no project.
+    const voiceId = voiceTarget?.panelId ?? terminalId;
+    const voiceProjectId = voiceTarget ? voiceTarget.projectId : projectId;
     const draftKeyRef = useRef(draftKey);
     useEffect(() => {
       draftKeyRef.current = draftKey;
@@ -419,9 +433,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const currentProject = useProjectStore((s) => s.currentProject);
     const voiceStatus = useVoiceRecordingStore((s) => s.status);
     // Dictation lands in a draft of this machine's project, by terminal id:
-    // never one for a terminal on another host.
+    // never one for a terminal on another host, unless it takes its own.
     const activeVoicePanelId = useVoiceRecordingStore((s) =>
-      thisMachineOff ? null : (s.activeTarget?.panelId ?? null)
+      thisMachineOff && !voiceTarget ? null : (s.activeTarget?.panelId ?? null)
     );
     const voiceMicSignal = useVoiceRecordingStore((s) => s.micSignal);
     const voiceMicDeviceLabel = useVoiceRecordingStore((s) => s.micDeviceLabel);
@@ -438,11 +452,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const panelWorktreePath = useWorktreeStore((s) =>
       panelWorktreeId ? s.worktrees.get(panelWorktreeId)?.path : undefined
     );
-    const isVoiceRecording = activeVoicePanelId === terminalId && voiceStatus === "recording";
-    const isVoiceConnecting = activeVoicePanelId === terminalId && voiceStatus === "connecting";
-    const isVoiceReconnecting = activeVoicePanelId === terminalId && voiceStatus === "reconnecting";
-    const isVoiceFinishing = activeVoicePanelId === terminalId && voiceStatus === "finishing";
-    const isVoicePaused = activeVoicePanelId === terminalId && voiceStatus === "paused";
+    const isVoiceRecording = activeVoicePanelId === voiceId && voiceStatus === "recording";
+    const isVoiceConnecting = activeVoicePanelId === voiceId && voiceStatus === "connecting";
+    const isVoiceReconnecting = activeVoicePanelId === voiceId && voiceStatus === "reconnecting";
+    const isVoiceFinishing = activeVoicePanelId === voiceId && voiceStatus === "finishing";
+    const isVoicePaused = activeVoicePanelId === voiceId && voiceStatus === "paused";
     const isVoiceActiveForPanel =
       isVoiceRecording ||
       isVoiceConnecting ||
@@ -807,6 +821,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     useEffect(() => {
       latestRef.current = {
         terminalId,
+        voiceId,
         projectId,
         disabled,
         isInitializing,
@@ -926,6 +941,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       setIsExpanded,
       setActiveCompletionContext,
       terminalId,
+      voice: voiceTarget,
       cwd,
       agentId,
       expandContext: !thisMachineOff,
@@ -991,7 +1007,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       if (view) clearComposerHistory(view);
     }, [followsDriver]);
 
-    useVoiceDecorations({ terminalId, editorViewRef });
+    useVoiceDecorations({ terminalId: voiceId, editorViewRef });
 
     /**
      * The `isDraftUnchanged` for a send of the editor's text as it reads now:
@@ -1078,7 +1094,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       if (hasPendingUploads(uploadSurface)) return;
       // The send takes the draft as it stands. A dictation correction still on
       // its way must not rewrite it mid-send, or land on the next draft (#14611).
-      voiceRecordingService.discardPendingCorrections(terminalId);
+      voiceRecordingService.discardPendingCorrections(voiceId);
       const view = editorViewRef.current;
       const latest = latestRef.current;
       const text = view?.state.doc.toString() ?? latest?.value ?? "";
@@ -1107,6 +1123,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     } = useVoiceWaitSubmit({
       terminalId,
       projectId,
+      voice: voiceTarget,
       editorViewRef,
       editableCompartmentRef,
       sendFromEditor,
@@ -1132,7 +1149,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         </div>
       ) : null;
 
-    const handleDictationEscape = () => voiceRecordingService.handleEscape(terminalId);
+    const handleDictationEscape = () => voiceRecordingService.handleEscape(voiceId);
 
     const collapseEditor = () => setIsExpanded(false);
 
@@ -1268,6 +1285,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       ref,
       () => ({
         focus: focusEditor,
+        focusForDictation: () => {
+          const view = editorViewRef.current;
+          if (!view) return;
+          if (!editorOwnsDomFocus(view)) parkUnchosenCaret(view);
+          view.focus();
+        },
         focusWithCursorAtEnd: () => {
           const view = editorViewRef.current;
           // No mounted editor (lazy CodeMirror still loading) means nothing can
@@ -1318,7 +1341,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           if (!view || !latest || latest.disabled) return false;
           // The snapshot is what goes out; a correction landing during the
           // submit would rewrite the draft under it (#14611).
-          voiceRecordingService.discardPendingCorrections(terminalId);
+          voiceRecordingService.discardPendingCorrections(voiceId);
           const snapshot = view.state.doc.toString();
           return sendText(snapshot, {
             compose: (draft) => composeDraftWithInstruction(draft, instruction),
@@ -1329,7 +1352,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           });
         },
       }),
-      [focusEditor, guardSentDraft, sendText, terminalId]
+      [focusEditor, guardSentDraft, sendText, terminalId, voiceId]
     );
 
     // Claim the type-anywhere routing target (#11134) whenever the user really
@@ -1435,6 +1458,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     useEditorFactory({
       terminalId,
+      voiceId,
       draftKeyRef,
       editorHostRef,
       editorViewRef,
@@ -1861,20 +1885,36 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 </Tooltip>
               )}
               {/* Dictation writes to the pane's own draft, in the current
-                  project: an isolated composer's draft is its own, so it
-                  offers none rather than filling the pane's behind it. */}
-              {!isolated && (
+                  project. An isolated composer's draft is its own, so it
+                  offers dictation only when it has its own to take, rather
+                  than filling the pane's behind it. */}
+              {voiceTarget ? (
                 <VoiceInputButton
-                  panelId={terminalId}
-                  panelTitle={
-                    panelOwnTitle?.trim() || (agentId ? getAgentConfig(agentId)?.name : undefined)
-                  }
-                  projectId={currentProject?.id}
-                  projectName={currentProject?.name}
-                  worktreeId={panelWorktreeId}
-                  worktreeLabel={panelWorktreeLabel}
+                  panelId={voiceTarget.panelId}
+                  panelTitle={voiceTarget.panelTitle}
+                  projectId={voiceTarget.projectId}
+                  projectName={voiceTarget.projectName}
+                  worktreeId={voiceTarget.worktreeId}
+                  worktreeLabel={voiceTarget.worktreeLabel}
+                  surface={voiceTarget.surface}
+                  terminalId={voiceTarget.terminalId}
+                  otherHostId={voiceTarget.otherHostId}
                   disabled={disabled}
                 />
+              ) : (
+                !isolated && (
+                  <VoiceInputButton
+                    panelId={terminalId}
+                    panelTitle={
+                      panelOwnTitle?.trim() || (agentId ? getAgentConfig(agentId)?.name : undefined)
+                    }
+                    projectId={currentProject?.id}
+                    projectName={currentProject?.name}
+                    worktreeId={panelWorktreeId}
+                    worktreeLabel={panelWorktreeLabel}
+                    disabled={disabled}
+                  />
+                )
               )}
             </div>
           </div>
@@ -1905,7 +1945,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             focusEditor();
           }}
         >
-          <DictionaryLearnPrompt terminalId={terminalId} projectId={projectId} />
+          <DictionaryLearnPrompt terminalId={voiceId} projectId={voiceProjectId} />
           {barContent}
         </div>
         <CommandPickerHost
@@ -1960,8 +2000,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                   }}
                   // The expanded editor portals out of the isolated composer's
                   // wrapper: it keeps that isolation, or the grid's shortcuts
-                  // would act on the pane behind Canopy.
+                  // would act on the pane behind Canopy, and the dictation key
+                  // its own dictation takes.
                   {...(isolated ? { "data-keybindings-isolated": "" } : {})}
+                  {...(isolated && voiceTarget ? { [DICTATION_OWNER_ATTR]: "" } : {})}
                   className="flex-1 min-h-[200px] overflow-auto text-text-primary p-4"
                 />
               </ContextMenuTrigger>

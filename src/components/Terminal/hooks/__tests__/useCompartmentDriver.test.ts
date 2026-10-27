@@ -259,6 +259,7 @@ function mount(initial: Partial<LiveProps> = {}) {
       const draftKeyRef = useRef(terminalId);
       useEditorFactory({
         terminalId,
+        voiceId: terminalId,
         draftKeyRef,
         editorHostRef,
         editorViewRef,

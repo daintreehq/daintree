@@ -84,6 +84,12 @@ vi.mock("@/store/panelStore", () => {
 
 vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 
+vi.mock("@/store/canopyStore", () => {
+  const state = { isOpen: false };
+  const getState = () => state;
+  return { useCanopyStore: Object.assign(getState, { getState }), __state: state };
+});
+
 vi.mock("@/store/terminalInputStore", () => {
   const fns = {
     getDraftInput: vi.fn(() => ""),
@@ -430,6 +436,36 @@ describe("VoiceRecordingService — background recording", () => {
 
     expect(window.electron.voiceInput.start).toHaveBeenCalledWith(expect.any(String), {
       terminalId: "panel-7",
+    });
+  });
+
+  it("tells main the terminal a Canopy reply types to, not the reply's own id", async () => {
+    setupGlobals();
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await voiceRecordingService.start({
+      panelId: "isolated-composer:run-7",
+      surface: "canopy-reply",
+      terminalId: "run-7",
+    });
+
+    expect(window.electron.voiceInput.start).toHaveBeenCalledWith(expect.any(String), {
+      terminalId: "run-7",
+    });
+  });
+
+  it("gives main nothing of this view's for a reply to a terminal outside it", async () => {
+    setupGlobals();
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await voiceRecordingService.start({
+      panelId: "isolated-composer:host-2:run-7",
+      surface: "canopy-reply",
+      otherHostId: "host-2",
+    });
+
+    expect(window.electron.voiceInput.start).toHaveBeenCalledWith(expect.any(String), {
+      outsideView: true,
     });
   });
 
@@ -1617,6 +1653,186 @@ describe("VoiceRecordingService — assistant dictation routing (#8887)", () => 
     expect(useVoiceRecordingStore.getState().setLastError).toHaveBeenCalledWith(
       expect.objectContaining({ message: expect.stringContaining("Start the Daintree Assistant") })
     );
+  });
+});
+
+describe("VoiceRecordingService — Canopy's reply box (#14777)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    suspendCallbacks.length = 0;
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  const REPLY = {
+    panelId: "isolated-composer:run-1",
+    panelTitle: "Reply to Claude",
+    surface: "canopy-reply" as const,
+    terminalId: "run-1",
+  };
+
+  type VoiceState = {
+    status: string;
+    activeTarget: object | null;
+    pendingTarget: object | null;
+    lockedTarget: object | null;
+  };
+
+  function hasMockExport<K extends string, T>(mod: object, key: K): mod is Record<K, T> {
+    return key in mod;
+  }
+
+  async function canopyState() {
+    const canopy = await import("@/store/canopyStore");
+    if (!hasMockExport<"__state", { isOpen: boolean }>(canopy, "__state")) {
+      throw new Error("canopyStore mock lacks __state");
+    }
+    return canopy.__state;
+  }
+
+  async function arrange() {
+    setupGlobals();
+    const panel = await import("@/store/panelStore");
+    if (
+      !hasMockExport<"__state", { focusedId: string | null; panelsById: Record<string, unknown> }>(
+        panel,
+        "__state"
+      )
+    ) {
+      throw new Error("panelStore mock lacks __state");
+    }
+    panel.__state.focusedId = "grid-1";
+    panel.__state.panelsById = {
+      "grid-1": { id: "grid-1", title: "Behind", location: "grid", launchAgentId: "claude" },
+    };
+    (await canopyState()).isOpen = true;
+    const voice = await import("@/store/voiceRecordingStore");
+    if (!hasMockExport<"__state", VoiceState>(voice, "__state")) {
+      throw new Error("voiceRecordingStore mock lacks __state");
+    }
+    voice.__state.status = "idle";
+    voice.__state.activeTarget = null;
+    voice.__state.pendingTarget = null;
+    voice.__state.lockedTarget = null;
+    vi.mocked(voice.useVoiceRecordingStore.getState().announce).mockClear();
+    const { notify } = await import("@/lib/notify");
+    vi.mocked(notify).mockClear();
+    const registry = await import("@/services/canopyReplyDictation");
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const toggleSpy = vi.spyOn(voiceRecordingService, "toggle").mockResolvedValue();
+    const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+    return { voiceRecordingService, toggleSpy, stopSpy, registry, panel, voice, notify };
+  }
+
+  afterEach(async () => {
+    (await canopyState()).isOpen = false;
+  });
+
+  it("starts the selected row's reply and moves the keyboard into it, not the grid pane behind", async () => {
+    const { voiceRecordingService, toggleSpy, registry } = await arrange();
+    const focus = vi.fn();
+    registry.registerCanopyReplyDictation(() => ({ ok: true, target: REPLY, focus }));
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(toggleSpy).toHaveBeenCalledTimes(1);
+    expect(toggleSpy).toHaveBeenCalledWith(REPLY);
+    expect(focus).toHaveBeenCalledTimes(1);
+  });
+
+  it("goes to the reply ahead of a lock on a grid pane, and leaves the lock in place", async () => {
+    const { voiceRecordingService, toggleSpy, registry, voice } = await arrange();
+    voice.__state.lockedTarget = { panelId: "grid-1" };
+    registry.registerCanopyReplyDictation(() => ({ ok: true, target: REPLY, focus: () => {} }));
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(toggleSpy).toHaveBeenCalledWith(REPLY);
+    expect(voice.__state.lockedTarget).toEqual({ panelId: "grid-1" });
+  });
+
+  it("says why when the selected row can't take a reply, and starts nothing", async () => {
+    const { voiceRecordingService, toggleSpy, registry, voice, notify } = await arrange();
+    const message = "It's asking for a secret. Type it straight into the terminal above.";
+    registry.registerCanopyReplyDictation(() => ({ ok: false, message }));
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(toggleSpy).not.toHaveBeenCalled();
+    expect(voice.useVoiceRecordingStore.getState().announce).toHaveBeenCalledWith(message);
+    expect(vi.mocked(notify).mock.calls[0]![0]).toMatchObject({ message });
+  });
+
+  it("never falls back to the grid while Canopy has no inbox showing", async () => {
+    const { voiceRecordingService, toggleSpy, notify } = await arrange();
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(toggleSpy).not.toHaveBeenCalled();
+    expect(vi.mocked(notify).mock.calls[0]![0]).toMatchObject({
+      message: expect.stringContaining("Select an agent in Canopy"),
+    });
+  });
+
+  it("still stops a running session first, wherever it is, and starts no reply", async () => {
+    const { voiceRecordingService, toggleSpy, stopSpy, registry, voice } = await arrange();
+    voice.__state.status = "recording";
+    voice.__state.activeTarget = { panelId: "grid-1" };
+    const focus = vi.fn();
+    registry.registerCanopyReplyDictation(() => ({ ok: true, target: REPLY, focus }));
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(stopSpy).toHaveBeenCalledTimes(1);
+    expect(toggleSpy).not.toHaveBeenCalled();
+    expect(focus).not.toHaveBeenCalled();
+  });
+
+  it("brings a reply's session forward only while its row is still selected", async () => {
+    const { voiceRecordingService, registry, voice } = await arrange();
+    const projects = await import("@/store/projectStore");
+    if (!hasMockExport<"__switchProject", Mock>(projects, "__switchProject")) {
+      throw new Error("projectStore mock lacks __switchProject");
+    }
+    projects.__switchProject.mockClear();
+    voice.__state.status = "recording";
+    voice.__state.activeTarget = REPLY;
+    const focus = vi.fn();
+    const unregister = registry.registerCanopyReplyDictation(() => ({
+      ok: true,
+      target: REPLY,
+      focus,
+    }));
+
+    await expect(voiceRecordingService.focusActiveTarget()).resolves.toBe(true);
+    expect(focus).toHaveBeenCalledTimes(1);
+
+    unregister();
+    registry.registerCanopyReplyDictation(() => ({
+      ok: true,
+      target: { ...REPLY, panelId: "isolated-composer:run-2" },
+      focus,
+    }));
+    await expect(voiceRecordingService.focusActiveTarget()).resolves.toBe(false);
+    expect(focus).toHaveBeenCalledTimes(1);
+    expect(projects.__switchProject).not.toHaveBeenCalled();
+  });
+
+  it("keeps a reply's session going when the grid's panels change", async () => {
+    const { voiceRecordingService, stopSpy, panel, voice } = await arrange();
+    voiceRecordingService.initialize();
+    voice.__state.status = "recording";
+    voice.__state.activeTarget = REPLY;
+    const listeners = vi.mocked(panel.usePanelStore.subscribe).mock.calls.map((call) => call[0]);
+    expect(listeners.length).toBeGreaterThan(0);
+
+    const emptied = { ...panel.usePanelStore.getState(), panelsById: {}, panelIds: [] };
+    for (const listener of listeners) listener(emptied);
+
+    expect(stopSpy).not.toHaveBeenCalled();
   });
 });
 

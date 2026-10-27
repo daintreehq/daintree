@@ -40,6 +40,7 @@ function mountComposer() {
       const draftKeyRef = useRef("t1");
       useEditorFactory({
         terminalId: "t1",
+        voiceId: "t1",
         draftKeyRef,
         editorHostRef,
         editorViewRef,

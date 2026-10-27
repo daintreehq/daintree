@@ -154,6 +154,9 @@ interface VoiceSession {
   // The starting view's project at start (#14599). File links fall back to it
   // when no terminal vouches for a worktree.
   readonly projectInfo: { name?: string; path?: string };
+  // Dictated into a terminal outside this view (another host's or project's):
+  // nothing of the view's own project belongs in the text.
+  readonly outsideView: boolean;
   /** The terminal being dictated into, as the renderer named it at start. */
   readonly terminalId: string | undefined;
   /** "rewrite" records an instruction for selected text, forwarded as spoken. */
@@ -734,6 +737,7 @@ async function resolveFileLinkCwd(
   session: VoiceSession,
   ptyClient: PtyClient | undefined
 ): Promise<string | null> {
+  if (session.outsideView) return null;
   const { terminalId } = resolveKeytermTarget(session.projectId, session.terminalId, ptyClient);
   if (terminalId && ptyClient) {
     const terminal = await ptyClient.getTerminalAsync(terminalId).catch(() => null);
@@ -782,6 +786,8 @@ interface CorrectionPrep {
   readonly webContentsId: number;
   readonly projectId: string | null;
   readonly terminalId: string | undefined;
+  // Read for a terminal outside the view: none of the view's project or names.
+  readonly outsideView: boolean;
   readonly vocabulary: Promise<VoiceDictionaryEntry[]>;
   readonly commandTarget: Promise<VoiceCommandTarget | null>;
   readonly names: { names: string[] };
@@ -802,7 +808,8 @@ function findCorrectionPrep(
       prep.sessionId === request.sessionId &&
       prep.webContentsId === ctx.webContentsId &&
       prep.projectId === ctx.projectId &&
-      prep.terminalId === request.terminalId
+      prep.terminalId === request.terminalId &&
+      prep.outsideView === (request.outsideView === true)
   );
 }
 
@@ -1065,6 +1072,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       webContentsId: ctx.webContentsId,
       projectId: ctx.projectId,
       projectInfo: getProjectInfo(ctx.projectId),
+      outsideView: options?.outsideView === true,
       terminalId: options?.terminalId,
       intent: options?.intent ?? "dictation",
       commandTarget: null,
@@ -1138,6 +1146,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       webContentsId: session.webContentsId,
       projectId: session.projectId,
       terminalId,
+      outsideView: session.outsideView,
       vocabulary,
       commandTarget: resolveVoiceCommandTarget(
         deps.ptyClient,
@@ -1161,7 +1170,13 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       if (session.ended || !mayCorrect(settings)) return;
       correctionService ??= new VoiceCorrectionService();
       await correctionService.warm(
-        correctionSettingsFor(settings, session.projectId, entries, commandTarget, knownNames)
+        correctionSettingsFor(
+          settings,
+          prep.outsideView ? null : session.projectId,
+          entries,
+          commandTarget,
+          prep.outsideView ? [] : knownNames
+        )
       );
     };
     const attempt = () => {
@@ -1200,7 +1215,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // non-fatal — we just start without keyterms.
     const keytermTarget = resolveKeytermTarget(session.projectId, terminalId, deps.ptyClient);
     const vocabulary = readVocabulary(
-      resolveVocabularyProject(session.projectId, terminalId, deps.ptyClient)
+      session.outsideView
+        ? null
+        : resolveVocabularyProject(session.projectId, terminalId, deps.ptyClient)
     );
     const projectDictionary = vocabulary.then(dictionaryTerms);
     const names = gatherDictationNames({
@@ -1345,6 +1362,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         parts.length > 0 &&
         liveSettings.correctionEnabled &&
         liveSettings.resolveFileLinks &&
+        !session.outsideView &&
         liveSettings.openaiApiKey &&
         mayReferenceFile(writtenText)
           ? randomUUID()
@@ -1829,6 +1847,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       correctionService = new VoiceCorrectionService();
     }
 
+    const outsideView = request.outsideView === true;
     // The terminal's output follows the keyterms' ownership rule: terminalId
     // is empty for a terminal another project owns.
     const { terminalId } = resolveKeytermTarget(ctx.projectId, request.terminalId, deps.ptyClient);
@@ -1846,15 +1865,21 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         currentCommandTarget(prep, terminalId),
         prep.terminalOutput ?? readTerminalOutputForCorrection(deps.ptyClient, terminalId),
       ]);
-      knownNames = prep.names.names;
+      knownNames = outsideView ? [] : prep.names.names;
     } else {
       [vocabulary, commandTarget, terminalOutput] = await Promise.all([
-        readVocabulary(resolveVocabularyProject(ctx.projectId, request.terminalId, deps.ptyClient)),
+        readVocabulary(
+          outsideView
+            ? null
+            : resolveVocabularyProject(ctx.projectId, request.terminalId, deps.ptyClient)
+        ),
         resolveVoiceCommandTarget(deps.ptyClient, terminalId, COMMAND_TARGET_CORRECTION_BUDGET_MS),
         readTerminalOutputForCorrection(deps.ptyClient, terminalId),
       ]);
       knownNames =
-        lastSessionNames?.webContentsId === ctx.webContentsId ? lastSessionNames.names : [];
+        !outsideView && lastSessionNames?.webContentsId === ctx.webContentsId
+          ? lastSessionNames.names
+          : [];
     }
     const result = await correctionService.correct(
       {
@@ -1865,7 +1890,13 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         startsPrompt: request.startsPrompt === true,
         ...(request.uncertain ? { uncertain: request.uncertain } : {}),
       },
-      correctionSettingsFor(settings, ctx.projectId, vocabulary, commandTarget, knownNames)
+      correctionSettingsFor(
+        settings,
+        outsideView ? null : ctx.projectId,
+        vocabulary,
+        commandTarget,
+        knownNames
+      )
     );
     // Main's share of the wait, for the session summary: up to the request
     // going out, and the round trip, when there was one.
