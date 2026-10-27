@@ -421,7 +421,11 @@ export function locatePauses(raw: string, phrases: readonly string[]): number[] 
   let cursor = 0;
   for (const phrase of phrases) {
     if (!phrase.trim()) throw new Error("a pause comes after no words");
-    const whole = new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(phrase)}(?![\\p{L}\\p{N}])`, "gu");
+    // Not part of a longer word, a contraction's ("it's", "can't") included.
+    const whole = new RegExp(
+      `(?<![\\p{L}\\p{N}]|\\p{L}['’])${escapeRegExp(phrase)}(?![\\p{L}\\p{N}]|['’]\\p{L})`,
+      "gu"
+    );
     whole.lastIndex = cursor;
     const found = whole.exec(raw);
     if (!found) throw new Error(`pause after "${phrase}" is not in the raw transcript`);

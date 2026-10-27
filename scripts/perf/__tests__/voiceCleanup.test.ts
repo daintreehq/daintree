@@ -1162,6 +1162,8 @@ describe("locatePauses", () => {
 
   it("finds only whole words, and refuses a phrase the transcript doesn't have", () => {
     expect(locatePauses("with it then ship", ["it"])).toEqual([7]);
+    expect(locatePauses("it's ready ship it now", ["it"])).toEqual([18]);
+    expect(() => locatePauses("we can’t ship", ["can"])).toThrow(/pause after "can"/);
     expect(() => locatePauses("ship it", ["merge"])).toThrow(/pause after "merge"/);
     expect(() => locatePauses("shipping", ["ship"])).toThrow(/pause after "ship"/);
   });

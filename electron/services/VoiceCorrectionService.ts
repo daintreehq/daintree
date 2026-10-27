@@ -101,8 +101,8 @@ const UNCERTAIN_JOIN_RE = /^[^\S\r\n]+$/;
 const PAUSE_MARK = "<pause/>";
 // A run of marks however a reply writes them back, with the spaces on their line around them.
 const PAUSE_MARK_RE = /(?:[^\S\r\n]*<\/?pause\s*\/?>)+[^\S\r\n]*/gi;
-// A mark, or the word a cleanup could write one from.
-const PAUSE_MARK_TEXT_RE = /<\/?pause\s*\/?>|\bpause\b/i;
+// A mark, or the word a cleanup could write one from, said or spelled out.
+const PAUSE_MARK_TEXT_RE = /<\/?pause\s*\/?>|\bp[\s.-]*a[\s.-]*u[\s.-]*s[\s.-]*e\b/i;
 // The start of one still streaming in, at the end of the text so far.
 const PARTIAL_PAUSE_MARK_RE = /[^\S\r\n]*<\/?(?:p(?:a(?:u(?:s(?:e\s*\/?)?)?)?)?)?$/i;
 const SPACE_RE = /\s/;

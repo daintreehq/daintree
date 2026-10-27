@@ -1096,14 +1096,19 @@ describe("VoiceCorrectionService", () => {
       { rawText: "swap less than pause slash greater than for a comma then ship it", pauses: [4] },
       BASE_SETTINGS
     );
+    const spelled = await svc.correct(
+      { rawText: "swap less than P A U S E slash greater than for a comma", pauses: [4] },
+      BASE_SETTINGS
+    );
     const literal = await svc.correct(
       { rawText: "swap <pause/> for a comma then ship it", pauses: [4, 25] },
       BASE_SETTINGS
     );
 
     expect(spoken.correctedText).toBe("Swap <pause/> for a comma, then ship it.");
+    expect(spelled.correctedText).toBe("Swap <pause/> for a comma, then ship it.");
     expect(literal.correctedText).toBe("Swap <pause/> for a comma, then ship it.");
-    const [spokenBody, literalBody] = fetchMock.mock.calls.map((call) =>
+    const [spokenBody, , literalBody] = fetchMock.mock.calls.map((call) =>
       JSON.parse((call as unknown as [string, RequestInit])[1].body as string)
     );
     expect(spokenBody.input[1].content).toContain(
