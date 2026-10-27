@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { useCanopyStore, type CanopyScope } from "@/store/canopyStore";
 import { CANOPY_URGENT_PRIORITY, type CanopySnapshot } from "@shared/types/ipc/canopy";
 import {
+  itemArchived,
   itemNeedsAttention,
   itemPriority,
   itemPutAside,
@@ -155,12 +156,17 @@ export function useCanopyInboxOrder({
     }
     const fresh = baseItems.map((item) => item.runId);
     const priorities = new Map(baseItems.map((item) => [item.runId, itemPriority(item, nowMs)]));
+    const archived = baseItems.filter(itemArchived).map((item) => item.runId);
+    // Opening, or showing another scope or host: a selection from the list
+    // before pins nothing here.
+    const pinned = opening ? null : selected;
     const step = nextCanopyOrder(order, {
       fresh,
       priorities,
       urgent: baseItems.filter(isUrgentItem).map((item) => item.runId),
       needsYou,
-      selected,
+      selected: pinned,
+      archived,
       refreshedAt,
       now,
       opening,
@@ -174,7 +180,14 @@ export function useCanopyInboxOrder({
     // A run arriving or an ask promoted leaves the held reorder held: still waiting.
     const shown = step.kind !== "set" ? order : step.ranked ? null : step.order;
     setReorderWaiting(
-      canopyReorderWaiting(shown, { fresh, priorities, refreshedAt, needsYou, selected })
+      canopyReorderWaiting(shown, {
+        fresh,
+        priorities,
+        refreshedAt,
+        needsYou,
+        selected: pinned,
+        archived,
+      })
     );
     if (step.kind === "set") {
       if (step.ranked) {

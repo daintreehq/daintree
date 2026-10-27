@@ -174,15 +174,15 @@ export function useCanopyInboxActions({
       onSent: (item, via) => {
         readNow(item);
         // Typed straight into the terminal: the keys stay there, since a menu
-        // or a prompt may have more to ask. The reply still moves the run out
-        // of the queue, and its pane stays open where the user is typing.
+        // or a prompt may have more to ask. The run reads as replied where it
+        // is, and its pane stays open where the user is typing.
         if (via === "terminal") return;
         // The user moved to another run while the reply was on its way, or
         // closed the panel: their choice stands.
         if (!showsHost(hostId) || !isSelected(item.runId)) return;
         // Replied from the composer: on to the next run that needs you, into
         // its composer, as Send moves on in a mail queue. The answered one
-        // leaves the queue when main's handled reading lands.
+        // reads as replied where it is, and leaves the band at a later re-rank.
         const next = nextAfter(item.runId);
         if (!next || next.runId === item.runId) return;
         if (searchRef.current !== null && document.activeElement === searchRef.current) {

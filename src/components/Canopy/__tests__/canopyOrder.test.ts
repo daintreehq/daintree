@@ -21,6 +21,7 @@ function input(
     urgent: [],
     needsYou: [],
     selected: null,
+    archived: [],
     refreshedAt: 2,
     now: NOW,
     opening: false,
@@ -341,6 +342,48 @@ describe("the Needs you band", () => {
     expect(nextCanopyOrder(held, input({ a: 70, b: 95 }, { ...paged, pressing: true }))).toEqual({
       kind: "hold",
     });
+  });
+
+  it("lets an archived run go at once, selected or not, as it leaves the list", () => {
+    const held = order(["a", "b"], { rankedFor: 2, band: ["a", "b"] });
+    const step = nextCanopyOrder(
+      held,
+      input({ a: 90, b: 0 }, { needsYou: ["a"], archived: ["b"], selected: "b", pointerInList: true })
+    );
+    expect(idsOf(step)).toEqual(["a", "b"]);
+    expect(bandOf(step)).toEqual(["a"]);
+    const settled = step.kind === "set" ? step.order : held;
+    expect(
+      canopyReorderWaiting(
+        settled,
+        input({ a: 90, b: 0 }, { needsYou: ["a"], archived: ["b"], selected: "b" })
+      )
+    ).toBe(false);
+  });
+
+  it("never takes in an ask paging the user on an earlier read that no longer needs them", () => {
+    const step = nextCanopyOrder(
+      order(["a", "b"], { rankedFor: 2, band: ["a"] }),
+      input({ a: 70, b: 95 }, { urgent: ["b"], needsYou: ["a"], pointerInList: true })
+    );
+    expect(idsOf(step)).toEqual(["b", "a"]);
+    expect(bandOf(step)).toEqual(["a"]);
+  });
+
+  it("sees the same runs in another order as no change", () => {
+    const held = order(["a", "b"], { rankedFor: 2, band: ["b", "a"] });
+    const now = input({ a: 90, b: 60 }, { needsYou: ["a", "b"] });
+    expect(nextCanopyOrder(held, now)).toEqual({ kind: "hold" });
+    expect(canopyReorderWaiting(held, now)).toBe(false);
+  });
+
+  it("fills an order loaded from disk on its open, though nothing was scanned", () => {
+    const loaded = order(["a", "b"], { rankedFor: null });
+    const step = nextCanopyOrder(
+      loaded,
+      input({ a: 90, b: 20 }, { refreshedAt: null, needsYou: ["a"], opening: true })
+    );
+    expect(bandOf(step)).toEqual(["a"]);
   });
 
   it("ranks who is in it afresh on an open, a Refresh and a reveal", () => {

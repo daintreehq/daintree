@@ -2217,6 +2217,39 @@ describe("CanopyView", () => {
     expect(doc.body.textContent).toContain("3 agents need you");
   });
 
+  it('withholds "Nothing needs you" while a run that needs the user waits to join the band', async () => {
+    useFleetSnapshotStore.setState({
+      snapshot: {
+        runs: [run("working", { agentState: "working", since: NOW - 30_000 })],
+        changedAt: NOW,
+        degraded: false,
+        lastSuccessfulAt: NOW,
+      },
+    });
+    const read = (priority: number) => ({
+      ...canopySnapshot,
+      refreshedAt: NOW + priority,
+      cards: [{ ...stuckCard("working"), priority, attentionScore: priority }],
+    });
+    useCanopyStore.setState({ snapshot: read(5) });
+    installElectron(read(5));
+    const { container } = render(<CanopyView />);
+    await frames();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    expect(summaryWords()).toBe("Nothing needs you");
+    const list = container.ownerDocument.querySelector<HTMLElement>("[role=listbox]")!;
+    fireEvent.pointerEnter(list);
+    act(() => useCanopyStore.setState({ snapshot: read(84) }));
+    expect(summaryWords()).toBe("Not every agent is sorted yet");
+    expect(bandWords()).toBe("Not every agent is sorted yet");
+    fireEvent.pointerLeave(list);
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
+    expect(summaryWords()).toContain("1 agent needs you");
+    expect(bandWords()).toBeNull();
+  });
+
   it("shows every run at once while the cards it is owed are written, and places each as it lands", async () => {
     const owed = { ...canopySnapshot, busy: true };
     installElectron(owed);

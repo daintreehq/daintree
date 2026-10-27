@@ -974,10 +974,15 @@ function CanopyInbox({
           : hostOfferShown
             ? `Canopy is off on ${hostName}`
             : null;
+  // A run that needs the user, held out of the band until the list may re-rank:
+  // nothing is concluded meanwhile.
+  const unsorted = inbox.inbox.some((item) => itemNeedsAttention(item) && !band.has(item.runId))
+    ? { words: "Not every agent is sorted yet", allClear: false }
+    : null;
   // What the line and the empty band both say while no agent needs the user, and
   // whether it is the all-clear itself: only the last branch draws it.
   const nothingWaiting: { words: string; allClear: boolean } = readerOff
-    ? { words: "No agent is waiting on you", allClear: false }
+    ? (unsorted ?? { words: "No agent is waiting on you", allClear: false })
     : // "Nothing" is a conclusion: qualified while some screens
       // can't be read at all, withheld while Daintree can't see its
       // agents, and held back while any run in the inbox has yet to
@@ -997,7 +1002,7 @@ function CanopyInbox({
             // has no reading at all: nothing is concluded about it.
             inbox.inbox.some((item) => item.card === null)
             ? { words: "Not every agent could be read yet", allClear: false }
-            : { words: "Nothing needs you", allClear: true };
+            : (unsorted ?? { words: "Nothing needs you", allClear: true });
   const ownHostLabel = (hostRows ?? []).find((row) => row.hostId === ownHostId)?.name ?? "This Mac";
   const needsYouLead = `${[
     needsYouWorkers > 0 ? pluralize(needsYouWorkers, "agent") : null,
@@ -1159,17 +1164,15 @@ function CanopyInbox({
       readings.some((reading) => reading.canopy?.activated === true && reading.canopy.waiting));
   // The header's count moves to the first run in the band, first lifting whatever
   // keeps one of the band's runs out of the list.
-  const countedWorker = (item: CanopyItem) => band.has(item.runId) && itemNeedsAttention(item);
+  const countedWorkers = projection.needsYou.filter(isWorkerEntry).map((entry) => entry.item);
   const showNeedsYou = () => {
-    const first = inbox.inbox.find(countedWorker);
+    const first = countedWorkers[0];
     // Workers lead the band; with none asking, the first assistant that is.
     const askingAssistant = assistantItems.find((item) => item.ask !== null);
     if (!first && !askingAssistant) return;
     const listedIds = new Set(listed.map((item) => item.runId));
     const shownIds = new Set(shownAssistants.map((item) => item.id));
-    const hiddenWorker = inbox.inbox.some(
-      (item) => countedWorker(item) && !listedIds.has(item.runId)
-    );
+    const hiddenWorker = countedWorkers.some((item) => !listedIds.has(item.runId));
     const hiddenAssistant = assistantItems.some(
       (item) => item.ask !== null && !shownIds.has(item.id)
     );

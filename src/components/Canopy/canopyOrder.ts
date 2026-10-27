@@ -43,6 +43,8 @@ export interface CanopyRankInput {
   needsYou: readonly string[];
   /** The run the panel has selected: never taken out of the band under the user. */
   selected: string | null;
+  /** The runs the user archived: out of the band at once, as they are out of the list. */
+  archived: readonly string[];
   refreshedAt: number | null;
   now: number;
   /** The panel is opening, or switching scope: the user's own move. */
@@ -120,22 +122,26 @@ export function nextCanopyOrder(order: CanopyOrder | null, input: CanopyRankInpu
   const newlyUrgent = input.pressing ? [] : input.urgent.filter((id) => !wasUrgent.has(id));
   const urgent = input.pressing ? order.urgent : input.urgent;
   const urgentLeft = !input.pressing && order.urgent.some((id) => !input.urgent.includes(id));
+  // The band holds while the list does: only an ask newly urgent joins it now,
+  // and only a run that left or was archived leaves it.
+  const archived = new Set(input.archived);
+  const held = order.band.filter((id) => live.has(id) && !archived.has(id));
   if (
     newlyUrgent.length > 0 ||
     arrived.length > 0 ||
     kept.length !== order.ids.length ||
+    held.length !== order.band.length ||
     urgentLeft
   ) {
-    // The band holds while the list does: only an ask newly urgent joins it now.
     const needs = new Set(input.needsYou);
-    const joined = newlyUrgent.filter((id) => needs.has(id) && !order.band.includes(id));
+    const joined = newlyUrgent.filter((id) => needs.has(id) && !held.includes(id));
     return {
       kind: "set",
       order: {
         ...order,
         ids: promote([...kept, ...arrived], newlyUrgent, input.fresh),
         urgent,
-        band: [...order.band.filter((id) => live.has(id)), ...joined],
+        band: [...held, ...joined],
       },
       ranked: false,
     };
@@ -167,7 +173,10 @@ export function nextCanopyOrder(order: CanopyOrder | null, input: CanopyRankInpu
  */
 export function canopyReorderWaiting(
   order: CanopyOrder | null,
-  input: Pick<CanopyRankInput, "fresh" | "priorities" | "refreshedAt" | "needsYou" | "selected">
+  input: Pick<
+    CanopyRankInput,
+    "fresh" | "priorities" | "refreshedAt" | "needsYou" | "selected" | "archived"
+  >
 ): boolean {
   if (order === null) return false;
   if (!sameMembers(rankedBand(order, input), order.band)) return true;
@@ -182,10 +191,15 @@ export function canopyReorderWaiting(
  */
 function rankedBand(
   order: CanopyOrder | null,
-  input: Pick<CanopyRankInput, "fresh" | "needsYou" | "selected">
+  input: Pick<CanopyRankInput, "fresh" | "needsYou" | "selected" | "archived">
 ): string[] {
   const selected = input.selected;
-  const kept = selected !== null && order?.band.includes(selected) === true ? selected : null;
+  const kept =
+    selected !== null &&
+    order?.band.includes(selected) === true &&
+    !input.archived.includes(selected)
+      ? selected
+      : null;
   const needs = new Set(input.needsYou);
   return input.fresh.filter((id) => needs.has(id) || id === kept);
 }
