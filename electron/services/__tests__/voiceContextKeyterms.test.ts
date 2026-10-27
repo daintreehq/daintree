@@ -875,7 +875,7 @@ describe("screenDictationNames", () => {
     ).toEqual({ hosts: ["Studio"], projects: ["Plugin SDK"], worktrees: [] });
   });
 
-  it("takes five of each kind and twelve in all, hosts first", () => {
+  it("takes five of each kind and twelve in all, keeping four for the worktrees", () => {
     const many = (prefix: string) => Array.from({ length: 8 }, (_, i) => `${prefix} ${i + 1}`);
     const screened = screenDictationNames({
       hosts: many("host"),
@@ -883,11 +883,23 @@ describe("screenDictationNames", () => {
       worktrees: many("worktree"),
     });
     expect(screened.hosts).toEqual(many("host").slice(0, 5));
-    expect(screened.projects).toEqual(many("project").slice(0, 5));
-    expect(screened.worktrees).toEqual(["worktree 1", "worktree 2"]);
+    expect(screened.projects).toEqual(many("project").slice(0, 3));
+    expect(screened.worktrees).toEqual(many("worktree").slice(0, 4));
     expect(screened.hosts.length + screened.projects.length + screened.worktrees.length).toBe(
       MAX_NAME_KEYTERMS
     );
+  });
+
+  it("keeps only the worktrees there are when hosts and projects fill what is left", () => {
+    const many = (prefix: string) => Array.from({ length: 8 }, (_, i) => `${prefix} ${i + 1}`);
+    const screened = screenDictationNames({
+      hosts: many("host"),
+      projects: many("project"),
+      worktrees: ["billing"],
+    });
+    expect(screened.hosts).toEqual(many("host").slice(0, 5));
+    expect(screened.projects).toEqual(many("project").slice(0, 5));
+    expect(screened.worktrees).toEqual(["billing"]);
   });
 
   it("doesn't let a screened-out name use up a slot", () => {

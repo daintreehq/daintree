@@ -24,8 +24,6 @@ export interface DictationNamesOpts {
   worktreeService?: WorkspaceClient;
 }
 
-// The Assistant is where hosts and projects are spoken; any other terminal
-// only ever needs its own project's worktrees.
 async function isAssistantTarget(ptyClient: PtyClient, terminalId: string): Promise<boolean> {
   try {
     const terminal = await ptyClient.getTerminalAsync(terminalId);
@@ -46,6 +44,20 @@ async function readWorktreeNames(
   return states.filter((wt) => !wt.isMainWorktree).map((wt) => wt.name);
 }
 
+function readHostsAndProjects(excludeProjectId: string | null) {
+  const hosts = (getRemoteService("remoteHostsClient")?.list() ?? []).map(
+    (entry) => entry.descriptor.name
+  );
+  // Most used first, which is the order the screen's cap keeps. A pane's own
+  // project is already sent whole as the project tier, so it would only spend a
+  // name slot; the Assistant lists it, as it always has.
+  const projects = projectStore
+    .getProjectSummaries()
+    .filter((project) => project.id !== excludeProjectId)
+    .map((project) => project.name);
+  return { hosts, projects };
+}
+
 export async function gatherDictationNames(opts: DictationNamesOpts): Promise<DictationNames> {
   const { terminalId, ptyClient, worktreeService } = opts;
   try {
@@ -55,13 +67,17 @@ export async function gatherDictationNames(opts: DictationNamesOpts): Promise<Di
 
     const assistant = await isAssistantTarget(ptyClient, terminalId);
     const worktrees = await readWorktreeNames(ownerId ?? null, worktreeService).catch(() => []);
-    if (!assistant) return { hosts: [], projects: [], worktrees };
 
-    const hosts = (getRemoteService("remoteHostsClient")?.list() ?? []).map(
-      (entry) => entry.descriptor.name
-    );
-    const projects = projectStore.getProjectSummaries().map((project) => project.name);
-    return { hosts, projects, worktrees };
+    // A failed read costs an agent pane its hosts and projects, not the
+    // worktrees it had before; the Assistant keeps giving up on all of them.
+    let spoken: Pick<DictationNames, "hosts" | "projects"> = { hosts: [], projects: [] };
+    try {
+      spoken = readHostsAndProjects(assistant ? null : (ownerId ?? null));
+    } catch (error) {
+      if (assistant) throw error;
+      logDebug(`${P} Failed to read hosts and projects`);
+    }
+    return { ...spoken, worktrees };
   } catch {
     logDebug(`${P} Failed to gather names`);
     return NO_DICTATION_NAMES;

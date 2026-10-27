@@ -104,17 +104,37 @@ describe("gatherDictationNames", () => {
     });
   });
 
-  it("gives any other terminal only its own project's worktrees", async () => {
+  it("gives an agent pane the hosts, its other projects and its worktrees", async () => {
     const worktreeService = makeWorktreeService();
     await expect(gather(GRID, { worktreeService })).resolves.toEqual({
-      hosts: [],
-      projects: [],
+      hosts: ["Studio 1", "Studio 2"],
+      projects: ["Plugin SDK"],
       worktrees: ["billing", "payments"],
     });
     expect(worktreeService.getAllStatesForProjectAsync).toHaveBeenCalledWith(
       "/repo/daintree",
       "proj-a"
     );
+  });
+
+  it("keeps the projects in the order the store ranks them", async () => {
+    const store = (await import("../ProjectStore.js")).projectStore;
+    vi.mocked(store.getProjectSummaries).mockReturnValueOnce([
+      { id: "proj-c", name: "CandidCue", path: "/repo/cue", emoji: "" },
+      { id: "proj-a", name: "Daintree", path: "/repo/daintree", emoji: "" },
+      { id: "proj-b", name: "Plugin SDK", path: "/repo/sdk", emoji: "" },
+    ]);
+    const names = await gather(GRID);
+    expect(names.projects).toEqual(["CandidCue", "Plugin SDK"]);
+  });
+
+  it("leaves an agent pane its worktrees when the hosts or projects can't be read", async () => {
+    shared.hostsError = new Error("registry gone");
+    await expect(gather(GRID)).resolves.toEqual({
+      hosts: [],
+      projects: [],
+      worktrees: ["billing", "payments"],
+    });
   });
 
   it("leaves out the main worktree, which is the project itself", async () => {
@@ -140,7 +160,11 @@ describe("gatherDictationNames", () => {
     const worktreeService = makeWorktreeService();
     await expect(
       gather(GRID, { ptyClient, worktreeService, projectId: "proj-gone" })
-    ).resolves.toEqual({ hosts: [], projects: [], worktrees: [] });
+    ).resolves.toEqual({
+      hosts: ["Studio 1", "Studio 2"],
+      projects: ["Daintree", "Plugin SDK"],
+      worktrees: [],
+    });
     expect(worktreeService.getAllStatesForProjectAsync).not.toHaveBeenCalled();
 
     await expect(
@@ -149,7 +173,11 @@ describe("gatherDictationNames", () => {
         terminalId: GRID,
         ptyClient: makePtyClient() as unknown as PtyClient,
       })
-    ).resolves.toEqual({ hosts: [], projects: [], worktrees: [] });
+    ).resolves.toEqual({
+      hosts: ["Studio 1", "Studio 2"],
+      projects: ["Plugin SDK"],
+      worktrees: [],
+    });
   });
 
   it("keeps the other names when the worktree read fails", async () => {
@@ -181,8 +209,8 @@ describe("gatherDictationNames", () => {
     const ptyClient = makePtyClient();
     ptyClient.getTerminalAsync.mockRejectedValue(new Error("pty host gone"));
     await expect(gather(ASSISTANT, { ptyClient })).resolves.toEqual({
-      hosts: [],
-      projects: [],
+      hosts: ["Studio 1", "Studio 2"],
+      projects: ["Plugin SDK"],
       worktrees: ["billing", "payments"],
     });
   });
