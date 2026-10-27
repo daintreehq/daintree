@@ -983,6 +983,7 @@ describe("All hosts", () => {
       expect(document.body.textContent).not.toContain("Not every host");
       expect(document.body.textContent).toContain("Checking who needs you…");
       expect(document.querySelector("[data-callout]")).toBeNull();
+      expect(document.querySelector("[data-testid=canopy-host-issues]")).toBeNull();
       expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
     };
     quiet();
@@ -1127,6 +1128,7 @@ describe("All hosts", () => {
     expect(document.body.textContent).not.toContain("Connecting to studio-01");
     expect(document.querySelector("[data-callout]")).toBeNull();
     expect(summaryWords()).toBe("Checking who needs you…");
+    expect(document.querySelector("[data-testid=canopy-host-issues]")).toBeNull();
     expect(document.body.textContent).not.toContain("No agents are running on any host");
     expect(document.body.textContent).not.toContain("Nothing needs you");
   });
@@ -1144,6 +1146,7 @@ describe("All hosts", () => {
     expect(summaryWords()).toBe("Checking who needs you…");
     expect(bandWords()).toBe("Checking who needs you…");
     expect(document.querySelector("[data-callout]")).toBeNull();
+    expect(document.querySelector("[data-testid=canopy-host-issues]")).toBeNull();
     expect(document.body.textContent).not.toContain("studio-01…");
   });
 
@@ -1152,15 +1155,31 @@ describe("All hosts", () => {
     const gate = (ms: number) => act(async () => void vi.advanceTimersByTime(ms));
 
     beforeEach(() => {
-      // Only the gate's timer: the reads settle on promises, never on this clock.
+      // The gate's timer is the one clock these tests move: the reads settle on promises.
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       installElectron();
       useFleetSnapshotStore.setState({ snapshot: fleet([]) });
     });
 
     afterEach(() => {
+      // Unmounted on the clock that armed the timers, before it is let go.
+      cleanup();
       vi.useRealTimers();
     });
+
+    /** Both of the host's reads held back, each answered when the test says so. */
+    function deferReads() {
+      const answer = { canopy: () => {}, fleet: () => {} };
+      state.invoke.mockImplementation(
+        (_hostId: string, channel: string) =>
+          new Promise((resolve) => {
+            if (channel === "canopy:set-active") answer.canopy = () => resolve(remoteCanopy);
+            else if (channel === "fleet:get-snapshot") answer.fleet = () => resolve(remoteFleet);
+            else resolve(null);
+          })
+      );
+      return answer;
+    }
 
     it("draws no box, and a spinner by the picker only once it is past the loading gate", async () => {
       state.hosts = [host("studio", "studio-01", { status: "connecting", attempt: 1 })];
@@ -1179,20 +1198,13 @@ describe("All hosts", () => {
       );
       // Past the gate it is the spinner that speaks, never a box listing the host.
       expect(document.querySelector("[data-callout]")).toBeNull();
+      expect(document.querySelector("[data-testid=canopy-host-issues]")).toBeNull();
       expect(document.body.textContent).not.toContain("Connecting to studio-01");
     });
 
     it("shows nothing at all when the reads land inside the gate", async () => {
       state.hosts = [host("studio", "studio-01", { status: "connecting", attempt: 1 })];
-      const answer = { canopy: () => {}, fleet: () => {} };
-      state.invoke.mockImplementation(
-        (_hostId: string, channel: string) =>
-          new Promise((resolve) => {
-            if (channel === "canopy:set-active") answer.canopy = () => resolve(remoteCanopy);
-            else if (channel === "fleet:get-snapshot") answer.fleet = () => resolve(remoteFleet);
-            else resolve(null);
-          })
-      );
+      const answer = deferReads();
       const { rerender } = render(<CanopyView />);
       await settle();
       await gate(300);
@@ -1214,15 +1226,7 @@ describe("All hosts", () => {
 
     it("takes the spinner away once the reads land", async () => {
       state.hosts = [host("studio", "studio-01", { status: "connecting", attempt: 1 })];
-      const answer = { canopy: () => {}, fleet: () => {} };
-      state.invoke.mockImplementation(
-        (_hostId: string, channel: string) =>
-          new Promise((resolve) => {
-            if (channel === "canopy:set-active") answer.canopy = () => resolve(remoteCanopy);
-            else if (channel === "fleet:get-snapshot") answer.fleet = () => resolve(remoteFleet);
-            else resolve(null);
-          })
-      );
+      const answer = deferReads();
       const { rerender } = render(<CanopyView />);
       await settle();
       await gate(400);
@@ -1258,12 +1262,60 @@ describe("All hosts", () => {
       await gate(1);
       expect(spinner()).not.toBeNull();
 
-      // Shut again before the gate: nothing carries over to the next open.
+      // Shut part way through the gate: the time already run carries nothing over.
       act(() => useCanopyStore.getState().close());
       await settle();
       act(() => useCanopyStore.getState().open());
       await settle();
+      await gate(200);
+      act(() => useCanopyStore.getState().close());
+      await settle();
+      await gate(1_000);
+      act(() => useCanopyStore.getState().open());
+      await settle();
       await gate(399);
+      expect(spinner()).toBeNull();
+      await gate(1);
+      expect(spinner()).not.toBeNull();
+    });
+
+    it.each([
+      ["the notes before the fleet", ["canopy", "fleet"]],
+      ["the fleet before the notes", ["fleet", "canopy"]],
+    ] as const)(
+      "keeps the spinner for a connected host until both its reads land, %s",
+      async (_order, order) => {
+        const answer = deferReads();
+        render(<CanopyView />);
+        await settle();
+        await gate(400);
+        expect(spinner()).not.toBeNull();
+
+        const [first, second] = order;
+        await act(async () => answer[first]());
+        await settle();
+        expect(spinner()).not.toBeNull();
+        expect(document.querySelector("[data-testid=canopy-host-issues]")).toBeNull();
+        await act(async () => answer[second]());
+        await settle();
+        expect(spinner()).toBeNull();
+        expect(cardOf("studio", "shared-run")).not.toBeNull();
+      }
+    );
+
+    it("keeps the spinner while this machine's own agents are still being read", async () => {
+      useFleetSnapshotStore.setState({ snapshot: null });
+      render(<CanopyView />);
+      await settle();
+      expect(cardOf("studio", "shared-run")).not.toBeNull();
+      expect(document.body.textContent).not.toContain("Reading This Mac");
+      expect(document.querySelector("[data-callout]")).toBeNull();
+      expect(spinner()).toBeNull();
+      await gate(400);
+      expect(spinner()).not.toBeNull();
+
+      act(() => useFleetSnapshotStore.setState({ snapshot: fleet(["shared-run"]) }));
+      await settle();
       expect(spinner()).toBeNull();
     });
 

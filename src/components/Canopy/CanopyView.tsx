@@ -1145,7 +1145,7 @@ function CanopyInbox({
   const hostProgressShown = hostProgress.filter((issue) => !issue.connecting);
   // A closed panel holds no readings, so it would be connecting for as long as it stays shut.
   const connectingSomewhere = isOpen && hostIssues.some((issue) => issue.connecting);
-  const showConnecting = useDohertyGate(connectingSomewhere);
+  const showConnecting = useDohertyGate(connectingSomewhere) && connectingSomewhere;
   const retryingSomewhere =
     everyHost &&
     (hostProgress.some((issue) => !issue.settled) ||
@@ -1362,12 +1362,13 @@ function CanopyInbox({
             <span className="relative flex min-w-0 items-center">
               {hostPicker}
               {showConnecting && (
-                // Beside the picker, out of its flow, so the picker stays where it was.
+                // Out of the picker's flow, so it stays where it was, and inside the 12px the
+                // header's right part leaves beside it.
                 <span
                   role="status"
                   aria-label="Connecting to hosts"
                   data-testid="canopy-hosts-connecting"
-                  className="absolute top-1/2 left-full ml-1.5 -translate-y-1/2 text-text-secondary"
+                  className="absolute top-1/2 left-full -translate-y-1/2 text-text-secondary"
                 >
                   <Spinner size="xs" />
                 </span>
@@ -1421,7 +1422,10 @@ function CanopyInbox({
           </div>
         )}
         {everyHost && (hostTroubles.length > 0 || hostProgressShown.length > 0) && (
-          <div className="flex shrink-0 flex-col gap-2 border-b border-border-default p-3">
+          <div
+            data-testid="canopy-host-issues"
+            className="flex shrink-0 flex-col gap-2 border-b border-border-default p-3"
+          >
             {hostTroubles.length > 0 && (
               <Callout severity="warning" size="compact" title="Not every host is being read">
                 <HostIssueList issues={hostTroubles} />
