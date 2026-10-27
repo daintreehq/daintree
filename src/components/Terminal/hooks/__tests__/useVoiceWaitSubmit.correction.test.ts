@@ -395,10 +395,16 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611, #14780)", () =
     });
     act(() => {
       pressKey("Escape");
+      // Held down, its repeats must not reach the editor's own Escape.
+      pressKey("Escape", { repeat: true });
     });
     expect(isEditable()).toBe(true);
     expect(result.current.voiceSubmitPhase).toBeNull();
-    // The keyboard was nowhere: it goes back to the unlocked editor.
+    expect(view.hasFocus).toBe(false);
+    // The keyboard was nowhere: on release it goes back to the unlocked editor.
+    act(() => {
+      document.body.dispatchEvent(new KeyboardEvent("keyup", { key: "Escape", bubbles: true }));
+    });
     expect(view.hasFocus).toBe(true);
     await act(async () => {
       pending.resolve({ action: "replace", correctedText: "Hello world." });

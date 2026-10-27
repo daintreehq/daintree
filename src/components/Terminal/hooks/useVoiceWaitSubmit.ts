@@ -165,10 +165,20 @@ export function useVoiceWaitSubmit({
         cancel: () => {
           if (!isCurrentAttempt() || !cancelVoiceWaitSubmit()) return;
           // The lock blurred the editor; with the keyboard still nowhere, it
-          // goes back to the text the user is now free to edit.
-          const view = editorViewRef.current;
-          const active = document.activeElement;
-          if (view && (active === null || active === document.body)) view.focus();
+          // goes back to the text the user is now free to edit. On the key's
+          // release, not its press: a held Escape's repeats would reach the
+          // editor's own Escape, which collapses the Expanded Editor or hands
+          // Escape to the agent.
+          const refocus = (event: KeyboardEvent) => {
+            if (event.key !== "Escape") return;
+            window.removeEventListener("keyup", refocus, true);
+            const view = editorViewRef.current;
+            const active = document.activeElement;
+            if (view?.dom.isConnected && (active === null || active === document.body)) {
+              view.focus();
+            }
+          };
+          window.addEventListener("keyup", refocus, true);
         },
       });
       activeWaitRef.current = { controller, releaseKeys };

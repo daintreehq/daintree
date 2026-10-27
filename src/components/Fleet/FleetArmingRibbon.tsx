@@ -312,8 +312,15 @@ export function FleetArmingRibbon(): ReactElement | null {
       // (issue #11106). Tested by existence rather than ancestry because modal
       // content can be portaled outside the dialog's subtree (Radix menus and
       // selects mount under <body>). The fleet's own confirmation is an inline
-      // role="status" banner, not a modal, so its Enter stays reachable.
-      if (document.querySelector('[role="dialog"][aria-modal="true"]') !== null) return;
+      // role="status" banner, not a modal, so its Enter stays reachable. A
+      // destructive AppDialog without a preview is an alertdialog.
+      if (
+        document.querySelector(
+          '[role="dialog"][aria-modal="true"], [role="alertdialog"][aria-modal="true"]'
+        ) !== null
+      ) {
+        return;
+      }
       const rawTarget = e.target;
       const target =
         rawTarget && typeof (rawTarget as HTMLElement).closest === "function"

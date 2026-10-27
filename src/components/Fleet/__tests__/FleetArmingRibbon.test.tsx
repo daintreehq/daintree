@@ -826,11 +826,13 @@ describe("FleetArmingRibbon", () => {
   // of activating that button (issue #11106).
   describe.each([
     // Inside the dialog's own subtree — a webview dialog's Cancel button.
-    { name: "a modal dialog owns", portaled: false },
+    { name: "a modal dialog owns", portaled: false, role: "dialog" },
     // Outside it — Radix menus and selects portal their content under <body>,
     // so an ancestry check would miss this one.
-    { name: "portaled content of an open modal owns", portaled: true },
-  ])("ignores Enter that $name", ({ portaled }) => {
+    { name: "portaled content of an open modal owns", portaled: true, role: "dialog" },
+    // A destructive AppDialog without a preview.
+    { name: "a modal alertdialog owns", portaled: false, role: "alertdialog" },
+  ])("ignores Enter that $name", ({ portaled, role }) => {
     it("leaves the fleet action undispatched", async () => {
       useFleetArmingStore.getState().armIds(["a", "b", "c"]);
       useFleetPendingActionStore.setState({
@@ -841,7 +843,7 @@ describe("FleetArmingRibbon", () => {
       render(<FleetArmingRibbon />);
 
       const modal = document.createElement("div");
-      modal.setAttribute("role", "dialog");
+      modal.setAttribute("role", role);
       modal.setAttribute("aria-modal", "true");
       document.body.appendChild(modal);
 
