@@ -23,8 +23,11 @@ type MockTranscriptionEvent = {
   itemId?: string;
   replace?: boolean;
   endOfSpeech?: boolean;
+  endsAtPause?: boolean;
+  uncertain?: Array<{ from: number; to: number }>;
   status?: string;
   message?: string;
+  error?: { severity: string; code: string; message: string };
 };
 
 const shared = vi.hoisted(() => ({
@@ -493,7 +496,7 @@ describe("voiceInput — spoken-command paragraphing", () => {
     );
 
   it("emits the prefix then a boundary for a trailing 'new paragraph'", () => {
-    emitTranscriptionEvent({ type: "complete", text: "hello new paragraph" });
+    emitTranscriptionEvent({ type: "complete", text: "hello new paragraph", endOfSpeech: true });
 
     expect(dictated()).toEqual([
       {
@@ -508,7 +511,7 @@ describe("voiceInput — spoken-command paragraphing", () => {
   });
 
   it("emits the prefix then a boundary for a trailing 'new line'", () => {
-    emitTranscriptionEvent({ type: "complete", text: "fix the bug new line" });
+    emitTranscriptionEvent({ type: "complete", text: "fix the bug new line", endOfSpeech: true });
 
     expect(dictated()).toEqual([
       {
@@ -523,7 +526,7 @@ describe("voiceInput — spoken-command paragraphing", () => {
   });
 
   it("emits only a boundary when the utterance is just a paragraph command", () => {
-    emitTranscriptionEvent({ type: "complete", text: "New paragraph." });
+    emitTranscriptionEvent({ type: "complete", text: "New paragraph.", endOfSpeech: true });
 
     expect(dictated()).toEqual([
       {
@@ -581,7 +584,12 @@ describe("voiceInput — spoken-command paragraphing", () => {
   });
 
   it("sends one empty completion for an identified command-only utterance", () => {
-    emitTranscriptionEvent({ type: "complete", text: "new paragraph", itemId: "item-A" });
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "new paragraph",
+      itemId: "item-A",
+      endOfSpeech: true,
+    });
 
     const completes = win.__sent.filter((m) => m.channel === "voice-input:transcription-complete");
     const boundaries = win.__sent.filter((m) => m.channel === "voice-input:paragraph-boundary");
@@ -670,15 +678,70 @@ describe("voiceInput — spoken-command paragraphing", () => {
     ]);
   });
 
-  it("keeps a trailing 'send it' literal on a completion cut mid-speech", () => {
+  // Until the utterance says what it was, the item keeps its preview.
+  it("holds a trailing 'send it' cut mid-speech, then keeps it literal as the speaker goes on", () => {
     emitTranscriptionEvent({ type: "complete", text: "then send it", itemId: "item-A" });
+    expect(dictated()).toEqual([]);
 
+    emitTranscriptionEvent({ type: "complete", text: "and log it", itemId: "item-B" });
     expect(dictated()).toEqual([
       {
         channel: "voice-input:transcription-complete",
         payload: {
           sessionId: currentSessionId,
           text: "then send it",
+          willCorrect: false,
+          itemId: "item-A",
+        },
+      },
+      {
+        channel: "voice-input:transcription-complete",
+        payload: {
+          sessionId: currentSessionId,
+          text: "and log it",
+          willCorrect: false,
+          itemId: "item-B",
+        },
+      },
+    ]);
+  });
+
+  it("holds a 'new line' cut mid-speech until the utterance shows where it falls", () => {
+    emitTranscriptionEvent({ type: "complete", text: "fix the bug new line", itemId: "item-A" });
+    expect(dictated()).toEqual([]);
+
+    // The closing item has no words of its own, so it retires first.
+    emitTranscriptionEvent({ type: "complete", text: "", itemId: "item-B", endOfSpeech: true });
+    expect(dictated()).toEqual([
+      {
+        channel: "voice-input:transcription-complete",
+        payload: { sessionId: currentSessionId, text: "", willCorrect: false, itemId: "item-B" },
+      },
+      {
+        channel: "voice-input:transcription-complete",
+        payload: {
+          sessionId: currentSessionId,
+          text: "fix the bug",
+          willCorrect: false,
+          itemId: "item-A",
+        },
+      },
+      {
+        channel: "voice-input:paragraph-boundary",
+        payload: { sessionId: currentSessionId, rawText: null, correctionId: null },
+      },
+    ]);
+  });
+
+  it("lands a segment cut mid-speech at once when nothing at its end could be a command", () => {
+    emitTranscriptionEvent({ type: "complete", text: "fix the login", itemId: "item-A" });
+
+    expect(dictated()).toEqual([
+      {
+        channel: "voice-input:transcription-complete",
+        payload: {
+          sessionId: currentSessionId,
+          text: "fix the login",
           willCorrect: false,
           itemId: "item-A",
         },
@@ -850,6 +913,20 @@ describe("voiceInput — spoken send on Deepgram's short endpoint", () => {
           itemId: "item-B",
         },
       },
+    ]);
+  });
+
+  it("keeps a held send waiting through a segment that finalised empty", () => {
+    sentenceEndingInSend();
+    emitTranscriptionEvent({ type: "complete", text: "", itemId: "item-B" });
+    vi.advanceTimersByTime(700);
+
+    expect(toRenderer().filter((m) => m.channel === "voice-input:transcription-complete")).toEqual([
+      {
+        channel: "voice-input:transcription-complete",
+        payload: { sessionId: currentSessionId, text: "", willCorrect: false, itemId: "item-B" },
+      },
+      completion("Fix the login bug", { send: true }),
     ]);
   });
 
@@ -1036,6 +1113,247 @@ describe("voiceInput — spoken send on Deepgram's short endpoint", () => {
     await stopping;
   });
 });
+
+describe.each(["openai", "deepgram"] as const)(
+  "voiceInput — spoken commands split across %s segments",
+  (provider) => {
+    let win: ReturnType<typeof buildMainWindow>;
+    let cleanup: () => void;
+
+    beforeEach(async () => {
+      vi.clearAllMocks();
+      shared.transcriptionEventCallback = null;
+      shared.drainResolve = null;
+      shared.useDeferredDrain = false;
+
+      const { store } = await import("../../../store.js");
+      vi.mocked(store.get).mockReturnValue({
+        enabled: true,
+        openaiApiKey: provider === "openai" ? "sk-test" : "",
+        deepgramApiKey: provider === "deepgram" ? "dg-test" : "",
+        correctionEnabled: false,
+        correctionModel: "gpt-6-luna",
+        dictionary: [],
+        correctionCustomInstructions: "",
+        language: "en",
+        transcriptionProvider: provider,
+        transcriptionModel: "gpt-live-transcribe",
+        paragraphingStrategy: "spoken-command",
+        resolveFileLinks: true,
+      });
+
+      win = buildMainWindow();
+      cleanup = registerVoiceInputHandlers({
+        mainWindow: win as unknown as Electron.BrowserWindow,
+      } as Parameters<typeof registerVoiceInputHandlers>[0]);
+
+      const handleStart = getHandler("voice-input:start");
+      await (handleStart as SessionHandler)(fakeEvent, nextSessionId());
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      cleanup?.();
+      vi.useRealTimers();
+    });
+
+    type Completion = { text: string; itemId?: string; send?: boolean };
+    const completes = () =>
+      win.__sent
+        .filter((m) => m.channel === "voice-input:transcription-complete")
+        .map((m) => m.payload as Completion);
+    const landed = () =>
+      completes()
+        .map((c) => c.text)
+        .filter(Boolean)
+        .join(" ");
+    const boundaries = () =>
+      win.__sent.filter((m) => m.channel === "voice-input:paragraph-boundary").length;
+    const sends = () => completes().filter((c) => c.send).length;
+    // Deepgram's short endpoint holds a send a moment longer to confirm the silence.
+    const settle = () => vi.advanceTimersByTime(5000);
+
+    it("sends a 'send it' the provider split across two segments", () => {
+      emitTranscriptionEvent({ type: "complete", text: "Fix the login bug, send", itemId: "A" });
+      emitTranscriptionEvent({ type: "complete", text: "it.", itemId: "B", endOfSpeech: true });
+      settle();
+
+      expect(landed()).toBe("Fix the login bug");
+      expect(sends()).toBe(1);
+      expect(completes().at(-1)?.send).toBe(true);
+    });
+
+    it("sends a 'send it' whose end of speech arrives as an empty segment", () => {
+      emitTranscriptionEvent({
+        type: "complete",
+        text: "Fix the login bug, send it.",
+        itemId: "A",
+      });
+      emitTranscriptionEvent({ type: "complete", text: "", endOfSpeech: true });
+      settle();
+
+      expect(landed()).toBe("Fix the login bug");
+      expect(sends()).toBe(1);
+    });
+
+    it("keeps 'send it' literal when the speaker goes on after the segment it ends", () => {
+      emitTranscriptionEvent({ type: "complete", text: "then send it", itemId: "A" });
+      emitTranscriptionEvent({
+        type: "complete",
+        text: "to the API.",
+        itemId: "B",
+        endOfSpeech: true,
+      });
+      settle();
+
+      expect(landed()).toBe("then send it to the API.");
+      expect(sends()).toBe(0);
+    });
+
+    it("reads a 'send it' with the clause an earlier segment opened", () => {
+      emitTranscriptionEvent({ type: "complete", text: "Where should the handler", itemId: "A" });
+      emitTranscriptionEvent({ type: "complete", text: "send it", itemId: "B", endOfSpeech: true });
+      settle();
+
+      expect(landed()).toBe("Where should the handler send it");
+      expect(sends()).toBe(0);
+    });
+
+    it("keeps a 'new line' literal when a segment cut falls just after it", () => {
+      emitTranscriptionEvent({
+        type: "complete",
+        text: "Make the parser accept a new line",
+        itemId: "A",
+      });
+      emitTranscriptionEvent({
+        type: "complete",
+        text: "inside quoted strings.",
+        itemId: "B",
+        endOfSpeech: true,
+      });
+      settle();
+
+      expect(landed()).toBe("Make the parser accept a new line inside quoted strings.");
+      expect(boundaries()).toBe(0);
+    });
+
+    it("breaks on a 'new paragraph' that ends what was said, across segments", () => {
+      emitTranscriptionEvent({ type: "complete", text: "Fix the bug, new", itemId: "A" });
+      emitTranscriptionEvent({
+        type: "complete",
+        text: "paragraph.",
+        itemId: "B",
+        endOfSpeech: true,
+      });
+      settle();
+
+      expect(landed()).toBe("Fix the bug,");
+      expect(boundaries()).toBe(1);
+    });
+
+    it("retires every segment's preview, even those a command swallowed", () => {
+      emitTranscriptionEvent({ type: "complete", text: "Fix the login bug, send", itemId: "A" });
+      emitTranscriptionEvent({ type: "complete", text: "it.", itemId: "B", endOfSpeech: true });
+      settle();
+
+      const retired = new Set(completes().map((c) => c.itemId));
+      expect(retired).toEqual(new Set(["A", "B"]));
+    });
+
+    it("carries the provider's unsure words into the words that land", () => {
+      emitTranscriptionEvent({
+        type: "complete",
+        text: "Fix the logn bug, send",
+        itemId: "A",
+        uncertain: [{ from: 8, to: 12 }],
+      });
+      emitTranscriptionEvent({ type: "complete", text: "it.", itemId: "B", endOfSpeech: true });
+      settle();
+
+      expect(completes().find((c) => c.itemId === "A")).toMatchObject({
+        text: "Fix the logn bug",
+        uncertain: [{ from: 8, to: 12 }],
+        send: true,
+      });
+    });
+
+    it("breaks on a 'new line' the provider closed at a pause, though speech went on", () => {
+      emitTranscriptionEvent({
+        type: "complete",
+        text: "Fix the bug new line",
+        itemId: "A",
+        endsAtPause: true,
+      });
+      expect(landed()).toBe("Fix the bug");
+      expect(boundaries()).toBe(1);
+    });
+
+    it("lands what a stop leaves waiting, reading its break commands and sending nothing", async () => {
+      emitTranscriptionEvent({
+        type: "complete",
+        text: "Fix the bug, send it new line",
+        itemId: "A",
+      });
+      expect(completes()).toEqual([]);
+
+      const handleStop = getHandler("voice-input:stop");
+      await (handleStop as SessionHandler)(fakeEvent, currentSessionId);
+
+      expect(landed()).toBe("Fix the bug, send it");
+      expect(boundaries()).toBe(1);
+      expect(sends()).toBe(0);
+    });
+
+    it("keeps held words as said, ahead of the status, when the socket drops", () => {
+      emitTranscriptionEvent({ type: "complete", text: "Fix the bug new line", itemId: "A" });
+      emitTranscriptionEvent({ type: "status", status: "reconnecting" });
+
+      const channels = win.__sent.map((m) => m.channel);
+      expect(channels).toEqual(["voice-input:transcription-complete", "voice-input:status"]);
+      expect(landed()).toBe("Fix the bug new line");
+      expect(boundaries()).toBe(0);
+    });
+
+    it("lands held words ahead of a provider failure", () => {
+      emitTranscriptionEvent({ type: "complete", text: "Fix the login bug, send", itemId: "A" });
+      emitTranscriptionEvent({
+        type: "error",
+        error: { severity: "fatal", code: "boom", message: "provider failed" },
+      });
+
+      expect(win.__sent.map((m) => m.channel).slice(0, 2)).toEqual([
+        "voice-input:transcription-complete",
+        "voice-input:error",
+      ]);
+      expect(landed()).toBe("Fix the login bug, send");
+      expect(sends()).toBe(0);
+    });
+
+    it("drops held words when Escape cancels", async () => {
+      emitTranscriptionEvent({ type: "complete", text: "Fix the bug new line", itemId: "A" });
+
+      const handleCancel = getHandler("voice-input:cancel");
+      await (handleCancel as SessionHandler)(fakeEvent, currentSessionId);
+      settle();
+
+      expect(completes()).toEqual([]);
+    });
+
+    it("counts a bare end of speech as no segment of its own", async () => {
+      emitTranscriptionEvent({ type: "complete", text: "Fix it, send it.", itemId: "A" });
+      emitTranscriptionEvent({ type: "complete", text: "", endOfSpeech: true });
+      emitTranscriptionEvent({ type: "complete", text: "", itemId: "B" });
+      settle();
+
+      const handleStop = getHandler("voice-input:stop");
+      await (handleStop as SessionHandler)(fakeEvent, currentSessionId);
+      const ended = win.__sent.find((m) => m.channel === "voice-input:session-ended");
+      expect(ended?.payload).toMatchObject({
+        report: { completedSegments: 1, emptyCompletions: 1 },
+      });
+    });
+  }
+);
 
 describe("voiceInput — manual paragraphing strategy", () => {
   let win: ReturnType<typeof buildMainWindow>;
@@ -1267,9 +1585,9 @@ describe("voiceInput — context keyterms wiring", () => {
     });
 
     await startFn(fakeEvent, nextSessionId());
-    emitTranscriptionEvent({ type: "complete", text: "use zoo stand new line" });
-    emitTranscriptionEvent({ type: "complete", text: "the new line helper" });
-    emitTranscriptionEvent({ type: "complete", text: "nothing to change" });
+    emitTranscriptionEvent({ type: "complete", text: "use zoo stand new line", endOfSpeech: true });
+    emitTranscriptionEvent({ type: "complete", text: "the new line helper", endOfSpeech: true });
+    emitTranscriptionEvent({ type: "complete", text: "nothing to change", endOfSpeech: true });
 
     expect(
       activeSent
@@ -1402,7 +1720,11 @@ describe("voiceInput — context keyterms wiring", () => {
 
     try {
       await startFn(fakeEvent, nextSessionId());
-      emitTranscriptionEvent({ type: "complete", text: "link to the zoo foo new line" });
+      emitTranscriptionEvent({
+        type: "complete",
+        text: "link to the zoo foo new line",
+        endOfSpeech: true,
+      });
     } finally {
       shared.viewProjectId = null;
     }
@@ -2019,6 +2341,22 @@ describe("voiceInput — rewrite instructions", () => {
         m.channel === "voice-input:paragraph-boundary"
     );
 
+  it("forwards nothing for a bare end of speech, which names no item", async () => {
+    const handleStart = getHandler("voice-input:start") as (
+      e: unknown,
+      sessionId: string,
+      options: unknown
+    ) => Promise<unknown>;
+    await handleStart(fakeEvent, nextSessionId(), { terminalId: "t1", intent: "rewrite" });
+
+    emitTranscriptionEvent({ type: "complete", text: "Make it shorter", itemId: "item-A" });
+    emitTranscriptionEvent({ type: "complete", text: "", endOfSpeech: true });
+
+    expect(forwarded().map((m) => (m.payload as { text: string }).text)).toEqual([
+      "Make it shorter",
+    ]);
+  });
+
   it("forwards an instruction as spoken: no formatting commands, splits or boundaries", async () => {
     const handleStart = getHandler("voice-input:start") as (
       e: unknown,
@@ -2083,7 +2421,7 @@ describe("voiceInput — rewrite instructions", () => {
     ) => Promise<unknown>;
     await handleStart(fakeEvent, nextSessionId(), { terminalId: "t1", intent: "dictation" });
 
-    emitTranscriptionEvent({ type: "complete", text: "fix the bug new line" });
+    emitTranscriptionEvent({ type: "complete", text: "fix the bug new line", endOfSpeech: true });
 
     expect(forwarded().map((m) => m.channel)).toEqual([
       "voice-input:transcription-complete",

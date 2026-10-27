@@ -386,6 +386,40 @@ describe("voiceInput — the target agent's commands", () => {
     ]);
   });
 
+  it.each(["openai", "deepgram"] as const)(
+    "writes a command whose name follows a pause after 'slash' on %s",
+    async (provider) => {
+      shared.provider = provider;
+      await start();
+      emitTranscriptionEvent({ type: "complete", text: "Slash.", itemId: "A", endOfSpeech: true });
+      emitTranscriptionEvent({
+        type: "complete",
+        text: "compact.",
+        itemId: "B",
+        endOfSpeech: true,
+      });
+      const sent = completions() as Array<{ text: string; commandText?: string; itemId?: string }>;
+      expect(sent.filter((p) => p.commandText)).toEqual([
+        expect.objectContaining({ commandText: "/compact" }),
+      ]);
+      expect(new Set(sent.map((p) => p.itemId))).toEqual(new Set(["A", "B"]));
+    }
+  );
+
+  it("lets a pause after 'slash' go as words when no command name follows", async () => {
+    await start();
+    emitTranscriptionEvent({ type: "complete", text: "Slash.", itemId: "A", endOfSpeech: true });
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "the budget in half.",
+      itemId: "B",
+      endOfSpeech: true,
+    });
+    const sent = completions();
+    expect(sent.map((p) => p.text).filter(Boolean)).toEqual(["Slash.", "the budget in half."]);
+    expect(sent.every((p) => p.commandText === undefined)).toBe(true);
+  });
+
   it("leaves 'slash' and anything the agent hasn't got as words", async () => {
     await start();
     emitTranscriptionEvent({ type: "complete", text: "Slash the budget in half." });

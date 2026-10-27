@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { applyDictationCommands, extractSendCommand } from "../voiceDictationCommands.js";
+import {
+  applyDictationCommands,
+  extractSendCommand,
+  pendingCommandStart,
+  trailingDictationCommands,
+} from "../voiceDictationCommands.js";
 
 describe("applyDictationCommands", () => {
   describe("break commands at end of utterance", () => {
@@ -169,4 +174,37 @@ describe("extractSendCommand", () => {
     const { text } = extractSendCommand("hello new line send it");
     expect(applyDictationCommands(text)).toBe("hello\n");
   });
+});
+
+describe("trailingDictationCommands", () => {
+  it("says where a trailing chain starts and the breaks it stands for", () => {
+    const text = "Fix it, new line new paragraph.";
+    const chain = trailingDictationCommands(text);
+    expect(chain).toEqual({ start: text.indexOf(" new"), replacement: "\n\n\n" });
+  });
+
+  it("finds nothing when the commands don't end the text", () => {
+    expect(trailingDictationCommands("a new line inside quoted strings")).toBeNull();
+  });
+});
+
+describe("pendingCommandStart", () => {
+  it.each([
+    ["fix the bug, send", "send"],
+    ["fix the bug, send it.", "send it."],
+    ["accept a new line", "new line"],
+    ["add a New", "New"],
+    ["hello new line new", "new line new"],
+    ["hello new line send", "new line send"],
+    ["send it new paragraph", "new paragraph"],
+  ])("finds where %j could still end in commands", (text, tail) => {
+    expect(text.slice(pendingCommandStart(text))).toBe(tail);
+  });
+
+  it.each(["fix the bug", "send it to the API", "a new line here", "line", "it", ""])(
+    "finds nothing pending in %j",
+    (text) => {
+      expect(pendingCommandStart(text)).toBe(-1);
+    }
+  );
 });

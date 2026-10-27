@@ -57,21 +57,68 @@ const SINGLE_COMMAND_RE = new RegExp(`(?:${COMMAND_ALTERNATION})`, "gi");
  * Idempotent on text without trailing commands.
  */
 export function applyDictationCommands(text: string): string {
+  const chain = trailingDictationCommands(text);
+  return chain ? text.slice(0, chain.start) + chain.replacement : text;
+}
+
+/**
+ * Where the trailing chain of break commands in `text` starts, and the breaks
+ * it stands for, or null when `text` doesn't end in one.
+ */
+export function trailingDictationCommands(
+  text: string
+): { start: number; replacement: string } | null {
   const match = TRAILING_CHAIN_RE.exec(text);
-  if (!match) return text;
+  if (!match) return null;
 
-  const chain = match[1];
-  const phrases = chain.match(SINGLE_COMMAND_RE);
-  if (!phrases || phrases.length === 0) return text;
+  const phrases = match[1].match(SINGLE_COMMAND_RE);
+  if (!phrases || phrases.length === 0) return null;
 
-  const replaced = phrases
+  const replacement = phrases
     .map((phrase) => {
       const key = phrase.replace(/\s+/g, " ").toLowerCase();
       return COMMAND_REPLACEMENTS.get(key) ?? phrase;
     })
     .join("");
+  return { start: match.index, replacement };
+}
 
-  return text.slice(0, match.index) + replaced;
+const BREAK_COMMAND_WORDS = COMMAND_MAP.map(([phrase]) => phrase.split(" "));
+const SEND_COMMAND_WORDS = ["send", "it"];
+// A word as the command patterns see one: anything between their separators.
+const COMMAND_WORD_RE = /[^\s.,;:!?]+/g;
+// More than any chain of commands anyone says in one breath.
+const MAX_PENDING_COMMAND_WORDS = 12;
+
+/** Whether `words` could still grow into break commands, optionally closed by "send it". */
+function couldBeCommands(words: readonly string[]): boolean {
+  let at = 0;
+  while (at < words.length) {
+    const rest = words.slice(at);
+    const phrase = BREAK_COMMAND_WORDS.find((candidate) =>
+      candidate.every((word, i) => i >= rest.length || rest[i] === word)
+    );
+    if (phrase) {
+      at += phrase.length;
+      continue;
+    }
+    return rest.every((word, i) => SEND_COMMAND_WORDS[i] === word);
+  }
+  return true;
+}
+
+/**
+ * Where the words that could still be trailing commands start in `text`: "new",
+ * "new line", "send" or "new line send it" at its end, which more speech may
+ * finish or turn into prose. -1 when nothing at the end could be one.
+ */
+export function pendingCommandStart(text: string): number {
+  const words = [...text.matchAll(COMMAND_WORD_RE)].slice(-MAX_PENDING_COMMAND_WORDS);
+  const lowered = words.map((word) => word[0].toLowerCase());
+  for (let from = 0; from < words.length; from++) {
+    if (couldBeCommands(lowered.slice(from))) return words[from]!.index;
+  }
+  return -1;
 }
 
 const SEND_COMMAND_RE = /(?:^|[\s.,;:!?]+)\bsend\s+it[\s.,;:!?]*$/i;

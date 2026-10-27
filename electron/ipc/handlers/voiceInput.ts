@@ -38,10 +38,10 @@ import { logDebug, logInfo, logWarn } from "../../utils/logger.js";
 import { buildOpenAIHeaders } from "../../../shared/utils/openaiHeaders.js";
 import { voiceErrorLogFields } from "../../../shared/utils/voiceLogFields.js";
 import {
-  applyDictationCommands,
-  extractSendCommand,
-  type SendCommandResult,
-} from "../../services/voiceDictationCommands.js";
+  UtteranceCommands,
+  type UtteranceEmission,
+  type UtteranceRelease,
+} from "../../services/voiceUtteranceCommands.js";
 import { VOICE_DICTATION_AI_MODEL } from "../../../shared/config/voiceCorrection.js";
 import { normalizeVoiceLanguage } from "../../../shared/config/voiceLanguages.js";
 import {
@@ -56,7 +56,6 @@ import {
   carrySpansThroughEdits,
   shiftSpans,
   sliceSpans,
-  spansInKeptStart,
   splitSpansByLine,
   type VoiceTextEdit,
   type VoiceTextSpan,
@@ -194,6 +193,11 @@ interface VoiceSession {
   // draft. Ending the session for any reason aborts what is left.
   readonly fileLinkJobs: Set<Promise<void>>;
   heldSend: HeldSend | null;
+  // Segments of the utterance whose spoken commands still depend on what
+  // comes next (#14801), and how a stop or a lost provider lets them go
+  // through the session's own emitter.
+  readonly utterance: UtteranceCommands;
+  flushUtterance: ((mode: "stop" | "literal") => void) | null;
   // Rechecks that the cleanup prompt is cached while the session runs.
   warmTimer: ReturnType<typeof setInterval> | null;
   // Its cleanup context, when cleanup was on at its start.
@@ -312,6 +316,8 @@ function endSession(session: VoiceSession, reason: VoiceSessionEndReason): void 
   // what is left belongs to a session nobody is dictating into any more.
   if (session.heldSend) clearTimeout(session.heldSend.timer);
   session.heldSend = null;
+  session.utterance.clear();
+  session.flushUtterance = null;
   if (session.warmTimer) clearInterval(session.warmTimer);
   session.warmTimer = null;
   // A provider that never reported (rejected, or cancelled while connecting)
@@ -986,9 +992,13 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         // stays up until it has.
         await service?.stopGracefully();
       } catch (error) {
+        session.flushUtterance?.("literal");
         endSession(session, "failed");
         throw error;
       }
+      // Stopping ends what was said: whatever the drain left waiting on more
+      // speech lands now, ahead of its file links.
+      session.flushUtterance?.("stop");
       // The drain can finish the final utterance, whose references only start
       // resolving then. Each job is bounded, and ending the session another
       // way aborts them.
@@ -1088,6 +1098,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       markHandedOff,
       fileLinkJobs: new Set(),
       heldSend: null,
+      utterance: new UtteranceCommands(),
+      flushUtterance: null,
       warmTimer: null,
       correctionPrep: null,
       stats: {
@@ -1281,28 +1293,21 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // before it ends an utterance; only Deepgram's short endpoint needs more.
     const sendSettleMs = settings.transcriptionProvider === "deepgram" ? SPOKEN_SEND_SETTLE_MS : 0;
 
-    // `uncertain` spans the words in `rawText` the provider was unsure of.
-    // They follow the text through every rewrite below by position, and one a
+    // Break commands and "send it" were read over the whole utterance, so
+    // each completion arrives with its text as it lands (#14801), and
+    // `uncertain` spans the words in it the provider was unsure of. They
+    // follow the text through every rewrite below by position, and one a
     // rewrite reached is dropped.
     const emitCompletion = (
       itemId: string | undefined,
-      rawText: string,
-      sendCommand: SendCommandResult,
-      uncertain: readonly VoiceTextSpan[]
+      processedText: string,
+      processedUncertain: readonly VoiceTextSpan[],
+      { send, opensUtterance }: { send: boolean; opensUtterance: boolean }
     ) => {
       const target = session.sender;
       if (target.isDestroyed()) return;
       const sessionId = session.id;
       const liveSettings = getVoiceSettings();
-      // applyDictationCommands rewrites trailing break commands to \n\n / \n.
-      const processedText = spokenCommands ? applyDictationCommands(sendCommand.text) : rawText;
-      // A stripped send and the break commands only ever rewrite the end, and
-      // the send leaves a prefix of the raw text.
-      const processedUncertain = spansInKeptStart(
-        sendCommand.text,
-        processedText,
-        sliceSpans(uncertain, 0, sendCommand.text.length)
-      );
 
       // Split on line breaks and emit one complete event per non-empty part
       // with a paragraph_boundary between each pair of pieces. Empty pieces
@@ -1311,11 +1316,11 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       const pieces = processedText.split(/\s*\n\s*/).map((p) => p.trim());
       // A spoken command ("slash review…") opening the utterance, written as
       // the composer would. The renderer uses it only when the utterance
-      // starts the prompt; a later piece never opens one. A trailing "send it"
-      // is already off the text, so "slash compact send it" opens with the
-      // command and still sends.
+      // starts the prompt; a later piece or completion never opens one. A
+      // trailing "send it" is already off the text, so "slash compact send it"
+      // opens with the command and still sends.
       const command =
-        session.commandTarget && pieces[0]
+        opensUtterance && session.commandTarget && pieces[0]
           ? planSpokenCommand(pieces[0], session.commandTarget.vocabulary)
           : null;
       const commandText = command?.text ?? null;
@@ -1343,7 +1348,6 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       );
       // Lengths only — dictated text is user content, kept out of logs.
       logDebug("[VoiceInput] complete event → renderer", {
-        rawLength: rawText.length,
         processedLength: processedText.length,
         paragraphingStrategy: settings.paragraphingStrategy,
         partCount: parts.length,
@@ -1367,7 +1371,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         mayReferenceFile(writtenText)
           ? randomUUID()
           : undefined;
-      if (parts.length === 0 && itemId && !sendCommand.send) {
+      if (parts.length === 0 && itemId && !send) {
         target.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, {
           sessionId,
           text: "",
@@ -1405,7 +1409,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
                   ...(commandUncertain.length > 0 ? { commandUncertain } : {}),
                 }
               : {}),
-            ...(sendCommand.send && i === lastIndex ? { send: true } : {}),
+            ...(send && i === lastIndex ? { send: true } : {}),
           });
         }
         if (i < lastIndex) {
@@ -1416,7 +1420,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           });
         }
       }
-      if (sendCommand.send && !pieces[lastIndex]) {
+      if (send && !pieces[lastIndex]) {
         target.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, {
           sessionId,
           text: "",
@@ -1435,25 +1439,34 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       }
     };
 
-    // Until it goes out, the renderer keeps whatever preview the item's
-    // interim results gave it.
-    const holdSend = (
-      itemId: string | undefined,
-      rawText: string,
-      sendCommand: SendCommandResult,
-      uncertain: readonly VoiceTextSpan[]
-    ) => {
+    const emitRelease = (emissions: readonly UtteranceEmission[], send: boolean) => {
+      emissions.forEach((emission, i) =>
+        emitCompletion(emission.itemId, emission.text, emission.uncertain, {
+          send: send && i === emissions.length - 1,
+          opensUtterance: emission.opensUtterance === true,
+        })
+      );
+    };
+
+    const commandOptions = () => ({
+      spokenCommands,
+      vocabulary: session.commandTarget?.vocabulary ?? null,
+    });
+
+    session.flushUtterance = (mode) => {
+      const release = session.utterance.flush(mode, commandOptions());
+      if (release) emitRelease(release.emissions, false);
+    };
+
+    // Until it goes out, the renderer keeps whatever preview the items'
+    // interim results gave them.
+    const holdSend = (release: UtteranceRelease) => {
       const held: HeldSend = {
         timer: setTimeout(() => releaseHeldSend(session, "send"), sendSettleMs),
-        release: (outcome) =>
-          emitCompletion(
-            itemId,
-            rawText,
-            outcome === "send"
-              ? sendCommand
-              : { text: outcome === "literal" ? rawText : sendCommand.text, send: false },
-            uncertain
-          ),
+        release: (outcome) => {
+          if (outcome === "literal" && release.literal) emitRelease(release.literal, false);
+          else emitRelease(release.emissions, outcome === "send");
+        },
       };
       session.heldSend = held;
     };
@@ -1471,8 +1484,11 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
             SPOKEN_SEND_SPEECH_CONFIRM_MS
           );
           return;
-        case "delta":
         case "complete":
+          // An empty segment only closes one; it shows no more speech.
+          if (voiceEvent.text.trim()) releaseHeldSend(session, "literal");
+          return;
+        case "delta":
         case "paragraph_boundary":
           releaseHeldSend(session, "literal");
           return;
@@ -1486,6 +1502,28 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
             releaseHeldSend(session, "literal");
           }
           return;
+      }
+    };
+
+    // Runs ahead of forwarding each provider event too: a segment held for
+    // its commands lands before a status or boundary that follows it.
+    const settleUtterance = (voiceEvent: VoiceSessionEvent) => {
+      if (!session.utterance.holding) return;
+      if (voiceEvent.type === "paragraph_boundary") {
+        session.flushUtterance?.("literal");
+      } else if (voiceEvent.type === "error" && voiceEvent.error.severity === "fatal") {
+        session.flushUtterance?.("literal");
+      } else if (voiceEvent.type === "status") {
+        if (voiceEvent.status === "idle" && session.phase === "stopping") {
+          session.flushUtterance?.("stop");
+        } else if (
+          voiceEvent.status === "idle" ||
+          voiceEvent.status === "error" ||
+          voiceEvent.status === "reconnecting"
+        ) {
+          // Whether the speaker went on can't be known across the gap.
+          session.flushUtterance?.("literal");
+        }
       }
     };
 
@@ -1522,6 +1560,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         });
       } else if (voiceEvent.type === "complete" && session.intent === "rewrite") {
         // An instruction, not prompt text: "new line" is part of what was asked.
+        // A bare end of speech names no item, and would commit the live text.
+        if (!voiceEvent.itemId && !voiceEvent.text.trim()) return;
         logDebug("[VoiceInput] instruction complete → renderer", {
           rawLength: voiceEvent.text.length,
         });
@@ -1536,16 +1576,21 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         const lead = voiceEvent.text.length - voiceEvent.text.trimStart().length;
         const uncertain = sliceSpans(voiceEvent.uncertain ?? [], lead, lead + rawText.length);
         // A trailing "send it" that ends the utterance is stripped and handed
-        // to the renderer, which owns the send; one the provider cut
-        // mid-speech stays literal.
-        const sendCommand =
-          spokenCommands && voiceEvent.endOfSpeech
-            ? extractSendCommand(rawText)
-            : { text: rawText, send: false };
-        if (sendCommand.send && sendSettleMs > 0 && session.phase === "active") {
-          holdSend(voiceEvent.itemId, rawText, sendCommand, uncertain);
+        // to the renderer, which owns the send; one the speaker went on past
+        // stays literal.
+        const release = session.utterance.push(
+          { ...(voiceEvent.itemId ? { itemId: voiceEvent.itemId } : {}), text: rawText, uncertain },
+          {
+            endOfSpeech: voiceEvent.endOfSpeech === true,
+            endsAtPause: voiceEvent.endsAtPause === true,
+          },
+          commandOptions()
+        );
+        if (!release) return;
+        if (release.send && sendSettleMs > 0 && session.phase === "active") {
+          holdSend(release);
         } else {
-          emitCompletion(voiceEvent.itemId, rawText, sendCommand, uncertain);
+          emitRelease(release.emissions, release.send);
         }
       } else if (voiceEvent.type === "paragraph_boundary") {
         if (session.intent === "rewrite") return;
@@ -1574,10 +1619,12 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       // A retired provider's events, and anything after this session ended.
       if (voiceEvent.sessionId !== session.id || session.ended) return;
       settleHeldSend(voiceEvent);
+      settleUtterance(voiceEvent);
       // Counted per provider segment, before the split into paragraph pieces.
+      // A bare end of speech closes a segment rather than being one.
       if (voiceEvent.type === "complete") {
         if (voiceEvent.text.trim()) session.stats.completedSegments++;
-        else session.stats.emptyCompletions++;
+        else if (voiceEvent.itemId || !voiceEvent.endOfSpeech) session.stats.emptyCompletions++;
       }
       forwardEvent(voiceEvent);
       // A provider that dies on its own ends the session, even while still

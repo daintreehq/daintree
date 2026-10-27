@@ -121,6 +121,8 @@ const RECONNECT_CAP_MS = 3_000;
 // stays bounded. Also the sole commit cadence in degraded mode (VAD init/worker
 // failure), where we can't detect speech boundaries at all.
 const VAD_MAX_SEGMENT_MS = 8_000;
+// The commit reason of a segment the VAD closed at a pause.
+const VAD_PAUSE_COMMIT = "vad-end-of-speech";
 // Recent audio retained to replay after an `input_audio_buffer.clear` on speech
 // onset, so clearing the stale (silent) buffer doesn't also clip the start of
 // the utterance the VAD just detected. ~300ms at 24kHz mono PCM16 (48 B/ms).
@@ -278,8 +280,8 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   // Commits asked for while the audio was still held (a VAD speech-end, the
   // backstop, a paragraph boundary), as chunk counts into `preConnectBuffer`.
   // The flush sends a commit after each, so speech the VAD segmented while the
-  // socket connected keeps its boundaries.
-  private heldCommits: number[] = [];
+  // socket connected keeps its boundaries, pauses included.
+  private heldCommits: Array<{ at: number; atPause: boolean }> = [];
   private isReady = false;
 
   // Bias terms for `session.update`, frozen for the session so a reconnect
@@ -372,7 +374,13 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   // transcript from landing twice. `replayEvictedSegments` counts unacknowledged
   // segments the byte cap dropped whole, so their acks don't release the wrong
   // segment.
-  private replaySegments: Array<{ chunks: ArrayBuffer[]; bytes: number }> = [];
+  private replaySegments: Array<{ chunks: ArrayBuffer[]; bytes: number; atPause: boolean }> = [];
+  // Whether each commit awaiting its ack on this connection closed a segment
+  // at a pause the VAD heard, oldest first, and the acknowledged items that
+  // did. A pause ends what was said even when the speaker goes on before its
+  // transcript lands; a backstop commit cuts mid-speech.
+  private commitPauses: boolean[] = [];
+  private pauseItemIds = new Set<string>();
   private replayTail: ArrayBuffer[] = [];
   private replayTailBytes = 0;
   private replayBytes = 0;
@@ -1067,18 +1075,20 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
           this.heldCommits = [];
           let nextCommit = 0;
           // Asked for before anything new was held: it closes the replayed tail.
-          if (commitsAfter[0] === 0) {
+          const first = commitsAfter[0];
+          if (first?.at === 0) {
             nextCommit++;
-            this.commitHeldSegment();
+            this.commitHeldSegment(first.atPause);
           }
           for (let i = 0; i < buffered.length; i++) {
             this.sendAudioJson(buffered[i]);
             // Pre-roll follows what was sent, and each commit restarts it, so a
             // barge-in clear right after the flush replays the right audio.
             this.pushPreRoll(buffered[i]);
-            if (commitsAfter[nextCommit] === i + 1) {
+            const held = commitsAfter[nextCommit];
+            if (held?.at === i + 1) {
               nextCommit++;
-              this.commitHeldSegment();
+              this.commitHeldSegment(held.atPause);
             }
           }
         }
@@ -1118,12 +1128,14 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         const itemId = typeof payload.item_id === "string" ? payload.item_id : undefined;
         logDebug(`${P} ← input_audio_buffer.committed`, { itemId });
         if (!itemId) {
+          this.commitPauses.shift();
           this.releaseAcknowledgedSegment();
           return;
         }
         // A repeated ack must not release a second segment's audio.
         if (!this.completedItemIds.has(itemId) && !this.commitOrder.includes(itemId)) {
           this.commitOrder.push(itemId);
+          if (this.commitPauses.shift()) this.pauseItemIds.add(itemId);
           this.releaseAcknowledgedSegment();
         }
         return;
@@ -1355,7 +1367,9 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         !this.vadDegraded &&
         this.vadHasEndedSpeech &&
         !this.isSpeaking;
-      this.emitCompletion(transcript, itemId, endOfSpeech);
+      const endsAtPause = !settled && this.pauseItemIds.has(itemId);
+      this.pauseItemIds.delete(itemId);
+      this.emitCompletion(transcript, itemId, endOfSpeech, endsAtPause);
     }
     const blockingItemId = this.heldCompletions.size > 0 ? (this.commitOrder[0] ?? null) : null;
     if (this.heldCompletionTimer && this.heldCompletionTimerItemId === blockingItemId) return;
@@ -1381,24 +1395,35 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     this.heldCompletionTimerItemId = null;
   }
 
-  private emitCompletion(transcript: string, itemId?: string, endOfSpeech = false): void {
+  private emitCompletion(
+    transcript: string,
+    itemId?: string,
+    endOfSpeech = false,
+    endsAtPause = false
+  ): void {
+    const boundary = {
+      ...(endOfSpeech ? { endOfSpeech: true } : {}),
+      ...(endsAtPause ? { endsAtPause: true } : {}),
+    };
     if (transcript) {
       logDebug(`${P} Emitting complete transcript to renderer`, {
         itemId,
         length: transcript.length,
         endOfSpeech,
+        endsAtPause,
       });
       this.emit({
         type: "complete",
         text: transcript,
         ...(itemId ? { itemId } : {}),
-        ...(endOfSpeech ? { endOfSpeech: true } : {}),
+        ...boundary,
       });
     } else if (itemId) {
       // An identified empty completion still reaches the renderer so it can
-      // drop that item's interim preview.
+      // drop that item's interim preview. Silence closing the utterance still
+      // ends it: a "send it" in an earlier item waits on that.
       logDebug(`${P} Completion had an empty transcript — retiring item`, { itemId });
-      this.emit({ type: "complete", text: "", itemId });
+      this.emit({ type: "complete", text: "", itemId, ...boundary });
     } else {
       logDebug(`${P} Completion had an empty transcript — nothing emitted`);
     }
@@ -1436,12 +1461,13 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
    * resend audio this commit already carries. Throws if the send does; callers
    * own their eligibility checks, logging and failure handling.
    */
-  private sendCommit(): void {
+  private sendCommit(atPause = false): void {
     if (!this.connection) throw new Error("No connection");
     this.connection.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
     this.pendingCommits++;
+    this.commitPauses.push(atPause);
     this.bytesSinceCommit = 0;
-    this.replaySegments.push({ chunks: this.replayTail, bytes: this.replayTailBytes });
+    this.replaySegments.push({ chunks: this.replayTail, bytes: this.replayTailBytes, atPause });
     this.replayTail = [];
     this.replayTailBytes = 0;
     this.preRollChunks = [];
@@ -1536,7 +1562,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       for (const chunk of segment.chunks) this.sendAudioJson(chunk);
       if (this.bytesSinceCommit < MIN_COMMIT_BYTES) continue;
       try {
-        this.sendCommit();
+        this.sendCommit(segment.atPause);
         logDebug(`${P} → input_audio_buffer.commit (replayed segment)`, {
           pendingCommits: this.pendingCommits,
         });
@@ -1668,10 +1694,12 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     this.audioSentSinceHeard = false;
     this.bytesSinceCommit = 0;
     this.pendingCommits = 0;
+    this.commitPauses = [];
     // Item ids are per connection; release what arrived so a reconnect starts a
     // fresh ordering chain without dropping finished transcripts.
     this.releaseHeldCompletions(true);
     this.completedItemIds.clear();
+    this.pauseItemIds.clear();
   }
 
   private cleanupPreviousSession(): void {
@@ -1688,7 +1716,9 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     this.isReady = false;
     this.bytesSinceCommit = 0;
     this.pendingCommits = 0;
+    this.commitPauses = [];
     this.completedItemIds.clear();
+    this.pauseItemIds.clear();
     this.commitOrder = [];
     this.heldCompletions.clear();
     this.itemDeltaText.clear();
@@ -1875,7 +1905,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     if (this.isReady) this.vadHasEndedSpeech = true;
     this.clearBackstopTimer();
     logDebug(`${P} VAD speech-end — committing segment`);
-    this.maybeCommitSegment("vad-end-of-speech");
+    this.maybeCommitSegment(VAD_PAUSE_COMMIT);
   }
 
   private startBackstopTimer(reason: string, { once = false } = {}): void {
@@ -1926,7 +1956,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     }
     try {
       const bytes = this.bytesSinceCommit;
-      this.sendCommit();
+      this.sendCommit(reason === VAD_PAUSE_COMMIT);
       logDebug(`${P} → input_audio_buffer.commit`, {
         reason,
         bytes,
@@ -1943,18 +1973,24 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
 
   private holdCommit(reason: string): void {
     const at = this.preConnectBuffer.length;
+    const atPause = reason === VAD_PAUSE_COMMIT;
     // With nothing held yet, a boundary still closes a dropped connection's
     // unacknowledged tail, which is replayed ahead of the held audio.
-    if ((at === 0 && this.replayTailBytes === 0) || this.heldCommits.at(-1) === at) return;
-    this.heldCommits.push(at);
+    if (at === 0 && this.replayTailBytes === 0) return;
+    const last = this.heldCommits.at(-1);
+    if (last?.at === at) {
+      last.atPause ||= atPause;
+      return;
+    }
+    this.heldCommits.push({ at, atPause });
     logDebug(`${P} Commit held until the socket is ready`, { reason, bufferedChunks: at });
   }
 
   /** A held commit, sent once the flush reaches it. Too little audio waits for the next. */
-  private commitHeldSegment(): void {
+  private commitHeldSegment(atPause: boolean): void {
     if (this.bytesSinceCommit < MIN_COMMIT_BYTES) return;
     try {
-      this.sendCommit();
+      this.sendCommit(atPause);
       logDebug(`${P} → input_audio_buffer.commit (held)`, {
         pendingCommits: this.pendingCommits,
       });

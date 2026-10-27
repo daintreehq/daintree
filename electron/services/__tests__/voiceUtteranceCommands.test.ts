@@ -1,0 +1,342 @@
+import { describe, expect, it } from "vitest";
+import {
+  UtteranceCommands,
+  type UtteranceBoundary,
+  type UtteranceEmission,
+  type UtteranceOptions,
+  type UtteranceRelease,
+} from "../voiceUtteranceCommands.js";
+import { buildVoiceCommandVocabulary } from "../../../shared/utils/voiceAgentCommands.js";
+import { getBuiltinSlashCommands } from "../../../shared/types/slashCommands.js";
+import { getAgentConfig } from "../../../shared/config/agentRegistry.js";
+
+const CUT: UtteranceBoundary = { endOfSpeech: false, endsAtPause: false };
+const PAUSE: UtteranceBoundary = { endOfSpeech: false, endsAtPause: true };
+const END: UtteranceBoundary = { endOfSpeech: true, endsAtPause: false };
+
+const dictation: UtteranceOptions = { spokenCommands: true, vocabulary: null };
+const withCommands: UtteranceOptions = {
+  spokenCommands: true,
+  vocabulary: buildVoiceCommandVocabulary(
+    getBuiltinSlashCommands("claude"),
+    getAgentConfig("claude")!.completionSources!
+  ),
+};
+
+type Segment = readonly [text: string, boundary: UtteranceBoundary];
+
+function feed(segments: readonly Segment[], options = dictation) {
+  const utterance = new UtteranceCommands();
+  const releases = segments.map(([text, boundary], i) =>
+    utterance.push({ itemId: `i${i}`, text }, boundary, options)
+  );
+  return { utterance, releases };
+}
+
+// Emissions as compared below: no unsure words, no field for them.
+function shown(emissions: readonly UtteranceEmission[] | null | undefined) {
+  return emissions?.map(({ uncertain, ...rest }) =>
+    uncertain.length > 0 ? { ...rest, uncertain } : rest
+  );
+}
+
+// What the draft gets: each emission's text in order, breaks as ¶, then ⏎ for a send.
+function written(releases: ReadonlyArray<UtteranceRelease | null>): string {
+  const tokens = releases.flatMap((release) => {
+    if (!release) return [];
+    const texts = release.emissions.map((emission) => emission.text.replace(/\s*\n+\s*/g, "¶"));
+    return [...texts.filter(Boolean), ...(release.send ? ["⏎"] : [])];
+  });
+  return tokens.join(" ").replace(/ (?=[¶⏎])/g, "");
+}
+
+// Every way to cut `words` into segments mid-speech, the last ending speech.
+function segmentations(sentence: string): Segment[][] {
+  const words = sentence.split(" ");
+  const results: Segment[][] = [];
+  for (let mask = 0; mask < 1 << (words.length - 1); mask++) {
+    const segments: string[] = [];
+    let current = words[0]!;
+    for (let i = 1; i < words.length; i++) {
+      if (mask & (1 << (i - 1))) {
+        segments.push(current);
+        current = words[i]!;
+      } else {
+        current += ` ${words[i]}`;
+      }
+    }
+    segments.push(current);
+    results.push(segments.map((text, i) => [text, i === segments.length - 1 ? END : CUT]));
+  }
+  return results;
+}
+
+describe("UtteranceCommands — however the provider cut the utterance", () => {
+  it.each([
+    [
+      "sends a 'send it' that ends the utterance",
+      "Fix the login bug send it.",
+      "Fix the login bug⏎",
+    ],
+    [
+      "keeps a 'new line' mid-sentence as words",
+      "Make the parser accept a new line inside quoted strings.",
+      "Make the parser accept a new line inside quoted strings.",
+    ],
+    [
+      "breaks on a 'new paragraph' that ends what was said",
+      "Fix the bug new paragraph",
+      "Fix the bug¶",
+    ],
+    [
+      "keeps a 'send it' the speaker went on past as words",
+      "then send it to the API",
+      "then send it to the API",
+    ],
+    ["breaks, then sends, on a chain closing the utterance", "hello new line send it", "hello¶⏎"],
+  ])("%s", (_, sentence, expected) => {
+    for (const segments of segmentations(sentence)) {
+      expect(written(feed(segments).releases), JSON.stringify(segments)).toBe(expected);
+    }
+  });
+});
+
+describe("UtteranceCommands — holding and releasing", () => {
+  it("lands a segment at once when nothing at its end could be a command", () => {
+    const { releases } = feed([["fix the login", CUT]]);
+    expect(shown(releases[0]?.emissions)).toEqual([{ itemId: "i0", text: "fix the login" }]);
+  });
+
+  it("lets an earlier held 'new line' go as words while a later command waits", () => {
+    const { releases } = feed([
+      ["fix it new line", CUT],
+      ["and add the new", CUT],
+    ]);
+    expect(releases[0]).toBeNull();
+    expect(shown(releases[1]?.emissions)).toEqual([{ itemId: "i0", text: "fix it new line" }]);
+    expect(releases[1]).toMatchObject({ send: false, literal: null });
+  });
+
+  it("retires the items a send swallowed ahead of the one carrying it", () => {
+    const { releases } = feed([
+      ["Fix the login bug, send", CUT],
+      ["it.", END],
+    ]);
+    expect(shown(releases[1]?.emissions)).toEqual([
+      { itemId: "i1", text: "" },
+      { itemId: "i0", text: "Fix the login bug" },
+    ]);
+    expect(releases[1]?.send).toBe(true);
+    expect(shown(releases[1]?.literal)).toEqual([
+      { itemId: "i0", text: "Fix the login bug, send" },
+      { itemId: "i1", text: "it." },
+    ]);
+  });
+
+  it("sends when only a bare end of speech closes the utterance", () => {
+    const utterance = new UtteranceCommands();
+    expect(utterance.push({ itemId: "i0", text: "Fix it, send it." }, CUT, dictation)).toBeNull();
+    const release = utterance.push({ text: "" }, END, dictation);
+    expect(shown(release?.emissions)).toEqual([{ itemId: "i0", text: "Fix it" }]);
+    expect(release?.send).toBe(true);
+    expect(utterance.holding).toBe(false);
+  });
+
+  it("breaks at a pause the speaker talked past, but never sends there", () => {
+    const { releases } = feed([
+      ["fix the bug new line", PAUSE],
+      ["then send it", PAUSE],
+    ]);
+    expect(written(releases)).toBe("fix the bug¶ then send it");
+  });
+
+  it("reads a send with the clause earlier segments opened", () => {
+    expect(
+      written(
+        feed([
+          ["Where should the handler", CUT],
+          ["send it", END],
+        ]).releases
+      )
+    ).toBe("Where should the handler send it");
+    expect(
+      written(
+        feed([
+          ["Don't", CUT],
+          ["send it", END],
+        ]).releases
+      )
+    ).toBe("Don't send it");
+  });
+
+  it("starts the next utterance's clause afresh after an end of speech", () => {
+    const utterance = new UtteranceCommands();
+    utterance.push({ itemId: "i0", text: "Where should the handler" }, CUT, dictation);
+    utterance.push({ text: "" }, END, dictation);
+    const release = utterance.push({ itemId: "i1", text: "send it" }, END, dictation);
+    expect(release?.send).toBe(true);
+  });
+
+  it("reads break commands when a stop ends what was said, and sends nothing", () => {
+    const { utterance } = feed([["Fix the bug, send it new line", CUT]]);
+    const release = utterance.flush("stop", dictation);
+    expect(shown(release?.emissions)).toEqual([{ itemId: "i0", text: "Fix the bug, send it\n" }]);
+    expect(release?.send).toBe(false);
+  });
+
+  it("keeps held words as said when the connection is lost", () => {
+    const { utterance } = feed([["fix the bug new line", CUT]]);
+    expect(shown(utterance.flush("literal", dictation)?.emissions)).toEqual([
+      { itemId: "i0", text: "fix the bug new line" },
+    ]);
+    expect(utterance.holding).toBe(false);
+  });
+
+  it("forgets everything it held when cleared", () => {
+    const { utterance } = feed([["fix the bug new line", CUT]]);
+    utterance.clear();
+    expect(utterance.flush("stop", dictation)).toBeNull();
+  });
+
+  it("leaves commands as words with spoken commands off", () => {
+    const options = { spokenCommands: false, vocabulary: null };
+    const { releases } = feed(
+      [
+        ["fix the bug new line", CUT],
+        ["send it", END],
+      ],
+      options
+    );
+    expect(written(releases)).toBe("fix the bug new line send it");
+  });
+});
+
+describe("UtteranceCommands — the opening command", () => {
+  it("writes a command whose name follows a pause after its prefix", () => {
+    const { releases } = feed(
+      [
+        ["Slash.", END],
+        ["compact.", END],
+      ],
+      withCommands
+    );
+    expect(releases[0]).toBeNull();
+    expect(shown(releases[1]?.emissions)).toEqual([
+      { itemId: "i1", text: "" },
+      { itemId: "i0", text: "Slash. compact.", opensUtterance: true },
+    ]);
+  });
+
+  it("writes a command cut mid-speech, with its arguments", () => {
+    const { releases } = feed(
+      [
+        ["Slash", CUT],
+        ["review the last commit.", END],
+      ],
+      withCommands
+    );
+    expect(shown(releases[1]?.emissions)?.at(-1)).toEqual({
+      itemId: "i0",
+      text: "Slash review the last commit.",
+      opensUtterance: true,
+    });
+  });
+
+  it("lets a prefix with no command after it go as words", () => {
+    const { releases } = feed(
+      [
+        ["Slash.", END],
+        ["the budget in half.", END],
+      ],
+      withCommands
+    );
+    expect(shown(releases[1]?.emissions)).toEqual([
+      { itemId: "i0", text: "Slash.", opensUtterance: true },
+      { itemId: "i1", text: "the budget in half." },
+    ]);
+  });
+
+  it("never opens a command after words the utterance already landed", () => {
+    const { releases } = feed(
+      [
+        ["Okay,", CUT],
+        ["slash compact", END],
+      ],
+      withCommands
+    );
+    expect(shown(releases.flatMap((release) => release?.emissions ?? []))).toEqual([
+      { itemId: "i0", text: "Okay,", opensUtterance: true },
+      { itemId: "i1", text: "slash compact" },
+    ]);
+  });
+
+  it("still sends a dictated command and 'send it'", () => {
+    const { releases } = feed([["Slash compact, send it.", END]], withCommands);
+    expect(shown(releases[0]?.emissions)).toEqual([
+      { itemId: "i0", text: "Slash compact", opensUtterance: true },
+    ]);
+    expect(releases[0]?.send).toBe(true);
+  });
+
+  it("writes the command with spoken commands off", () => {
+    const { releases } = feed(
+      [
+        ["Slash.", END],
+        ["compact.", END],
+      ],
+      { ...withCommands, spokenCommands: false }
+    );
+    expect(shown(releases[1]?.emissions)?.at(-1)).toEqual({
+      itemId: "i0",
+      text: "Slash. compact.",
+      opensUtterance: true,
+    });
+  });
+
+  it("lets a waiting prefix go as words at a stop", () => {
+    const { utterance } = feed([["Slash.", END]], withCommands);
+    expect(shown(utterance.flush("stop", withCommands)?.emissions)).toEqual([
+      { itemId: "i0", text: "Slash.", opensUtterance: true },
+    ]);
+  });
+});
+
+describe("UtteranceCommands — the provider's unsure words", () => {
+  it("keeps the spans in words that land, and drops those a command took", () => {
+    const utterance = new UtteranceCommands();
+    // "logn" and "send" unsure; the send takes "send" with it.
+    utterance.push(
+      {
+        itemId: "i0",
+        text: " Fix the logn bug, send",
+        uncertain: [
+          { from: 9, to: 13 },
+          { from: 19, to: 23 },
+        ],
+      },
+      CUT,
+      dictation
+    );
+    const release = utterance.push({ itemId: "i1", text: "it.", uncertain: [] }, END, dictation);
+    expect(release?.emissions).toEqual([
+      { itemId: "i1", text: "", uncertain: [] },
+      { itemId: "i0", text: "Fix the logn bug", uncertain: [{ from: 8, to: 12 }] },
+    ]);
+  });
+
+  it("moves each segment's spans into a command they merge into", () => {
+    const utterance = new UtteranceCommands();
+    utterance.push({ itemId: "i0", text: "Slash.", uncertain: [] }, END, withCommands);
+    const release = utterance.push(
+      { itemId: "i1", text: "review the lgin page.", uncertain: [{ from: 11, to: 15 }] },
+      END,
+      withCommands
+    );
+    expect(release?.emissions.at(-1)).toEqual({
+      itemId: "i0",
+      text: "Slash. review the lgin page.",
+      uncertain: [{ from: 18, to: 22 }],
+      opensUtterance: true,
+    });
+  });
+});
