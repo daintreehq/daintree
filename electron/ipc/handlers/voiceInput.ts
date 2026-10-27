@@ -1582,6 +1582,15 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         const rawText = voiceEvent.text.trim();
         const lead = voiceEvent.text.length - voiceEvent.text.trimStart().length;
         const uncertain = sliceSpans(voiceEvent.uncertain ?? [], lead, lead + rawText.length);
+        if (voiceEvent.incomplete) {
+          // Words around it may be missing, so its own land as said and are
+          // never read as a command; what was held went ahead of it as words.
+          emitCompletion(voiceEvent.itemId, rawText, uncertain, {
+            send: false,
+            opensUtterance: false,
+          });
+          return;
+        }
         // A trailing "send it" that ends the utterance is stripped and handed
         // to the renderer, which owns the send; one the speaker went on past
         // stays literal.
@@ -1593,12 +1602,12 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           },
           commandOptions()
         );
-        if (release?.send && sendSettleMs > 0 && session.phase === "active") {
+        if (!release) return;
+        if (release.send && sendSettleMs > 0 && session.phase === "active") {
           holdSend(release);
-        } else if (release) {
+        } else {
           emitRelease(release.emissions, release.send);
         }
-        if (voiceEvent.incomplete) session.flushUtterance?.("literal");
       } else if (voiceEvent.type === "paragraph_boundary") {
         if (session.intent === "rewrite") return;
         target.send(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, {
