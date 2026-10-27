@@ -543,15 +543,11 @@ function sameWords(a: readonly string[], b: readonly string[]): boolean {
 export type VoiceCommandEditRejection =
   "command_changed" | "arguments_reformatted" | "unknown_command" | "unprompted_command";
 
-/** Where a listed command or skill is named in `raw` in so many words, as one it means. */
+/** Where a listed command or skill is named in so many words, as one it means: span indexes. */
 interface SpokenReference {
   entry: VoiceCommandEntry;
-  /**
-   * Up to two words either side of the name, nearest first, as `toKey` reads
-   * them: two, so a cleanup that drops the filler beside it still lines up.
-   */
-  before: string[];
-  after: string[];
+  first: number;
+  last: number;
 }
 
 function closesClause(text: string, span: WordSpan): boolean {
@@ -580,8 +576,11 @@ function hasHandoffVerb(text: string, spans: readonly WordSpan[], nameStart: num
  * its words are claimed all the same, so a shorter name inside it can't stand
  * in for it.
  */
-function spokenReferences(text: string, vocabulary: VoiceCommandVocabulary): SpokenReference[] {
-  const spans = wordSpans(text, 0).filter((span) => !HESITATIONS.has(span.word));
+function spokenReferences(
+  text: string,
+  spans: readonly WordSpan[],
+  vocabulary: VoiceCommandVocabulary
+): SpokenReference[] {
   const references: SpokenReference[] = [];
   for (let start = 0; start < spans.length;) {
     const found = referenceAt(text, spans, start, vocabulary);
@@ -589,16 +588,7 @@ function spokenReferences(text: string, vocabulary: VoiceCommandVocabulary): Spo
       start++;
       continue;
     }
-    if (found.entry) {
-      references.push({
-        entry: found.entry,
-        before: spans
-          .slice(Math.max(0, start - 2), start)
-          .map((span) => span.word)
-          .reverse(),
-        after: spans.slice(found.last + 1, found.last + 3).map((span) => span.word),
-      });
-    }
+    if (found.entry) references.push({ entry: found.entry, first: start, last: found.last });
     start = found.last + 1;
   }
   return references;
@@ -650,65 +640,99 @@ function bareToken(word: string): string {
   return word.replace(TOKEN_WRAPPER_RE, "");
 }
 
+// Words weigh 4 in the alignment and commands 5, so of two alignments that
+// keep as many words, the one that lines up more commands wins.
+const ALIGNED_WORD = 4;
+const ALIGNED_COMMAND = 5;
+
+type AlignedUnit = { word: string } | { token: string };
+
+function sameUnit(a: AlignedUnit, b: AlignedUnit): number {
+  if ("token" in a) return "token" in b && a.token === b.token ? ALIGNED_COMMAND : 0;
+  return "word" in b && a.word === b.word ? ALIGNED_WORD : 0;
+}
+
 /**
- * Whether a token written between `before` and `after` stands where
- * `reference` was: the word after it is one that followed the name, or the
- * word before it one that preceded it, unless that's only an article, which
- * any other mention of the name shares ("the review skill… the review
- * results").
+ * `raw` as words, with each listed command it typed or named as one standing
+ * as a single unit for its token.
  */
-function standsAt(
-  reference: SpokenReference,
-  before: string | undefined,
-  after: string | undefined
-): boolean {
-  const near = (said: readonly string[], written: string | undefined) =>
-    written === undefined ? said.length === 0 : said.includes(written);
-  if (near(reference.after, after)) return true;
-  return near(reference.before, before) && !(before && HANDOFF_FILLERS.has(before));
+function rawUnits(raw: string, vocabulary: VoiceCommandVocabulary): AlignedUnit[] {
+  const spans = wordSpans(raw, 0).filter((span) => !HESITATIONS.has(span.word));
+  const references = new Map(
+    spokenReferences(raw, spans, vocabulary).map((reference) => [reference.first, reference])
+  );
+  const units: AlignedUnit[] = [];
+  for (let at = 0; at < spans.length; at++) {
+    const reference = references.get(at);
+    if (reference) {
+      units.push({ token: reference.entry.token });
+      at = reference.last;
+      continue;
+    }
+    const span = spans[at]!;
+    const token = bareToken(raw.slice(span.start, span.end));
+    if (knownToken(token, vocabulary)) units.push({ token });
+    else if (span.word) units.push({ word: span.word });
+  }
+  return units;
 }
 
 /**
  * Whether `corrected` writes a listed command where `raw` neither typed it
- * nor named it as a command, so cleanup turned plain words into one. Each
- * token written must stand where a reference was, so naming a skill once
- * can't turn "commit the docs" later in the sentence into `/commit`.
- * Command-shaped words the target doesn't list ("/tmp") are paths and the
- * like, and stay the prompt's business.
+ * nor named it as a command, so cleanup turned plain words into one. The two
+ * are aligned word by word, in order, and each command written must line up
+ * with one `raw` typed or named there: naming the commit skill once can't turn
+ * "commit the docs" later in the sentence into `/commit`, however the cleanup
+ * tidied the words around either. Command-shaped words the target doesn't
+ * list ("/tmp") are paths and the like, and stay the prompt's business.
  */
 function writesUnnamedCommand(
   raw: string,
   corrected: string,
   vocabulary: VoiceCommandVocabulary
 ): boolean {
-  const typed = new Map<string, number>();
-  for (const word of raw.split(/\s+/u)) {
+  const written: AlignedUnit[] = [];
+  let commands = 0;
+  for (const word of corrected.split(/\s+/u)) {
     const token = bareToken(word);
-    typed.set(token, (typed.get(token) ?? 0) + 1);
-  }
-  const references = spokenReferences(raw, vocabulary);
-  const words = corrected.split(/\s+/u).filter(Boolean);
-  for (const [index, word] of words.entries()) {
-    const token = bareToken(word);
-    if (!knownToken(token, vocabulary)) continue;
-    const neighbour = (at: number) => {
-      const near = words[at];
-      return near === undefined ? undefined : toKey(near);
-    };
-    const before = neighbour(index - 1);
-    const after = neighbour(index + 1);
-    const at = references.findIndex(
-      (reference) => reference.entry.token === token && standsAt(reference, before, after)
-    );
-    if (at >= 0) {
-      references.splice(at, 1);
+    if (knownToken(token, vocabulary)) {
+      written.push({ token });
+      commands++;
       continue;
     }
-    const left = typed.get(token) ?? 0;
-    if (left === 0) return true;
-    typed.set(token, left - 1);
+    const key = toKey(word);
+    if (key && !HESITATIONS.has(key)) written.push({ word: key });
   }
-  return false;
+  if (commands === 0) return false;
+  const said = rawUnits(raw, vocabulary);
+  // A weighted longest common subsequence, walked back to count the written
+  // commands it lines up.
+  const width = written.length + 1;
+  const best = new Int32Array((said.length + 1) * width);
+  for (let i = said.length - 1; i >= 0; i--) {
+    for (let j = written.length - 1; j >= 0; j--) {
+      const match = sameUnit(said[i]!, written[j]!);
+      best[i * width + j] = Math.max(
+        best[(i + 1) * width + j]!,
+        best[i * width + j + 1]!,
+        match > 0 ? match + best[(i + 1) * width + j + 1]! : 0
+      );
+    }
+  }
+  let lined = 0;
+  for (let i = 0, j = 0; i < said.length && j < written.length;) {
+    const match = sameUnit(said[i]!, written[j]!);
+    if (match > 0 && best[i * width + j] === match + best[(i + 1) * width + j + 1]!) {
+      if ("token" in written[j]!) lined++;
+      i++;
+      j++;
+    } else if (best[(i + 1) * width + j] === best[i * width + j]) {
+      i++;
+    } else {
+      j++;
+    }
+  }
+  return lined < commands;
 }
 
 /**

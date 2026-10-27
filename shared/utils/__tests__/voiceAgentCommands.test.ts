@@ -632,7 +632,15 @@ describe("checkVoiceCommandEdit for a command named partway into the prompt", ()
     expect(
       checkVoiceCommandEdit(raw, "Check the review skill, then /review the header.", skills, false)
     ).toBe("unprompted_command");
-    // An article beside both mentions doesn't say which one was meant.
+    // Words shared by both mentions don't say which one was meant.
+    expect(
+      checkVoiceCommandEdit(
+        "Check the review skill, then check review results.",
+        "Check the review skill, then check /review results.",
+        skills,
+        false
+      )
+    ).toBe("unprompted_command");
     expect(
       checkVoiceCommandEdit(
         "Check the review skill, then inspect the review results.",
@@ -644,6 +652,14 @@ describe("checkVoiceCommandEdit for a command named partway into the prompt", ()
   });
 
   it("lines a command up with its reference when cleanup drops the filler around it", () => {
+    expect(
+      checkVoiceCommandEdit(
+        "Check whether the design review skill is broken.",
+        "Check whether the /design-review skill's broken.",
+        skills,
+        true
+      )
+    ).toBeNull();
     expect(
       checkVoiceCommandEdit(
         "Then, basically, slash review, you know, on auth.",
