@@ -38,9 +38,7 @@ export function SectionBar({
   const heading = (
     <span id={id} className={cn(PALETTE_SECTION_LABEL_CLASS, "flex items-center gap-1.5")}>
       {label}
-      {count !== undefined && (
-        <CountBadge label={pluralize(count, countNoun)}>{count}</CountBadge>
-      )}
+      {count !== undefined && <CountBadge label={pluralize(count, countNoun)}>{count}</CountBadge>}
     </span>
   );
   if (!fold) {

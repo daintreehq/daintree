@@ -1964,7 +1964,9 @@ describe("CanopyView", () => {
     const labelHidden = (id: string) => body.querySelector(`#${id}`)?.classList.contains("sr-only");
     expect(labelHidden("canopy-needs-you-label")).toBe(true);
     expect(labelHidden("canopy-everything-else-label")).toBe(true);
-    expect(body.querySelector("[data-canopy-list]")!.hasAttribute("data-band-headings")).toBe(false);
+    expect(body.querySelector("[data-canopy-list]")!.hasAttribute("data-band-headings")).toBe(
+      false
+    );
 
     // An agent stops for the user: the band has a row, and both headings show.
     act(() =>
