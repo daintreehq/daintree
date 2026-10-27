@@ -27,6 +27,7 @@ export const VOICE_STOP_REASONS = [
   "panel_closed",
   "mic_lost",
   "pause_timeout",
+  "idle_timeout",
   "sleep",
   "wake",
   // The backend reported a fatal error, or went idle on its own.

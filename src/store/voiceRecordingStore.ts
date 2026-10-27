@@ -288,6 +288,8 @@ interface VoiceRecordingState {
   errorPanelId: string | null;
   /** True in the last seconds of a pause, before it auto-stops the session. */
   pauseStopWarning: boolean;
+  /** True in the last seconds before a listening session with no new words auto-stops. */
+  idleStopWarning: boolean;
   activeTarget: VoiceRecordingTarget | null;
   /**
    * Where the next session will record, from the press until it begins. A
@@ -339,6 +341,7 @@ interface VoiceRecordingState {
   setStatus: (status: VoiceInputStatus) => void;
   setLastError: (error: VoiceInputError | null) => void;
   setPauseStopWarning: (warning: boolean) => void;
+  setIdleStopWarning: (warning: boolean) => void;
   setErrorPanelId: (panelId: string | null) => void;
   setElapsedSeconds: (seconds: number) => void;
   /** `replace` sets the preview to `delta` instead of appending (a revised hypothesis). */
@@ -407,6 +410,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
       lastError: null,
       errorPanelId: null,
       pauseStopWarning: false,
+      idleStopWarning: false,
       activeTarget: null,
       pendingTarget: null,
       lockedTarget: null,
@@ -442,6 +446,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
       setLastError: (error) => set({ lastError: error }),
 
       setPauseStopWarning: (pauseStopWarning) => set({ pauseStopWarning }),
+      setIdleStopWarning: (idleStopWarning) => set({ idleStopWarning }),
 
       setErrorPanelId: (errorPanelId) => set({ errorPanelId }),
 

@@ -232,6 +232,7 @@ export function VoiceRecordingToolbarButton({
   const micSignal = useVoiceRecordingStore((state) => state.micSignal);
   const micDeviceLabel = useVoiceRecordingStore((state) => state.micDeviceLabel);
   const pauseStopWarning = useVoiceRecordingStore((state) => state.pauseStopWarning);
+  const idleStopWarning = useVoiceRecordingStore((state) => state.idleStopWarning);
   const hasRecentDictations = useRecentDictationsStore((state) => state.dictations.length > 0);
   const shortcut = useEffectiveCombo("voiceInput.toggle");
   const pauseShortcut = useEffectiveCombo("voiceInput.togglePause");
@@ -446,9 +447,11 @@ export function VoiceRecordingToolbarButton({
                   : targetLabel
                     ? `Paused: ${targetLabel}`
                     : "Dictation paused"
-                : targetLabel
-                  ? `Recording: ${targetLabel}`
-                  : "Recording in another panel";
+                : idleStopWarning
+                  ? "Recording · Stopping in 10s unless you speak"
+                  : targetLabel
+                    ? `Recording: ${targetLabel}`
+                    : "Recording in another panel";
   const elapsedLabel =
     !isQueued && (isRecording || isPaused) ? formatDuration(elapsedSeconds) : null;
   // The toggle shortcut would start a new session when focused elsewhere; the

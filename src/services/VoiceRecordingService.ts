@@ -544,6 +544,13 @@ class VoiceRecordingService {
   private pauseWarnTimeoutId: ReturnType<typeof setTimeout> | null = null;
   private static readonly PAUSE_AUTO_STOP_MS = 60_000;
   private static readonly PAUSE_WARN_LEAD_MS = 10_000;
+  // A listening session that hears no new words (interim text counts) for this
+  // long stops as if the dictation key were pressed. Paused sessions keep the
+  // 60s rule above.
+  private idleTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  private idleWarnTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  private static readonly IDLE_AUTO_STOP_MS = 180_000;
+  private static readonly IDLE_WARN_LEAD_MS = 10_000;
   // An open stream is not proof of capture: a Bluetooth mic switching to HFP
   // hands Web Audio zeros for a while (#13105). The UI only claims it is
   // listening once a chunk clears the mic-liveness floor (`isMicLive`, not the
@@ -616,6 +623,7 @@ class VoiceRecordingService {
       voiceInput.onTranscriptionDelta(({ sessionId, text: delta, itemId, replace }) => {
         if (this.discardedSessionIds.has(sessionId)) return;
         logDebug(`${LOG_PREFIX} Received transcription delta`, { itemId, length: delta.length });
+        if (delta.trim()) this.noteWordsHeard();
         const voiceState = useVoiceRecordingStore.getState();
         const target = voiceState.activeTarget;
         // An instruction streams into liveText only; it never lands in the draft.
@@ -648,6 +656,7 @@ class VoiceRecordingService {
             itemId,
             length: text.length,
           });
+          if (text.trim()) this.noteWordsHeard();
           const voiceState = useVoiceRecordingStore.getState();
           const rewrite = voiceState.activeTarget?.rewrite;
           if (rewrite) {
@@ -2235,6 +2244,7 @@ class VoiceRecordingService {
 
     this.sessionStartedAt = Date.now();
     this.startElapsedTimer();
+    this.startIdleTimer();
     this.micCaptureAttachedAt = captureAttachedAt;
     // Real audio that arrived while a previous session drained already counts.
     // A capture the user already stopped expects no more audio to judge by.
@@ -3774,6 +3784,55 @@ class VoiceRecordingService {
     this.pauseTimeoutId = null;
   }
 
+  private clearIdleTimeout(): void {
+    if (this.idleWarnTimeoutId !== null) {
+      clearTimeout(this.idleWarnTimeoutId);
+      this.idleWarnTimeoutId = null;
+    }
+    if (this.idleTimeoutId !== null) {
+      clearTimeout(this.idleTimeoutId);
+      this.idleTimeoutId = null;
+    }
+    if (useVoiceRecordingStore.getState().idleStopWarning) {
+      useVoiceRecordingStore.getState().setIdleStopWarning(false);
+    }
+  }
+
+  private startIdleTimer(): void {
+    this.clearIdleTimeout();
+    this.idleWarnTimeoutId = setTimeout(() => {
+      this.idleWarnTimeoutId = null;
+      const current = useVoiceRecordingStore.getState();
+      if (!current.activeTarget || current.status === "paused") return;
+      current.setIdleStopWarning(true);
+      current.announce("Dictation stops in 10 seconds unless you speak.");
+    }, VoiceRecordingService.IDLE_AUTO_STOP_MS - VoiceRecordingService.IDLE_WARN_LEAD_MS);
+    this.idleTimeoutId = setTimeout(() => {
+      this.idleTimeoutId = null;
+      // Re-read the store: the session may have paused or ended since (#5087).
+      const current = useVoiceRecordingStore.getState();
+      if (!current.activeTarget || current.status === "paused") return;
+      logInfo(`${LOG_PREFIX} Auto-stopping after 3 minutes without new words`);
+      notify({
+        type: "info",
+        title: "Dictation stopped",
+        message: "No new words for 3 minutes. What you said is in the draft.",
+        priority: "high",
+        context: { eventKind: "uiFeedback" },
+      });
+      void this.stop("Dictation stopped after 3 minutes without new words.", {
+        preserveLiveText: true,
+        reason: "idle_timeout",
+      });
+    }, VoiceRecordingService.IDLE_AUTO_STOP_MS);
+  }
+
+  // Only a live session has a clock; a late delta after stop must not arm one.
+  private noteWordsHeard(): void {
+    if (this.idleTimeoutId === null) return;
+    this.startIdleTimer();
+  }
+
   // Main applies the user's sound settings and volume, so this stays unconditional.
   private playCue(id: "dictation-start" | "dictation-stop" | "dictation-error"): void {
     window.electron?.notification?.playUiEvent?.(id)?.catch(() => {});
@@ -3933,6 +3992,7 @@ class VoiceRecordingService {
   private clearTimers(): void {
     this.clearElapsedTimer();
     this.clearPauseTimeout();
+    this.clearIdleTimeout();
     this.clearMicSilenceTimer();
     useVoiceRecordingStore.getState().setElapsedSeconds(0);
   }
@@ -3958,6 +4018,7 @@ class VoiceRecordingService {
     // The worklet stops forwarding while paused, so no audio says nothing
     // about the mic — the grace window only counts unpaused capture.
     this.clearMicSilenceTimer();
+    this.clearIdleTimeout();
     state.setStatus("paused");
     state.announce("Dictation paused.");
     this.clearPauseTimeout();
@@ -4005,6 +4066,7 @@ class VoiceRecordingService {
     this.workletNode?.port.postMessage({ type: "setPaused", value: false });
     state.setStatus("recording");
     this.startElapsedTimer();
+    this.startIdleTimer();
     // Resuming before the mic ever went live must not invite the user to speak
     // into zeros; the first real chunk announces the start instead.
     if (state.micSignal === "live") {

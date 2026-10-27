@@ -106,6 +106,7 @@ const runtime = vi.hoisted(() => ({
   voiceFns: {
     setLastError: vi.fn<(error: VoiceInputError | null) => void>(),
     setPauseStopWarning: vi.fn<(warning: boolean) => void>(),
+    setIdleStopWarning: vi.fn<(warning: boolean) => void>(),
     setErrorPanelId: vi.fn<(panelId: string | null) => void>(),
     announce: vi.fn<(text: string) => void>(),
     setStatus: vi.fn<(status: string) => void>(),
@@ -140,6 +141,7 @@ const runtime = vi.hoisted(() => ({
   sessionEndedListeners: new Set<VoiceSessionEndedCallback>(),
   errorListeners: new Set<VoiceErrorCallback>(),
   completeListeners: new Set<VoiceCompleteCallback>(),
+  deltaListeners: new Set<(payload: { sessionId: string; text: string; itemId: string }) => void>(),
   rafCallbacks: new Map<number, FrameRequestCallback>(),
   nextRafId: 1,
   micPermissionQueue: [] as Array<string | Promise<string>>,
@@ -219,6 +221,7 @@ function resetRuntime(): void {
   runtime.sessionEndedListeners.clear();
   runtime.errorListeners.clear();
   runtime.completeListeners.clear();
+  runtime.deltaListeners.clear();
   runtime.rafCallbacks.clear();
   runtime.nextRafId = 1;
   runtime.micPermissionQueue = [];
@@ -236,6 +239,7 @@ function resetRuntime(): void {
 
   runtime.voiceFns.setLastError.mockImplementation(() => undefined);
   runtime.voiceFns.setPauseStopWarning.mockImplementation(() => undefined);
+  runtime.voiceFns.setIdleStopWarning.mockImplementation(() => undefined);
   runtime.voiceFns.setErrorPanelId.mockImplementation(() => undefined);
   runtime.voiceFns.announce.mockImplementation(() => undefined);
   runtime.voiceFns.setStatus.mockImplementation((status) => {
@@ -424,7 +428,10 @@ function setupGlobals(): void {
   vi.stubGlobal("window", {
     electron: {
       voiceInput: {
-        onTranscriptionDelta: vi.fn(() => () => {}),
+        onTranscriptionDelta: vi.fn(
+          (callback: (payload: { sessionId: string; text: string; itemId: string }) => void) =>
+            addListener(runtime.deltaListeners, callback)
+        ),
         onTranscriptionComplete: vi.fn((callback: VoiceCompleteCallback) =>
           addListener(runtime.completeListeners, callback)
         ),
@@ -575,6 +582,12 @@ function emitStatus(status: string): void {
 function emitSessionEnded(reason: string): void {
   for (const listener of runtime.sessionEndedListeners) {
     listener({ sessionId: liveSessionId(), reason });
+  }
+}
+
+function emitDelta(text: string): void {
+  for (const listener of runtime.deltaListeners) {
+    listener({ sessionId: liveSessionId(), text, itemId: "item-1" });
   }
 }
 
@@ -1711,6 +1724,104 @@ describe("VoiceRecordingService adversarial", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  describe("idle auto-stop", () => {
+    async function listeningService() {
+      runtime.voiceState.activeTarget = { panelId: "panel-1", panelTitle: "Panel One" };
+      runtime.voiceState.status = "paused";
+      const { voiceRecordingService } = await import("../VoiceRecordingService");
+      voiceRecordingService.initialize();
+      const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+      // resume() arms the same clock a fresh session does.
+      voiceRecordingService.resume();
+      return { voiceRecordingService, stopSpy };
+    }
+
+    it("STOPS_AFTER_3_MINUTES_WITHOUT_NEW_WORDS", async () => {
+      vi.useFakeTimers();
+      try {
+        const { stopSpy } = await listeningService();
+        vi.advanceTimersByTime(179_999);
+        expect(stopSpy).not.toHaveBeenCalled();
+        vi.advanceTimersByTime(1);
+        expect(stopSpy).toHaveBeenCalledWith(
+          expect.stringContaining("3 minutes"),
+          expect.objectContaining({ preserveLiveText: true, reason: "idle_timeout" })
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("A_WORD_JUST_BEFORE_THE_STOP_RESETS_THE_CLOCK", async () => {
+      vi.useFakeTimers();
+      try {
+        const { stopSpy } = await listeningService();
+        vi.advanceTimersByTime(179_000);
+        emitDelta("hello");
+        vi.advanceTimersByTime(179_999);
+        expect(stopSpy).not.toHaveBeenCalled();
+        vi.advanceTimersByTime(1);
+        expect(stopSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("BLANK_DELTAS_DO_NOT_RESET_THE_CLOCK", async () => {
+      vi.useFakeTimers();
+      try {
+        const { stopSpy } = await listeningService();
+        vi.advanceTimersByTime(100_000);
+        emitDelta("  ");
+        vi.advanceTimersByTime(80_000);
+        expect(stopSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("WARNS_10S_BEFORE_THE_STOP_AND_SPEAKING_CANCELS_IT", async () => {
+      vi.useFakeTimers();
+      try {
+        const { stopSpy } = await listeningService();
+        vi.advanceTimersByTime(169_999);
+        expect(runtime.voiceFns.setIdleStopWarning).not.toHaveBeenCalledWith(true);
+        vi.advanceTimersByTime(1);
+        expect(runtime.voiceFns.setIdleStopWarning).toHaveBeenCalledWith(true);
+        expect(runtime.voiceFns.announce).toHaveBeenCalledWith(
+          "Dictation stops in 10 seconds unless you speak."
+        );
+
+        runtime.voiceState.idleStopWarning = true;
+        emitDelta("still here");
+        expect(runtime.voiceFns.setIdleStopWarning).toHaveBeenLastCalledWith(false);
+        vi.advanceTimersByTime(10_000);
+        expect(stopSpy).not.toHaveBeenCalled();
+      } finally {
+        runtime.voiceState.idleStopWarning = false;
+        vi.useRealTimers();
+      }
+    });
+
+    it("PAUSING_DISARMS_THE_IDLE_CLOCK", async () => {
+      vi.useFakeTimers();
+      try {
+        const { voiceRecordingService, stopSpy } = await listeningService();
+        vi.advanceTimersByTime(100_000);
+        voiceRecordingService.pause();
+        vi.advanceTimersByTime(59_000);
+        expect(stopSpy).not.toHaveBeenCalled();
+        vi.advanceTimersByTime(1_000);
+        expect(stopSpy).toHaveBeenCalledWith(
+          expect.stringContaining("60-second"),
+          expect.objectContaining({ reason: "pause_timeout" })
+        );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   it("RESUME_BEFORE_60S_CANCELS_AUTO_STOP", async () => {
