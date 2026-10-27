@@ -2120,7 +2120,6 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     settings: VoiceInputSettings,
     startedAt: number
   ): Promise<CorrectReply> => {
-
     const svc = (correctionService ??= new VoiceCorrectionService());
     // The request is its passage's alone. Only the view that sent it going
     // away cancels it, since the reply would reach no one: no session starting

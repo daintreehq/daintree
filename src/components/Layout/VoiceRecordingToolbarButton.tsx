@@ -93,7 +93,9 @@ interface VoiceElsewhereButtonProps {
 // or on this one while this view is on a host, names its host too (#14773).
 function VoiceElsewhereButton(props: VoiceElsewhereButtonProps) {
   if (!isLocalHostId(props.session.hostId)) return <VoiceElsewhereOnHostButton {...props} />;
-  const hostName = namesSessionHost(props.session) ? sessionHostName(props.session.hostId, []) : null;
+  const hostName = namesSessionHost(props.session)
+    ? sessionHostName(props.session.hostId, [])
+    : null;
   return <VoiceElsewhereIndicator {...props} hostName={hostName} />;
 }
 

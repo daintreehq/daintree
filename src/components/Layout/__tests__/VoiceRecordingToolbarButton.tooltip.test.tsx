@@ -216,7 +216,12 @@ describe("VoiceRecordingToolbarButton — dictation in another view (#14601)", (
 
   it("says where dictation runs, and a click goes there", () => {
     useVoiceRecordingStore.setState({
-      sessionElsewhere: { sessionId: "s1", hostId: "local", projectId: "p-a", projectName: "Alpha" },
+      sessionElsewhere: {
+        sessionId: "s1",
+        hostId: "local",
+        projectId: "p-a",
+        projectName: "Alpha",
+      },
     });
     const { getByTestId } = render(<VoiceRecordingToolbarButton />);
 
@@ -244,7 +249,12 @@ describe("VoiceRecordingToolbarButton — dictation in another view (#14601)", (
       scratches: [scratch],
     });
     useVoiceRecordingStore.setState({
-      sessionElsewhere: { sessionId: "s1", hostId: "local", projectId: scratchId, projectName: null },
+      sessionElsewhere: {
+        sessionId: "s1",
+        hostId: "local",
+        projectId: scratchId,
+        projectName: null,
+      },
     });
     const { getByTestId } = render(<VoiceRecordingToolbarButton />);
 
@@ -270,7 +280,12 @@ describe("VoiceRecordingToolbarButton — dictation in another view (#14601)", (
       status: "recording",
       micSignal: "live",
       activeTarget: { panelId: "p-1", panelTitle: "claude · notes" },
-      sessionElsewhere: { sessionId: "s1", hostId: "local", projectId: "p-a", projectName: "Alpha" },
+      sessionElsewhere: {
+        sessionId: "s1",
+        hostId: "local",
+        projectId: "p-a",
+        projectName: "Alpha",
+      },
     });
     const { queryByTestId, container } = render(<VoiceRecordingToolbarButton />);
 
@@ -363,7 +378,12 @@ describe("VoiceRecordingToolbarButton — dictation on another host (#14773)", (
   it("names this Mac for a session here, seen from a host's view", () => {
     Reflect.set(window, "__DAINTREE_HOST_ID__", { id: "studio-01" });
     useVoiceRecordingStore.setState({
-      sessionElsewhere: { sessionId: "s1", hostId: "local", projectId: "p-a", projectName: "Alpha" },
+      sessionElsewhere: {
+        sessionId: "s1",
+        hostId: "local",
+        projectId: "p-a",
+        projectName: "Alpha",
+      },
     });
 
     expect(label()).toBe("Dictating in Alpha on This Mac. Click to go there.");
@@ -372,7 +392,12 @@ describe("VoiceRecordingToolbarButton — dictation on another host (#14773)", (
   it("goes by the host's id when the host list doesn't name it", () => {
     hostList.hosts = [];
     useVoiceRecordingStore.setState({
-      sessionElsewhere: { sessionId: "s1", hostId: "studio-09", projectId: null, projectName: null },
+      sessionElsewhere: {
+        sessionId: "s1",
+        hostId: "studio-09",
+        projectId: null,
+        projectName: null,
+      },
     });
 
     expect(label()).toBe("Dictating on studio-09. Click to go there.");

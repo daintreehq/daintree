@@ -3261,7 +3261,9 @@ describe("VoiceRecordingService — a session another view owns (#14601)", () =>
     });
 
     it("waits for the owner's cached view to come on screen before taking the keyboard there", async () => {
-      const { electron, voiceRecordingService, voiceState } = await arrange({ status: "recording" });
+      const { electron, voiceRecordingService, voiceState } = await arrange({
+        status: "recording",
+      });
       Reflect.set(voiceRecordingService, "sessionId", "own");
       const focusTarget = vi
         .spyOn(voiceRecordingService, "focusActiveTarget")
@@ -3283,7 +3285,9 @@ describe("VoiceRecordingService — a session another view owns (#14601)", () =>
     });
 
     it("takes the keyboard to its pane at once when the owner is already on screen", async () => {
-      const { electron, voiceRecordingService, voiceState } = await arrange({ status: "recording" });
+      const { electron, voiceRecordingService, voiceState } = await arrange({
+        status: "recording",
+      });
       Reflect.set(voiceRecordingService, "sessionId", "own");
       vi.spyOn(voiceRecordingService, "focusActiveTarget").mockResolvedValue(true);
 

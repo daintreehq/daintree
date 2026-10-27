@@ -1524,8 +1524,7 @@ describe("voiceInput — one dictation across hosts (#14773)", () => {
     view.sent.filter((m) => m.channel === channel).map((m) => m.payload);
   const lastLive = (view: FakeSender) =>
     sentOn(view, CHANNELS.VOICE_INPUT_LIVE_SESSION).at(-1) as
-      | { revision: number; session: unknown }
-      | undefined;
+      { revision: number; session: unknown } | undefined;
   const invoke = (channel: string, sender: FakeSender, ...args: unknown[]) =>
     getHandler(channel)({ sender }, ...args);
   const startIn = (sender: FakeSender, sessionId: string, workspaceName?: string) => {
@@ -1536,8 +1535,7 @@ describe("voiceInput — one dictation across hosts (#14773)", () => {
       workspaceName ? { workspaceName } : undefined
     );
   };
-  const held = (view: FakeSender) =>
-    isDictationViewHeld(view as unknown as Electron.WebContents);
+  const held = (view: FakeSender) => isDictationViewHeld(view as unknown as Electron.WebContents);
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -1666,7 +1664,10 @@ describe("voiceInput — one dictation across hosts (#14773)", () => {
       await startIn(studio1, "a", "Remote R");
 
       // Window B shows studio-02's copy of the same project id.
-      expect(lastLive(studio2)?.session).toMatchObject({ hostId: "studio-01", projectId: "proj-r" });
+      expect(lastLive(studio2)?.session).toMatchObject({
+        hostId: "studio-01",
+        projectId: "proj-r",
+      });
       await invoke(CHANNELS.VOICE_INPUT_REVEAL_LIVE, studio2, "a");
 
       expect(sentOn(studio2, CHANNELS.VOICE_INPUT_REVEAL_REQUESTED)).toEqual([]);
