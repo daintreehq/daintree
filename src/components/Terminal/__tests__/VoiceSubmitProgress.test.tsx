@@ -75,7 +75,12 @@ describe("VoiceSubmitProgress", () => {
   const open = (wait: VoiceSubmitWait, enterAt: number, streamed: number | null = null) => {
     clock = enterAt;
     render(
-      <VoiceSubmitProgress wait={wait} outcome={null} streamed={streamed} onPresentChange={vi.fn()} />
+      <VoiceSubmitProgress
+        wait={wait}
+        outcome={null}
+        streamed={streamed}
+        onPresentChange={vi.fn()}
+      />
     );
     clock = enterAt + UI_INLINE_LOADING_GATE_MS;
     act(() => {
