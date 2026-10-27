@@ -86,10 +86,12 @@ const NEGATION_RE =
 // "you send it", "before we send it", "I'll send it", "should send it", "to send
 // it": the word before names who sends or what sending is meant to do.
 const SENDER_BEFORE_RE =
-  /(?:^|[^\p{L}\p{N}'\u2019])(?:(?:i|you|we|they|he|she|who)(?:['\u2019](?:ll|d|ve|re))?|will|would|shall|should|could|can|may|might|must|to)\s+$/iu;
+  /(?:^|[^\p{L}\p{N}'\u2019])(?:(?:i|you|we|they|he|she|who)(?:['\u2019](?:ll|d|ve|re))?|will|would|shall|should|could|can|may|might|must|to)\s+(?:(?:actually|eventually|also|always|really|probably|ever|still|just|then)\s+)*$/iu;
 
 // "where should the handler send it": a clause opening on a question word.
-const QUESTION_OPENER_RE = /^\s*(?:where|what|whom|whose|which|who|how|why)(?![\p{L}\p{N}])/iu;
+// "when" counts only before an auxiliary, since "when ready send it" is an order.
+const QUESTION_OPENER_RE =
+  /^\s*(?:(?:where|what|whom|whose|which|who|how|why)|when\s+(?:should|will|would|do|does|did|can|could|is|are))(?![\p{L}\p{N}])/iu;
 
 /**
  * Whether the "send it" that starts at `index` belongs to its sentence rather

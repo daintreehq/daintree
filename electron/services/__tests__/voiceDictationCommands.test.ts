@@ -89,7 +89,6 @@ describe("applyDictationCommands", () => {
 describe("extractSendCommand", () => {
   it.each([
     ["fix the login bug send it", "fix the login bug"],
-    ["Fix the login bug, send it.", "Fix the login bug"],
     ["Fix the login bug. Send it!", "Fix the login bug"],
     ["fix the login bug Send  It ", "fix the login bug"],
     ["Send it.", ""],
@@ -104,6 +103,7 @@ describe("extractSendCommand", () => {
     ["Where should I put the handler? Send it.", "Where should I put the handler"],
     ["Don't forget the tests. Send it.", "Don't forget the tests"],
     ["Fix the bug and send it", "Fix the bug and"],
+    ["When ready send it", "When ready"],
   ])("strips the trailing command from %j", (input, text) => {
     expect(extractSendCommand(input)).toEqual({ text, send: true });
   });
@@ -156,6 +156,11 @@ describe("extractSendCommand", () => {
     "The bot will send it.",
     "Never actually send it",
     "I have no plans to send it",
+    "When should the webhook handler send it",
+    "How should the webhook handler send it",
+    "No service should ever send it",
+    "I’ll eventually send it",
+    "We actually send it",
   ])("leaves %j literal", (input) => {
     expect(extractSendCommand(input)).toEqual({ text: input, send: false });
   });
