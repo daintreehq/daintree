@@ -179,7 +179,13 @@ async function bringSessionReady(
 
 function partial(
   text: string,
-  flags: { is_final?: boolean; speech_final?: boolean; start?: number; duration?: number } = {}
+  flags: {
+    is_final?: boolean;
+    speech_final?: boolean;
+    start?: number;
+    duration?: number;
+    words?: unknown;
+  } = {}
 ) {
   return {
     type: "transcript.partial",
@@ -188,16 +194,33 @@ function partial(
     speech_final: flags.speech_final ?? false,
     ...(flags.start !== undefined ? { start: flags.start } : {}),
     ...(flags.duration !== undefined ? { duration: flags.duration } : {}),
-    words: [],
+    words: flags.words ?? [],
   };
 }
 
-function chunkFinal(text: string, start: number, duration: number) {
-  return partial(text, { is_final: true, start, duration });
+function chunkFinal(text: string, start: number, duration: number, words?: unknown) {
+  return partial(text, { is_final: true, start, duration, words });
 }
 
-function utteranceFinal(text: string, start: number, duration: number) {
-  return partial(text, { is_final: true, speech_final: true, start, duration });
+function utteranceFinal(text: string, start: number, duration: number, words?: unknown) {
+  return partial(text, { is_final: true, speech_final: true, start, duration, words });
+}
+
+/**
+ * Words as xAI sends them: `text` scored `confidence`, timed one after another
+ * from `start`. A confidence of 0 is left out, as xAI leaves it out.
+ */
+function scoredWords(start: number, ...scored: Array<[text: string, confidence: number]>) {
+  return scored.map(([text, confidence], i) => ({
+    text,
+    start: start + i * 0.3,
+    end: start + (i + 1) * 0.3,
+    ...(confidence !== 0 ? { confidence } : {}),
+  }));
+}
+
+function unsureWords(complete: { text: string; uncertain?: Array<{ from: number; to: number }> }) {
+  return (complete.uncertain ?? []).map(({ from, to }) => complete.text.slice(from, to));
 }
 
 /** 100ms of PCM at a constant level: 0 is silence, 3,000 is well above speech level. */
@@ -746,6 +769,264 @@ describe("GrokTranscriptionProvider", () => {
       vi.advanceTimersByTime(2_000);
       expect(socket.textFrames()).toEqual([]);
       provider.stop();
+    });
+  });
+
+  describe("unsure words", () => {
+    it("flags the final's low-confidence words by position, punctuation left outside", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      const words = scoredWords(0, ["Test", 0.97], ["foo", 0.93], ["test", 0.31], ["bar.", 0.2]);
+      socket.simulateMessage(partial("Test foo test", { start: 0, duration: 0.9, words }));
+      socket.simulateMessage(utteranceFinal(" Test foo test bar. ", 0, 1.2, words));
+
+      expect(deltasOf(events).every((d) => !("uncertain" in d))).toBe(true);
+      const [complete] = completesOf(events);
+      expect(complete.text).toBe("Test foo test bar.");
+      expect(unsureWords(complete)).toEqual(["test", "bar"]);
+      expect(complete.uncertain?.[0]).toEqual({ from: 9, to: 13 });
+      provider.stop();
+    });
+
+    it.each([
+      ["every word was heard confidently", scoredWords(0, ["Ship", 0.99], ["it.", 0.98])],
+      ["the result has no words", undefined],
+      ["the words aren't a list", { text: "Ship", confidence: 0.1 }],
+      ["no word carries a confidence", [{ text: "Ship" }, { text: "it." }]],
+      ["the words don't spell out the transcript", scoredWords(0, ["Shipping", 0.1])],
+      ["a confidence isn't a number", [{ text: "Ship", confidence: "0.1" }, { text: "it." }]],
+      [
+        "the confidences are out of range",
+        [
+          { text: "Ship", confidence: -0.2 },
+          { text: "it.", confidence: 1.4 },
+        ],
+      ],
+    ])("sends a final with no unsure words when %s", async (_name, words) => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      socket.simulateMessage({ ...utteranceFinal("Ship it.", 0, 0.6), words });
+
+      const completes = completesOf(events);
+      expect(completes).toHaveLength(1);
+      expect(completes[0]).not.toHaveProperty("uncertain");
+      provider.stop();
+    });
+
+    it("flags a word whose confidence xAI left out, as it leaves out a score of 0", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      const words = scoredWords(0, ["Deploy", 0.95], ["kubectl", 0], ["now.", 0.9]);
+      socket.simulateMessage(utteranceFinal("Deploy kubectl now.", 0, 0.9, words));
+      expect(unsureWords(completesOf(events)[0])).toEqual(["kubectl"]);
+      provider.stop();
+    });
+
+    it("tags a repeated word only where it was flagged", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      const words = scoredWords(0, ["that", 0.9], ["that", 0.2], ["is", 0.95]);
+      socket.simulateMessage(utteranceFinal("that that is", 0, 0.9, words));
+      expect(completesOf(events)[0].uncertain).toEqual([{ from: 5, to: 9 }]);
+      provider.stop();
+    });
+
+    it("keeps an early chunk's flags on its own words when the final covers only its last span", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      socket.simulateMessage(
+        chunkFinal("first part", 0, 3, scoredWords(0, ["first", 0.4], ["part", 0.9]))
+      );
+      socket.simulateMessage(
+        chunkFinal("middle part", 3, 3, scoredWords(3, ["middle", 0.9], ["part", 0.92]))
+      );
+      socket.simulateMessage(
+        utteranceFinal("last part", 6, 1, scoredWords(6, ["last", 0.95], ["part", 0.3]))
+      );
+
+      const [complete] = completesOf(events);
+      expect(complete.text).toBe("first part middle part last part");
+      expect(complete.uncertain).toEqual([
+        { from: 0, to: 5 },
+        { from: 28, to: 32 },
+      ]);
+      provider.stop();
+    });
+
+    it("scores restated chunks by the final that restates them", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      socket.simulateMessage(
+        chunkFinal("one two", 0, 2, scoredWords(0, ["one", 0.95], ["two", 0.3]))
+      );
+      socket.simulateMessage(
+        utteranceFinal(
+          "One, two, three.",
+          0,
+          3,
+          scoredWords(0, ["One,", 0.96], ["two,", 0.9], ["three.", 0.4])
+        )
+      );
+      expect(unsureWords(completesOf(events)[0])).toEqual(["three"]);
+      provider.stop();
+    });
+
+    it("keeps a carried chunk's flags across a drop", async () => {
+      const { provider, events } = setup();
+      const first = await bringSessionReady(provider);
+      for (let i = 0; i < 40; i++) provider.sendAudioChunk(new ArrayBuffer(CHUNK_BYTES));
+      first.simulateMessage(
+        chunkFinal(
+          "before the drop",
+          0,
+          3,
+          scoredWords(0, ["before", 0.2], ["the", 0.99], ["drop", 0.9])
+        )
+      );
+      first.simulateClose(1006);
+
+      vi.advanceTimersToNextTimer();
+      const second = latestInstance();
+      second.simulateReady();
+      second.simulateMessage(
+        utteranceFinal(
+          "the drop and after.",
+          0,
+          1.5,
+          scoredWords(0, ["the", 0.97], ["drop", 0.5], ["and", 0.9], ["after.", 0.9])
+        )
+      );
+
+      const [complete] = completesOf(events);
+      expect(complete.text).toBe("before the drop the drop and after.");
+      expect(complete.uncertain).toEqual([
+        { from: 0, to: 6 },
+        { from: 20, to: 24 },
+      ]);
+      provider.stop();
+    });
+
+    it("flags only transcript.done's tail words, where a word the finals already landed repeats", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      socket.simulateMessage(
+        utteranceFinal("Said once.", 0, 0.6, scoredWords(0, ["Said", 0.9], ["once.", 0.2]))
+      );
+      socket.simulateMessage(partial("said twice", { start: 1, duration: 0.6 }));
+      const stopPromise = provider.stopGracefully();
+      socket.simulateMessage({
+        type: "transcript.done",
+        text: "Said once. Said twice.",
+        words: [
+          ...scoredWords(0, ["Said", 0.25], ["once.", 0.2]),
+          ...scoredWords(1, ["Said", 0.25], ["twice.", 0.9]),
+        ],
+      });
+      await stopPromise;
+
+      const [first, tail] = completesOf(events);
+      expect(unsureWords(first)).toEqual(["once"]);
+      expect(tail).toMatchObject({ text: "Said twice.", endOfSpeech: true });
+      expect(tail.uncertain).toEqual([{ from: 0, to: 4 }]);
+    });
+
+    it("lands transcript.done's tail flags after the flags of text carried across a drop", async () => {
+      const { provider, events } = setup();
+      const first = await bringSessionReady(provider);
+      for (let i = 0; i < 40; i++) provider.sendAudioChunk(new ArrayBuffer(CHUNK_BYTES));
+      first.simulateMessage(
+        chunkFinal("carried over", 0, 3, scoredWords(0, ["carried", 0.3], ["over", 0.9]))
+      );
+      first.simulateClose(1006);
+
+      vi.advanceTimersToNextTimer();
+      const second = latestInstance();
+      second.simulateReady();
+      second.simulateMessage(partial("and the", { start: 0, duration: 0.6 }));
+      const stopPromise = provider.stopGracefully();
+      second.simulateMessage({
+        type: "transcript.done",
+        text: "and the tail",
+        words: scoredWords(0, ["and", 0.9], ["the", 0.9], ["tail", 0]),
+      });
+      await stopPromise;
+
+      const [complete] = completesOf(events);
+      expect(complete).toMatchObject({ text: "carried over and the tail", endOfSpeech: true });
+      expect(unsureWords(complete)).toEqual(["carried", "tail"]);
+      expect(complete.uncertain?.[1]).toEqual({ from: 21, to: 25 });
+    });
+
+    it("keeps the locked chunks' flags on a preview that lands incomplete", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      socket.simulateMessage(
+        chunkFinal(
+          "use the new line",
+          0,
+          3,
+          scoredWords(0, ["use", 0.9], ["the", 0.9], ["new", 0.3], ["line", 0.9])
+        )
+      );
+      const stopPromise = provider.stopGracefully();
+      socket.simulateMessage({ type: "transcript.done", text: "use the new line helper" });
+      await stopPromise;
+
+      const [complete] = completesOf(events);
+      expect(complete).toMatchObject({ text: "use the new line", incomplete: true });
+      expect(unsureWords(complete)).toEqual(["new"]);
+    });
+
+    it("keeps only the latest interim's flags on a preview a failure settles", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      socket.simulateMessage(
+        chunkFinal("deploy kubectl", 0, 2, scoredWords(0, ["deploy", 0.9], ["kubectl", 0.3]))
+      );
+      socket.simulateMessage(
+        partial("to stagin", {
+          start: 2,
+          duration: 0.6,
+          words: scoredWords(2, ["to", 0.9], ["stagin", 0.2]),
+        })
+      );
+      socket.simulateMessage(
+        partial("to staging now", {
+          start: 2,
+          duration: 0.9,
+          words: scoredWords(2, ["to", 0.9], ["staging", 0.95], ["now", 0.4]),
+        })
+      );
+      socket.simulateClose(1008);
+
+      const [complete] = completesOf(events);
+      expect(complete).toMatchObject({ text: "deploy kubectl to staging now", incomplete: true });
+      expect(unsureWords(complete)).toEqual(["kubectl", "now"]);
+      expect(fatalErrorsOf(events)).toHaveLength(1);
+    });
+
+    it("never logs a flagged word", async () => {
+      const { provider } = setup();
+      const loggers = [logger.logDebug, logger.logInfo, logger.logWarn, logger.logError];
+      for (const log of loggers) vi.mocked(log).mockClear();
+      const socket = await bringSessionReady(provider);
+      socket.simulateMessage(
+        chunkFinal("Zanzibar first", 0, 2, scoredWords(0, ["Zanzibar", 0.1], ["first", 0.9]))
+      );
+      socket.simulateMessage(
+        utteranceFinal("then Quixotic.", 2, 1, scoredWords(2, ["then", 0.9], ["Quixotic.", 0.1]))
+      );
+      const stopPromise = provider.stopGracefully();
+      socket.simulateMessage({
+        type: "transcript.done",
+        words: scoredWords(3, ["Xylophone", 0.1]),
+      });
+      await stopPromise;
+
+      const logged = JSON.stringify(loggers.flatMap((log) => vi.mocked(log).mock.calls));
+      for (const word of ["Zanzibar", "Quixotic", "Xylophone"]) {
+        expect(logged).not.toContain(word);
+      }
     });
   });
 
