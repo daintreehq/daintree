@@ -1,4 +1,5 @@
 import type { PowerPolicyLevel, PowerPolicySnapshot } from "@shared/types/powerPolicy";
+import { logError } from "@/utils/logger";
 
 /**
  * This view's copy of main's power policy (`system:power-policy-changed`).
@@ -31,7 +32,7 @@ function emit<T>(listeners: Set<(value: T) => void>, value: T): void {
     try {
       listener(value);
     } catch (error) {
-      console.error("[powerPolicyState] listener threw:", error);
+      logError("Power policy listener threw", error);
     }
   }
 }

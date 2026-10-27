@@ -111,6 +111,7 @@ describe("notify() on a locked screen (#14885)", () => {
     setActiveContextAccessors({
       getActiveWorktreeId: () => "wt-1",
       getFocusedPanelId: () => null,
+      subscribeActiveContext: () => () => {},
     });
     setScreenLocked(true);
 

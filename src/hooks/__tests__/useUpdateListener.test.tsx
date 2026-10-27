@@ -533,12 +533,14 @@ describe("useUpdateListener", () => {
 
   it("leaves the ready stage unread when it lands on a locked screen (#14885)", () => {
     let pushPolicy: ((snapshot: PowerPolicySnapshot) => void) | null = null;
-    (window.electron as unknown as { events: unknown }).events = {
-      on: (name: string, cb: (snapshot: PowerPolicySnapshot) => void) => {
-        if (name === "system:power-policy-changed") pushPolicy = cb;
-        return () => {};
+    Object.assign(window.electron, {
+      events: {
+        on: (name: string, cb: (snapshot: PowerPolicySnapshot) => void) => {
+          if (name === "system:power-policy-changed") pushPolicy = cb;
+          return () => {};
+        },
       },
-    };
+    });
     // A locked screen fires no blur: the window still reports focus.
     const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
     useNotificationHistoryStore.setState({ entries: [], unreadCount: 0 });
