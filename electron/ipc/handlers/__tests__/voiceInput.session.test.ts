@@ -123,7 +123,8 @@ vi.mock("../../../services/VoiceCorrectionService.js", () => ({
           rawText: request.rawText,
           signal,
           onText,
-          finish: (text) => resolve({ action: "replace", confirmedText: text }),
+          finish: (text) =>
+            resolve({ action: "replace", confirmedText: text, verdict: "replaced" }),
         });
       });
     };
@@ -932,7 +933,11 @@ describe("voiceInput — session identity", () => {
       await expect(cleanupA).resolves.toMatchObject({ failed: true });
       expect(requestB.signal?.aborted).toBe(false);
       requestB.finish("Ship it.");
-      await expect(cleanupB).resolves.toMatchObject({ correctedText: "Ship it." });
+      // The service's verdict reaches the renderer for its session summary.
+      await expect(cleanupB).resolves.toMatchObject({
+        correctedText: "Ship it.",
+        verdict: "replaced",
+      });
     });
 
     it("sends nothing for a cleanup whose view went away while it read its context", async () => {

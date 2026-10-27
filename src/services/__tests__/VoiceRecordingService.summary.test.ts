@@ -869,7 +869,24 @@ describe("VoiceRecordingService — session summary (#14617)", () => {
     expect(JSON.stringify(summaries()[0])).not.toContain("canopy");
   });
 
-  it("counts a failed request with no verdict of its own as failed", async () => {
+  it("counts a failed reply that names no verdict as failed, not unchanged", async () => {
+    const harness = setupGlobals({ correctionEnabled: true });
+    const { service, summaries } = await load();
+    const sessionId = await startLive(harness, service);
+    harness.voiceInput.correct.mockResolvedValue({
+      action: "no_change",
+      correctedText: DICTATED,
+      failed: true,
+    });
+    harness.emit("complete", { sessionId, text: DICTATED, itemId: "item-1" });
+    harness.paintFrames();
+    await service.stop("Dictation stopped.", { reason: "user" });
+    await flushPromises();
+
+    expect(summaries()[0]!.correctionPassages).toEqual({ ...NO_PASSAGES, sent: 1, failed: 1 });
+  });
+
+  it("counts a request that threw as failed", async () => {
     const harness = setupGlobals({ correctionEnabled: true });
     const { service, summaries } = await load();
     const sessionId = await startLive(harness, service);
