@@ -496,6 +496,34 @@ describe("voiceInput — dictating into a host's pane", () => {
     expect(settings.projectName).toBeUndefined();
   });
 
+  it("asks the view's host nothing for a dictation outside the view, read ahead or not", async () => {
+    await expect(
+      getHandler(CHANNELS.VOICE_INPUT_START)({ sender: view }, "outside", { outsideView: true })
+    ).resolves.toEqual({ status: "started" });
+    await stop(view, "outside");
+
+    for (const sessionId of ["outside", undefined]) {
+      shared.correctCalls = [];
+      await getHandler(CHANNELS.VOICE_INPUT_CORRECT)(
+        { sender: view },
+        { rawText: "fix it", outsideView: true, ...(sessionId ? { sessionId } : {}) }
+      );
+      const [{ request, settings }] = shared.correctCalls;
+      expect(request.terminalOutput).toBeUndefined();
+      expect(settings.customDictionary).toEqual(["Wispr"]);
+      expect(settings.knownNames).toEqual([]);
+      expect(settings.projectName).toBeUndefined();
+      expect(settings.projectPath).toBeUndefined();
+      expect(settings.commandTarget).toBeUndefined();
+      if (sessionId) expect(shared.warmCalls[0]).toEqual(settings);
+    }
+    expect(shared.startCalls[0]?.keyterms).toEqual(["Wispr"]);
+    expect(reader.readStart).not.toHaveBeenCalled();
+    expect(reader.readCorrection).not.toHaveBeenCalled();
+    expect(reader.readProject).not.toHaveBeenCalled();
+    expectNoLocalReads();
+  });
+
   it("never asks a host about a pane on this machine", async () => {
     const localView = makeSender();
     shared.projects.set(localView.id, "local-project");
