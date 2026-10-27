@@ -1,3 +1,5 @@
+import type { HostId } from "./remoteHosts.js";
+
 /**
  * Canonical voice session phase types shared across main process, preload, and renderer.
  *
@@ -93,11 +95,31 @@ export interface LastDictationTerms {
  * A dictation session another view owns. Main tells every view about the live
  * session on `voice-input:live-session`, except the one that owns it, so the
  * dictation key can stop it from anywhere and the view can say where it runs.
+ * Views on every host hear it: the Shell runs one dictation for all of them
+ * (#14773).
  */
 export interface VoiceSessionElsewhere {
   sessionId: string;
+  /** The host the owning view's workspace is on: `LOCAL_HOST_ID` for this machine. */
+  hostId: HostId;
+  /** That workspace, a project or a scratch, as its own host knows it. */
   projectId: string | null;
   projectName: string | null;
+}
+
+/** The longest name a view gives its workspace when it starts a dictation. */
+export const VOICE_WORKSPACE_NAME_MAX_LENGTH = 200;
+
+/**
+ * Another view's indicator asked to be taken to the live session: sent to the
+ * owner, which brings its target forward, and to the view on screen in the
+ * owner's window, which goes to `workspaceId` on `hostId`, switching the
+ * window's host when it is on another.
+ */
+export interface VoiceRevealRequest {
+  sessionId: string;
+  hostId: HostId;
+  workspaceId: string | null;
 }
 
 /**

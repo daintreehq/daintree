@@ -23,7 +23,11 @@ const runtime = vi.hoisted(() => ({
 // Its DOM reads need a real document; the suite that runs it for real is
 // voiceComposerFocus.test.tsx.
 const focusDictationComposer = vi.hoisted(() => vi.fn());
-vi.mock("@/services/voiceComposerFocus", () => ({ focusDictationComposer }));
+const revealDictationComposer = vi.hoisted(() => vi.fn());
+vi.mock("@/services/voiceComposerFocus", () => ({
+  focusDictationComposer,
+  revealDictationComposer,
+}));
 
 vi.mock("@/store/terminalInputStore", () => {
   const fns = {

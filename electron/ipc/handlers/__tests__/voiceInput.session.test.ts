@@ -189,6 +189,10 @@ import { CHANNELS } from "../../channels.js";
 import { claimPageDictationKey } from "../../../services/voice/pageDictationKey.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import { AUDIO_BUFFER_MAX_CHUNKS } from "../../../services/voice/TranscriptionProvider.js";
+import {
+  _resetDictationViewHoldsForTests,
+  isDictationViewHeld,
+} from "../../../services/voice/dictationViewHold.js";
 
 type Sent = { channel: string; payload: unknown };
 
@@ -1338,7 +1342,12 @@ describe("voiceInput — a session live in another view (#14601)", () => {
     await start(ownerA, "a");
 
     expect(lastLive(viewB)!.revision).toBeGreaterThan(idle.revision);
-    const elsewhere = { sessionId: "a", projectId: "project-a", projectName: "Alpha" };
+    const elsewhere = {
+      sessionId: "a",
+      hostId: "local",
+      projectId: "project-a",
+      projectName: "Alpha",
+    };
     expect(lastLive(viewB)?.session).toEqual(elsewhere);
     expect(lastLive(viewC)?.session).toEqual(elsewhere);
     expect(lastLive(ownerA)?.session).toBeNull();
@@ -1371,7 +1380,7 @@ describe("voiceInput — a session live in another view (#14601)", () => {
     expect(liveUpdates(latecomer)).toEqual([]);
     expect(pulled).toEqual({
       revision: lastLive(viewB)!.revision,
-      session: { sessionId: "a", projectId: "project-a", projectName: "Alpha" },
+      session: { sessionId: "a", hostId: "local", projectId: "project-a", projectName: "Alpha" },
     });
     expect(await invoke(CHANNELS.VOICE_INPUT_GET_LIVE_SESSION, ownerA)).toMatchObject({
       session: null,
@@ -1399,7 +1408,7 @@ describe("voiceInput — a session live in another view (#14601)", () => {
     expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_STOP_REQUESTED)).toEqual([]);
   });
 
-  const reveal = { sessionId: "a", workspaceId: "project-a" };
+  const reveal = { sessionId: "a", hostId: "local", workspaceId: "project-a" };
 
   it("brings the owner's window forward and asks the owner to show its panel", async () => {
     winA.isMinimized.mockReturnValue(true);
@@ -1483,6 +1492,246 @@ describe("voiceInput — a session live in another view (#14601)", () => {
       cleanup();
       cleanup = () => {};
       expect(claimPageDictationKey(press())).toBe(false);
+    });
+  });
+});
+
+describe("voiceInput — one dictation across hosts (#14773)", () => {
+  let cleanup: () => void;
+  // This Mac's view of project-a, and two hosts' views of a project that has
+  // the same id on both.
+  let local: FakeSender;
+  let studio1: FakeSender;
+  let studio2: FakeSender;
+  type FakeWindow = {
+    isDestroyed: () => boolean;
+    isMinimized: () => boolean;
+    restore: ReturnType<typeof vi.fn>;
+    show: ReturnType<typeof vi.fn>;
+    focus: ReturnType<typeof vi.fn>;
+  };
+  let winA: FakeWindow;
+  let winB: FakeWindow;
+  const makeWindow = (): FakeWindow => ({
+    isDestroyed: () => false,
+    isMinimized: () => false,
+    restore: vi.fn(),
+    show: vi.fn(),
+    focus: vi.fn(),
+  });
+
+  const sentOn = (view: FakeSender, channel: string) =>
+    view.sent.filter((m) => m.channel === channel).map((m) => m.payload);
+  const lastLive = (view: FakeSender) =>
+    sentOn(view, CHANNELS.VOICE_INPUT_LIVE_SESSION).at(-1) as
+      { revision: number; session: unknown } | undefined;
+  const invoke = (channel: string, sender: FakeSender, ...args: unknown[]) =>
+    getHandler(channel)({ sender }, ...args);
+  const startIn = (sender: FakeSender, sessionId: string, workspaceName?: string) => {
+    owners.set(sessionId, sender);
+    return getHandler(CHANNELS.VOICE_INPUT_START)(
+      { sender },
+      sessionId,
+      workspaceName ? { workspaceName } : undefined
+    );
+  };
+  const held = (view: FakeSender) => isDictationViewHeld(view as unknown as Electron.WebContents);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    shared.calls = [];
+    shared.listeners.clear();
+    shared.providerSessionId = null;
+    shared.startResult = { ok: true };
+    shared.drain = null;
+    shared.endDrain = null;
+    shared.assembleKeyterms = null;
+    shared.transcriptionProvider = "openai";
+    shared.projects.clear();
+    _resetDictationViewHoldsForTests();
+    local = makeSender();
+    studio1 = makeSender();
+    studio2 = makeSender();
+    shared.appViews = [local, studio1, studio2];
+    shared.projects.set(local.id, "project-a");
+    shared.projects.set(studio1.id, "studio-01:proj-r");
+    shared.projects.set(studio2.id, "studio-02:proj-r");
+    vi.mocked(projectStore.getProjectById).mockImplementation((id: string) =>
+      id === "project-a"
+        ? ({ id, name: "Alpha", path: "/alpha" } as ReturnType<typeof projectStore.getProjectById>)
+        : null
+    );
+    // Window A was on this Mac and has since switched to studio-01, keeping
+    // this Mac's view cached; window B is on studio-02.
+    winA = makeWindow();
+    winB = makeWindow();
+    shared.windowOf = new Map([
+      [local.id, winA],
+      [studio1.id, winA],
+      [studio2.id, winB],
+    ]);
+    shared.shownIn = new Map<Record<string, unknown>, unknown>([
+      [winA, studio1],
+      [winB, studio2],
+    ]);
+    cleanup = registerVoiceInputHandlers({
+      mainWindow: { webContents: { send: vi.fn() }, isDestroyed: () => false },
+    } as unknown as Parameters<typeof registerVoiceInputHandlers>[0]);
+  });
+
+  afterEach(() => {
+    cleanup?.();
+    vi.useRealTimers();
+    shared.appViews = [];
+    shared.windowOf = new Map();
+    shared.shownIn = new Map();
+    _resetDictationViewHoldsForTests();
+    vi.mocked(projectStore.getProjectById).mockReset();
+    vi.mocked(projectStore.getProjectById).mockReturnValue(null);
+  });
+
+  describe("started on this Mac", () => {
+    it("tells a host's views it runs on this Mac, by the project's own id", async () => {
+      await startIn(local, "a", "Alpha");
+
+      const elsewhere = {
+        sessionId: "a",
+        hostId: "local",
+        projectId: "project-a",
+        projectName: "Alpha",
+      };
+      expect(lastLive(studio1)?.session).toEqual(elsewhere);
+      expect(lastLive(studio2)?.session).toEqual(elsewhere);
+    });
+
+    it("has the host's view on screen in the owner's window go back to this Mac", async () => {
+      await startIn(local, "a", "Alpha");
+
+      expect(await invoke(CHANNELS.VOICE_INPUT_REVEAL_LIVE, studio2, "a")).toBe(true);
+
+      const reveal = { sessionId: "a", hostId: "local", workspaceId: "project-a" };
+      expect(sentOn(studio1, CHANNELS.VOICE_INPUT_REVEAL_REQUESTED)).toEqual([reveal]);
+      expect(sentOn(local, CHANNELS.VOICE_INPUT_REVEAL_REQUESTED)).toEqual([reveal]);
+      expect(sentOn(studio2, CHANNELS.VOICE_INPUT_REVEAL_REQUESTED)).toEqual([]);
+      expect(winA.focus).toHaveBeenCalled();
+      expect(winB.focus).not.toHaveBeenCalled();
+    });
+
+    it("is stopped by the dictation key in a host's view", async () => {
+      await startIn(local, "a", "Alpha");
+
+      expect(await invoke(CHANNELS.VOICE_INPUT_STOP_LIVE, studio2, "a")).toBe(true);
+
+      expect(sentOn(local, CHANNELS.VOICE_INPUT_STOP_REQUESTED)).toEqual([{ sessionId: "a" }]);
+    });
+
+    it("is drained, its text kept on this Mac, when a host's view starts one", async () => {
+      await startIn(local, "a", "Alpha");
+
+      await startIn(studio1, "b", "Remote R");
+
+      expect(ended(local)).toEqual([{ sessionId: "a", reason: "superseded" }]);
+      expect(shared.calls.indexOf("drain")).toBeLessThan(shared.calls.indexOf("start:b"));
+      expect(lastLive(local)?.session).toMatchObject({ sessionId: "b", hostId: "studio-01" });
+    });
+  });
+
+  describe("started on a host", () => {
+    it("names the host and the project the view called itself, which this Mac can't", async () => {
+      await startIn(studio1, "a", "Remote R");
+
+      expect(lastLive(local)?.session).toEqual({
+        sessionId: "a",
+        hostId: "studio-01",
+        projectId: "proj-r",
+        projectName: "Remote R",
+      });
+      expect(lastLive(studio1)?.session).toBeNull();
+    });
+
+    it("has this Mac's view on screen in the owner's window go to the host", async () => {
+      shared.shownIn.set(winA, local);
+      await startIn(studio1, "a", "Remote R");
+
+      await invoke(CHANNELS.VOICE_INPUT_REVEAL_LIVE, studio2, "a");
+
+      const reveal = { sessionId: "a", hostId: "studio-01", workspaceId: "proj-r" };
+      expect(sentOn(local, CHANNELS.VOICE_INPUT_REVEAL_REQUESTED)).toEqual([reveal]);
+      expect(sentOn(studio1, CHANNELS.VOICE_INPUT_REVEAL_REQUESTED)).toEqual([reveal]);
+    });
+
+    it("never mixes up two hosts' projects that share an id", async () => {
+      await startIn(studio1, "a", "Remote R");
+
+      // Window B shows studio-02's copy of the same project id.
+      expect(lastLive(studio2)?.session).toMatchObject({
+        hostId: "studio-01",
+        projectId: "proj-r",
+      });
+      await invoke(CHANNELS.VOICE_INPUT_REVEAL_LIVE, studio2, "a");
+
+      expect(sentOn(studio2, CHANNELS.VOICE_INPUT_REVEAL_REQUESTED)).toEqual([]);
+      expect(sentOn(studio1, CHANNELS.VOICE_INPUT_REVEAL_REQUESTED)).toEqual([
+        { sessionId: "a", hostId: "studio-01", workspaceId: "proj-r" },
+      ]);
+    });
+  });
+
+  describe("keeping the dictating view", () => {
+    it("holds the view from the start, and briefly past a cancel for its ending", async () => {
+      const starting = startIn(local, "a");
+      expect(held(local)).toBe(true);
+      await starting;
+      expect(held(studio1)).toBe(false);
+      vi.useFakeTimers();
+
+      await cancel(local, "a");
+      expect(held(local)).toBe(true);
+
+      vi.advanceTimersByTime(5_000);
+      expect(held(local)).toBe(false);
+    });
+
+    it("keeps holding it after a stop, for the cleanup the renderer asks for next", async () => {
+      await startIn(local, "a");
+      vi.useFakeTimers();
+
+      await stop(local, "a");
+      expect(held(local)).toBe(true);
+
+      vi.advanceTimersByTime(5_000);
+      expect(held(local)).toBe(false);
+    });
+
+    it("keeps a replaced session's view past its drain, for the words it still commits", async () => {
+      await startIn(local, "a");
+
+      await startIn(studio1, "b");
+
+      expect(ended(local)).toEqual([{ sessionId: "a", reason: "superseded" }]);
+      expect(held(local)).toBe(true);
+      expect(held(studio1)).toBe(true);
+    });
+
+    it("lets go of a view that went away", async () => {
+      await startIn(local, "a");
+
+      local.destroy();
+
+      // Asked by id, as a view reusing nothing of the old one would be.
+      const sameId = { id: local.id, isDestroyed: () => false } as unknown as Electron.WebContents;
+      expect(isDictationViewHeld(sameId)).toBe(false);
+    });
+
+    it("lets go of every hold when the handlers go away", async () => {
+      await startIn(local, "a");
+      await stop(local, "a");
+      expect(held(local)).toBe(true);
+
+      cleanup();
+      cleanup = () => {};
+
+      expect(held(local)).toBe(false);
     });
   });
 });

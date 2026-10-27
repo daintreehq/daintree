@@ -23,6 +23,7 @@ import type {
   VoiceInputError,
   VoiceInputStatus,
   VoiceLiveSessionUpdate,
+  VoiceRevealRequest,
   VoiceSessionEndReason,
 } from "../voice.js";
 import type { VoiceCorrectionTiming, VoiceSessionReport } from "../voiceSessionSummary.js";
@@ -2234,11 +2235,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     /**
      * When another view's indicator asked to be taken to the live session: the
      * owner focuses its target, and the view on screen in the owner's window
-     * switches to `workspaceId`.
+     * goes to `workspaceId` on `hostId`.
      */
-    onRevealRequested(
-      callback: (payload: { sessionId: string; workspaceId: string | null }) => void
-    ): () => void;
+    onRevealRequested(callback: (payload: VoiceRevealRequest) => void): () => void;
     checkMicPermission(): Promise<MicPermissionStatus>;
     /**
      * Native permission preflight. Resolves to whether the renderer may proceed

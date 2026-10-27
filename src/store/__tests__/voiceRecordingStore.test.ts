@@ -35,7 +35,7 @@ function reset() {
 describe("voiceRecordingStore — session elsewhere (#14601)", () => {
   beforeEach(reset);
 
-  const elsewhere = { sessionId: "s1", projectId: "p-a", projectName: "Alpha" };
+  const elsewhere = { sessionId: "s1", hostId: "local", projectId: "p-a", projectName: "Alpha" };
 
   it("takes main's report of the live session", () => {
     useVoiceRecordingStore.getState().applyLiveSessionUpdate({ revision: 1, session: elsewhere });

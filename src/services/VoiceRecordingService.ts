@@ -55,7 +55,11 @@ import {
   type VoiceSessionElsewhere,
   type VoiceTranscriptionProvider,
 } from "@shared/types";
-import { TRANSCRIPTION_ITEM_FAILED_CODE } from "@shared/types/voice";
+import {
+  TRANSCRIPTION_ITEM_FAILED_CODE,
+  VOICE_WORKSPACE_NAME_MAX_LENGTH,
+} from "@shared/types/voice";
+import type { HostId } from "@shared/types/remoteHosts";
 import type { VoiceStopReason } from "@shared/types/voiceSessionSummary";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -117,7 +121,18 @@ import { isScratchCommand, recordScratchLanded } from "@/services/voiceScratchCo
 import { planFileReferenceEdits, planHeardSwaps } from "@/services/voiceFileReferences";
 import { isSpokenSendable } from "@/services/voiceSpokenSend";
 import { findRewriteComposer, type RewriteSelection } from "@/services/voiceRewriteSelection";
-import { focusDictationComposer } from "@/services/voiceComposerFocus";
+import { focusDictationComposer, revealDictationComposer } from "@/services/voiceComposerFocus";
+import {
+  isSameHost,
+  namesSessionHost,
+  sessionHostName,
+  sessionPlacePhrase,
+  sessionWorkspaceName,
+} from "@/services/voiceSessionPlace";
+import { currentHostId } from "@/hooks/useHostPlatform";
+import { getHostListSnapshot } from "@/components/Hosts/hostList";
+import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
+import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 import {
   VOICE_REWRITE_MAX_INSTRUCTION_CHARS,
   VOICE_REWRITE_MAX_SELECTION_CHARS,
@@ -127,6 +142,21 @@ import { VoiceSessionTimeline, type VoiceCorrectionOutcome } from "@/services/vo
 import { estimateCorrectionMs, recordCorrectionPace } from "@/services/voiceCorrectionPace";
 
 const LOG_PREFIX = "[VoiceRecording]";
+// How long a cached view the indicator asked for waits to come on screen
+// before it gives up on putting the keyboard in its pane.
+const REVEAL_FOCUS_WAIT_MS = 15_000;
+
+// What this view calls its workspace, for views on other hosts to name it by:
+// this machine has no name for a host's project or scratch (#14773).
+function viewWorkspaceName(): string | undefined {
+  const workspaceId = getViewWorkspaceId();
+  const name =
+    workspaceId && isScratchWorkspaceId(workspaceId)
+      ? scratchName(useScratchStore.getState().scratches, workspaceId)
+      : useProjectStore.getState().currentProject?.name;
+  const trimmed = name?.trim();
+  return trimmed ? trimmed.slice(0, VOICE_WORKSPACE_NAME_MAX_LENGTH) : undefined;
+}
 const REPLACED_ELSEWHERE_ANNOUNCEMENT =
   "Dictation stopped because it started in another window or project.";
 
@@ -614,6 +644,8 @@ class VoiceRecordingService {
   // event was created.
   private claimedAt: number | null = null;
   private unsubscribers: Array<() => void> = [];
+  // A reveal of this view's own session waiting for the view to come on screen.
+  private cancelRevealWait: (() => void) | null = null;
   private isStoppingSession = false;
   private stopPromise: Promise<void> | null = null;
   private levelRaf: number | null = null;
@@ -1108,13 +1140,14 @@ class VoiceRecordingService {
       })
     );
     this.unsubscribers.push(
-      voiceInput.onRevealRequested(({ sessionId, workspaceId }) => {
+      voiceInput.onRevealRequested(({ sessionId, hostId, workspaceId }) => {
         if (sessionId === this.sessionId) {
-          void this.focusActiveTarget();
+          this.revealOwnTarget();
           return;
         }
-        // On screen in the owner's window: bring the owner's workspace forward.
-        if (workspaceId) void this.showWorkspace(workspaceId);
+        // On screen in the owner's window: bring the owner's workspace forward,
+        // on the owner's host.
+        if (workspaceId) void this.showWorkspaceOn(hostId, workspaceId);
       })
     );
 
@@ -2426,10 +2459,12 @@ class VoiceRecordingService {
     // before the backend is ready still has the audio to transcribe.
     logDebug(`${LOG_PREFIX} Calling voiceInput.start() IPC`);
     timeline.expectReport();
+    const workspaceName = viewWorkspaceName();
     const started = window.electron.voiceInput
       .start(sessionId, {
         ...voiceContext(target),
         ...(target.rewrite ? { intent: "rewrite" as const } : {}),
+        ...(workspaceName ? { workspaceName } : {}),
       })
       .then(
         (outcome) =>
@@ -3746,11 +3781,29 @@ class VoiceRecordingService {
     }
     // Already over: main's update that says so is on its way.
     if (!stopped) return;
-    const where =
-      session.projectName ?? scratchName(useScratchStore.getState().scratches, session.projectId);
+    const workspace = sessionWorkspaceName(session, useScratchStore.getState().scratches);
+    const hostName = namesSessionHost(session)
+      ? sessionHostName(session.hostId, getHostListSnapshot().hosts)
+      : null;
     useVoiceRecordingStore
       .getState()
-      .announce(where ? `Stopping dictation in ${where}.` : "Stopping dictation.");
+      .announce(`Stopping dictation${sessionPlacePhrase(workspace, hostName)}.`);
+  }
+
+  // A workspace on this view's own host opens as one of its own. Another
+  // host's takes the window there, where its cached view comes back with it
+  // (#14773): an id on one host names nothing on another.
+  private async showWorkspaceOn(hostId: HostId, workspaceId: string): Promise<void> {
+    if (isSameHost(hostId, currentHostId())) {
+      await this.showWorkspace(workspaceId);
+      return;
+    }
+    try {
+      const { switchToHost } = await import("@/components/Hosts/hostSwitching");
+      await switchToHost(hostId, false, workspaceId);
+    } catch (error) {
+      logWarn(`${LOG_PREFIX} Couldn't show the dictating host`, voiceErrorLogFields(error));
+    }
   }
 
   // Projects and scratches switch through separate stores, told apart by the
@@ -3966,6 +4019,50 @@ class VoiceRecordingService {
       return;
     }
     await this.toggle(target);
+  }
+
+  /**
+   * Another view's indicator asked for this view's session: its window is
+   * coming back to it, from another project or another host. Once the view is
+   * on screen, its target comes forward with the keyboard in its composer
+   * (#14770). A cached view waits to be shown, and gives up if it isn't.
+   */
+  private revealOwnTarget(): void {
+    this.cancelRevealWait?.();
+    this.cancelRevealWait = null;
+    const reveal = () => {
+      void this.focusActiveTarget().then((found) => {
+        const { pendingTarget, activeTarget } = useVoiceRecordingStore.getState();
+        const target = pendingTarget ?? activeTarget;
+        // A Canopy reply put the keyboard in itself.
+        if (found && target && !isCanopyReplyTarget(target)) {
+          revealDictationComposer(target.panelId);
+        }
+      });
+    };
+    if (!isProjectViewCached()) {
+      reveal();
+      return;
+    }
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let unsubscribe: (() => void) | null = null;
+    const cancel = () => {
+      if (timer) clearTimeout(timer);
+      timer = null;
+      unsubscribe?.();
+      unsubscribe = null;
+      if (this.cancelRevealWait === cancel) this.cancelRevealWait = null;
+    };
+    unsubscribe = subscribeProjectViewLifecycle((phase) => {
+      // Cached again before it was shown: the person went somewhere else, and
+      // a later return of theirs is not this reveal.
+      if (phase === "cached") cancel();
+      if (phase !== "revealed") return;
+      cancel();
+      reveal();
+    });
+    timer = setTimeout(cancel, REVEAL_FOCUS_WAIT_MS);
+    this.cancelRevealWait = cancel;
   }
 
   async focusActiveTarget(): Promise<boolean> {
@@ -4498,6 +4595,8 @@ class VoiceRecordingService {
   }
 
   destroy(): void {
+    this.cancelRevealWait?.();
+    this.cancelRevealWait = null;
     // Late awaits and events find nothing to record into.
     for (const timeline of this.timelines.values()) timeline.dispose();
     this.timelines.clear();

@@ -19,8 +19,16 @@ import { focusRecoveredComposer } from "@/services/recentDictationRecovery";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { useRecentDictationsStore } from "@/store/recentDictationsStore";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
-import { scratchName, useScratchStore } from "@/store/scratchStore";
+import { useScratchStore } from "@/store/scratchStore";
 import { actionService } from "@/services/ActionService";
+import { useHostList } from "@/components/Hosts/hostList";
+import {
+  namesSessionHost,
+  sessionHostName,
+  sessionPlacePhrase,
+  sessionWorkspaceName,
+} from "@/services/voiceSessionPlace";
+import { isLocalHostId } from "@shared/types/remoteHosts";
 import type { VoiceSessionElsewhere } from "@shared/types";
 
 // Flywheel — matches VoiceInputButton so the toolbar and panel-header
@@ -74,20 +82,40 @@ function VoiceLockedButton({
   );
 }
 
-// Dictation another view owns: this view can't show its audio, only where it
-// runs. The dictation key stops it from here.
-function VoiceElsewhereButton({
-  session,
-  shortcut,
-  "data-toolbar-item": dataToolbarItem,
-}: {
+interface VoiceElsewhereButtonProps {
   session: VoiceSessionElsewhere;
   shortcut: string | undefined;
   "data-toolbar-item"?: string;
-}) {
-  const scratch = useScratchStore((state) => scratchName(state.scratches, session.projectId));
-  const where = session.projectName ?? scratch;
-  const title = where ? `Dictating in ${where}` : "Dictating elsewhere";
+}
+
+// Dictation another view owns: this view can't show its audio, only where it
+// runs. The dictation key stops it from here. A session on another machine,
+// or on this one while this view is on a host, names its host too (#14773).
+function VoiceElsewhereButton(props: VoiceElsewhereButtonProps) {
+  if (!isLocalHostId(props.session.hostId)) return <VoiceElsewhereOnHostButton {...props} />;
+  const hostName = namesSessionHost(props.session)
+    ? sessionHostName(props.session.hostId, [])
+    : null;
+  return <VoiceElsewhereIndicator {...props} hostName={hostName} />;
+}
+
+// Only a session on another machine needs the host list, for that host's name.
+function VoiceElsewhereOnHostButton(props: VoiceElsewhereButtonProps) {
+  const { hosts } = useHostList();
+  return (
+    <VoiceElsewhereIndicator {...props} hostName={sessionHostName(props.session.hostId, hosts)} />
+  );
+}
+
+function VoiceElsewhereIndicator({
+  session,
+  shortcut,
+  hostName,
+  "data-toolbar-item": dataToolbarItem,
+}: VoiceElsewhereButtonProps & { hostName: string | null }) {
+  const scratches = useScratchStore((state) => state.scratches);
+  const place = sessionPlacePhrase(sessionWorkspaceName(session, scratches), hostName);
+  const title = place ? `Dictating${place}` : "Dictating elsewhere";
   return (
     <Tooltip>
       <TooltipTrigger asChild>

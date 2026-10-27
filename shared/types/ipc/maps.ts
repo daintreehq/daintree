@@ -4,6 +4,7 @@ import type {
   VoiceInputError,
   VoiceInputStatus,
   VoiceLiveSessionUpdate,
+  VoiceRevealRequest,
   VoiceSessionEndReason,
 } from "../voice.js";
 import type { VoiceCorrectionTiming, VoiceSessionReport } from "../voiceSessionSummary.js";
@@ -2107,8 +2108,8 @@ export interface IpcEventMap {
   // To the owner: another view's dictation key asked it to stop.
   "voice-input:stop-requested": { sessionId: string };
   // Another view's indicator, to the owner and to the view on screen in the
-  // owner's window, which switches to the owner's workspace.
-  "voice-input:reveal-requested": { sessionId: string; workspaceId: string | null };
+  // owner's window, which goes to the owner's workspace on the owner's host.
+  "voice-input:reveal-requested": VoiceRevealRequest;
 
   // Demo mode events (main → renderer command forwarding)
   "demo:exec-move-to": DemoMoveToPayload;

@@ -25,3 +25,15 @@ export function focusDictationComposer(panelId: string): void {
   if (hasUsefulFocus(active) && findPanelIdForElement(active) !== panelId) return;
   requestPaneFocus(panelId, "hybridInput", { forDictation: true });
 }
+
+/**
+ * The indicator's "go there" (#14773): the person asked for this pane, so the
+ * keyboard moves to its composer from wherever this view last left it, which
+ * may be another pane from before they went elsewhere. An open modal still
+ * keeps it, and only the selected pane's composer is taken.
+ */
+export function revealDictationComposer(panelId: string): void {
+  if (usePanelStore.getState().focusedId !== panelId) return;
+  if (hasBlockingOverlay()) return;
+  requestPaneFocus(panelId, "hybridInput", { forDictation: true });
+}

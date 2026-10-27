@@ -61,6 +61,10 @@ import {
   onPanelRecoveryHoldReleased,
 } from "../services/panelRecoveryQuery.js";
 import { repaintWindowTheme, visibleProjectIdOf } from "./projectThemeChrome.js";
+import {
+  isDictationViewHeld,
+  onDictationViewReleased,
+} from "../services/voice/dictationViewHold.js";
 
 // Trailing-edge debounce on freeze entry: the lag-pressure path can flip
 // efficiency on/off without going through the 30 s downgrade hysteresis, so
@@ -499,7 +503,7 @@ export class ProjectViewManager {
     intent: ProjectFocusOnActivateIntent;
   } | null = null;
   disposed = false;
-  private recoveryReleaseCleanup: (() => void) | null = null;
+  private holdReleaseCleanup: (() => void) | null = null;
   /** One-shot latch so a persistently broken activity callback can't flood the log. */
   private warnedMcpActivityFailure = false;
   private cachedMemoryTimerCleanup: (() => void) | null = null;
@@ -531,11 +535,12 @@ export class ProjectViewManager {
     this.remoteMcpBindingLive = opts.remoteMcpBindingLive;
     this.mcpViewActivity = opts.mcpViewActivity;
     this.windowRegistry = opts.windowRegistry;
-    // A view kept over the cap by its unsaved work (#14095) is evictable again
-    // once that work is saved or dropped; nothing else would re-run the cap
+    // A view kept over the cap by its unsaved work (#14095) or by a dictation
+    // (#14773) is evictable again once that work is saved or dropped, or the
+    // dictation and its cleanup are done; nothing else would re-run the cap
     // until the next cold switch or limit change. Deferred so a view is never
     // torn down inside its own navigation or IPC callback.
-    this.recoveryReleaseCleanup = onPanelRecoveryHoldReleased((webContentsId) => {
+    const reclaimReleased = (webContentsId: number) => {
       if (this.disposed) return;
       const ours = [...this.views.values()].some(
         (entry) =>
@@ -546,7 +551,13 @@ export class ProjectViewManager {
       setImmediate(() => {
         if (!this.disposed) EvictionController.evictStaleViews(this, "lru");
       });
-    });
+    };
+    const offRecovery = onPanelRecoveryHoldReleased(reclaimReleased);
+    const offDictation = onDictationViewReleased(reclaimReleased);
+    this.holdReleaseCleanup = () => {
+      offRecovery();
+      offDictation();
+    };
     if (opts.cachedProjectViews != null) {
       this.maxCachedViews = opts.cachedProjectViews;
     }
@@ -1563,6 +1574,8 @@ export class ProjectViewManager {
       // A host's assistant runs its tool calls through this view, often one the
       // person never shows (a hub started it); frozen, every call would stall.
       if (this.remoteAssistantLive?.(wc.id) === true) continue;
+      // A dictation started here captures its audio in this renderer (#14773).
+      if (isDictationViewHeld(wc)) continue;
       void freezeWebContents(wc);
     }
   }
@@ -1681,6 +1694,9 @@ export class ProjectViewManager {
     // Unsaved work the view says nothing would bring back (#14095): moving the
     // project to another window would destroy it, which a move never means.
     if (isPanelRecoveryHeldReported(wc)) return false;
+    // A dictation running there, or its cleanup, would end with the view
+    // (#14773). Another window asking for the project brings this one forward.
+    if (isDictationViewHeld(wc)) return false;
     return !EvictionController.hasLiveAssistantBackend(this, projectId, entry);
   }
 
@@ -1731,8 +1747,8 @@ export class ProjectViewManager {
 
   dispose(): void {
     this.disposed = true;
-    this.recoveryReleaseCleanup?.();
-    this.recoveryReleaseCleanup = null;
+    this.holdReleaseCleanup?.();
+    this.holdReleaseCleanup = null;
     // Before any teardown below: an in-flight restore holds a half-built entry
     // and a pending hydration wait, both of which must settle against a live
     // manager rather than be found dead by their own continuations.

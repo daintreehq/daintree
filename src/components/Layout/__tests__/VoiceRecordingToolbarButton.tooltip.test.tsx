@@ -23,6 +23,14 @@ vi.mock("@/services/VoiceRecordingService", () => ({
   },
 }));
 
+// The hosts this machine has added, as the host list would report them.
+const hostList = vi.hoisted(() => ({
+  hosts: [] as Array<{ descriptor: { id: string; name: string } }>,
+}));
+vi.mock("@/components/Hosts/hostList", () => ({
+  useHostList: () => ({ hosts: hostList.hosts, localSummary: null }),
+}));
+
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: (...args: unknown[]) => dispatch(...args) },
 }));
@@ -208,7 +216,12 @@ describe("VoiceRecordingToolbarButton — dictation in another view (#14601)", (
 
   it("says where dictation runs, and a click goes there", () => {
     useVoiceRecordingStore.setState({
-      sessionElsewhere: { sessionId: "s1", projectId: "p-a", projectName: "Alpha" },
+      sessionElsewhere: {
+        sessionId: "s1",
+        hostId: "local",
+        projectId: "p-a",
+        projectName: "Alpha",
+      },
     });
     const { getByTestId } = render(<VoiceRecordingToolbarButton />);
 
@@ -236,7 +249,12 @@ describe("VoiceRecordingToolbarButton — dictation in another view (#14601)", (
       scratches: [scratch],
     });
     useVoiceRecordingStore.setState({
-      sessionElsewhere: { sessionId: "s1", projectId: scratchId, projectName: null },
+      sessionElsewhere: {
+        sessionId: "s1",
+        hostId: "local",
+        projectId: scratchId,
+        projectName: null,
+      },
     });
     const { getByTestId } = render(<VoiceRecordingToolbarButton />);
 
@@ -248,7 +266,7 @@ describe("VoiceRecordingToolbarButton — dictation in another view (#14601)", (
 
   it("says only that it runs elsewhere when the workspace has no known name", () => {
     useVoiceRecordingStore.setState({
-      sessionElsewhere: { sessionId: "s1", projectId: null, projectName: null },
+      sessionElsewhere: { sessionId: "s1", hostId: "local", projectId: null, projectName: null },
     });
     const { getByTestId } = render(<VoiceRecordingToolbarButton />);
 
@@ -262,7 +280,12 @@ describe("VoiceRecordingToolbarButton — dictation in another view (#14601)", (
       status: "recording",
       micSignal: "live",
       activeTarget: { panelId: "p-1", panelTitle: "claude · notes" },
-      sessionElsewhere: { sessionId: "s1", projectId: "p-a", projectName: "Alpha" },
+      sessionElsewhere: {
+        sessionId: "s1",
+        hostId: "local",
+        projectId: "p-a",
+        projectName: "Alpha",
+      },
     });
     const { queryByTestId, container } = render(<VoiceRecordingToolbarButton />);
 
@@ -277,7 +300,12 @@ describe("VoiceRecordingToolbarButton — dictation in another view (#14601)", (
   it("puts the session elsewhere ahead of this view's lock", () => {
     useVoiceRecordingStore.setState({
       lockedTarget: { panelId: "p-1", panelTitle: "claude · notes" },
-      sessionElsewhere: { sessionId: "s1", projectId: "p-a", projectName: "Alpha" },
+      sessionElsewhere: {
+        sessionId: "s1",
+        hostId: "local",
+        projectId: "p-a",
+        projectName: "Alpha",
+      },
     });
     const { getByTestId, queryByTestId } = render(<VoiceRecordingToolbarButton />);
 
@@ -292,6 +320,108 @@ describe("VoiceRecordingToolbarButton — dictation in another view (#14601)", (
     expect(queryByTestId("voice-elsewhere-button")).toBeNull();
     expect(container.querySelector("button")).toBeNull();
     expect(container.querySelector('[aria-hidden="true"].opacity-0')).not.toBeNull();
+  });
+});
+
+describe("VoiceRecordingToolbarButton — dictation on another host (#14773)", () => {
+  const scratchId = "3f2b8a1c-4d5e-4f60-8a7b-9c0d1e2f3a4b";
+  const originalPlatform = navigator.platform;
+
+  beforeEach(() => {
+    revealSessionElsewhere.mockClear();
+    mockCombo = "Cmd+.";
+    hostList.hosts = [{ descriptor: { id: "studio-01", name: "Studio" } }];
+    Object.defineProperty(navigator, "platform", { configurable: true, value: "MacIntel" });
+    useVoiceRecordingStore.setState({
+      isConfigured: true,
+      status: "idle",
+      activeTarget: null,
+      lockedTarget: null,
+    });
+  });
+
+  afterEach(() => {
+    hostList.hosts = [];
+    useVoiceRecordingStore.setState({ sessionElsewhere: null });
+    Reflect.deleteProperty(window, "__DAINTREE_HOST_ID__");
+    Object.defineProperty(navigator, "platform", { configurable: true, value: originalPlatform });
+    useScratchStore.setState({ scratches: [] });
+  });
+
+  const label = () =>
+    render(<VoiceRecordingToolbarButton />)
+      .getByTestId("voice-elsewhere-button")
+      .getAttribute("aria-label");
+
+  it("names the host and its project for a session on another machine", () => {
+    useVoiceRecordingStore.setState({
+      sessionElsewhere: {
+        sessionId: "s1",
+        hostId: "studio-01",
+        projectId: "proj-r",
+        projectName: "Remote R",
+      },
+    });
+
+    expect(label()).toBe("Dictating in Remote R on Studio. Click to go there.");
+  });
+
+  it("names the host even from a view on that same host", () => {
+    Reflect.set(window, "__DAINTREE_HOST_ID__", { id: "studio-01" });
+    useVoiceRecordingStore.setState({
+      sessionElsewhere: {
+        sessionId: "s1",
+        hostId: "studio-01",
+        projectId: "proj-r",
+        projectName: "Remote R",
+      },
+    });
+
+    expect(label()).toBe("Dictating in Remote R on Studio. Click to go there.");
+  });
+
+  it("names this Mac for a session here, seen from a host's view", () => {
+    Reflect.set(window, "__DAINTREE_HOST_ID__", { id: "studio-01" });
+    useVoiceRecordingStore.setState({
+      sessionElsewhere: {
+        sessionId: "s1",
+        hostId: "local",
+        projectId: "p-a",
+        projectName: "Alpha",
+      },
+    });
+
+    expect(label()).toBe("Dictating in Alpha on This Mac. Click to go there.");
+  });
+
+  it("goes by the host's id when the host list doesn't name it", () => {
+    hostList.hosts = [];
+    useVoiceRecordingStore.setState({
+      sessionElsewhere: {
+        sessionId: "s1",
+        hostId: "studio-09",
+        projectId: null,
+        projectName: null,
+      },
+    });
+
+    expect(label()).toBe("Dictating on studio-09. Click to go there.");
+  });
+
+  it("never names another host's scratch by this view's scratch of the same id", () => {
+    useScratchStore.setState({
+      scratches: [{ id: scratchId, path: "/s", name: "Local spike", createdAt: 1, lastOpened: 1 }],
+    });
+    useVoiceRecordingStore.setState({
+      sessionElsewhere: {
+        sessionId: "s1",
+        hostId: "studio-01",
+        projectId: scratchId,
+        projectName: null,
+      },
+    });
+
+    expect(label()).toBe("Dictating on Studio. Click to go there.");
   });
 });
 

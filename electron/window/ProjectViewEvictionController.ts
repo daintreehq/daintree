@@ -18,6 +18,7 @@ import { memoryPressureTarget } from "../utils/cachedProjectViews.js";
 import { isSwapPressureConfirmed } from "../services/systemSwapPressure.js";
 import { isKernelPressureCritical } from "../services/systemKernelPressure.js";
 import { isPanelRecoveryHeldReported } from "../services/panelRecoveryQuery.js";
+import { isDictationViewHeld } from "../services/voice/dictationViewHold.js";
 import { hasPendingActivation } from "./projectActivationClaims.js";
 import {
   isWorkspaceKeepResident,
@@ -545,6 +546,14 @@ export function evictStaleViews(
   // this from becoming a floor.
   const mcpLeasedProjectIds = new Set<string>();
 
+  // Views a dictation still needs (#14773): its session runs there, or the
+  // cleanup after its stop is still to write into its draft. Excluded outright,
+  // under pressure too, for the MCP lease's reason: destroying one cancels the
+  // session and drops the words still on their way, which nothing can redo.
+  // A hold lasts a dictation and the few seconds of its cleanup, so like a
+  // lease it lapses on its own.
+  const dictationHeldProjectIds = new Set<string>();
+
   // Views whose renderer says it holds work its teardown would lose (#14095):
   // the same answer automatic Sleep asks for (`readPanelRecoveryHold`), pushed
   // by the renderer as it changes so this synchronous pass can read it. A cap
@@ -578,6 +587,10 @@ export function evictStaleViews(
       }
       if (owner.mcpActivityFor(id, entry.view.webContents).dispatchLease) {
         mcpLeasedProjectIds.add(id);
+        continue;
+      }
+      if (isDictationViewHeld(entry.view.webContents)) {
+        dictationHeldProjectIds.add(id);
         continue;
       }
       if (!pressurePass && isPanelRecoveryHeldReported(entry.view.webContents)) {
@@ -875,6 +888,7 @@ export function evictStaleViews(
     (assistantProtected.length > 0 ||
       pinnedAssistantCount > 0 ||
       mcpLeasedProjectIds.size > 0 ||
+      dictationHeldProjectIds.size > 0 ||
       recoveryHeldProjectIds.size > 0)
   ) {
     // `overflow` counts views over `baseMax`, the cap before the assistant
@@ -905,6 +919,10 @@ export function evictStaleViews(
       // each count means exactly one thing.
       mcpLeasedCount: mcpLeasedProjectIds.size,
       protectedProjectIds: assistantProtected.map(({ projectId }) => projectId),
+      // Present only while a dictation holds a view (#14773).
+      ...(dictationHeldProjectIds.size > 0
+        ? { dictationHeldProjectIds: [...dictationHeldProjectIds] }
+        : {}),
       // Present only when a view is waiting on its own unsaved work (#14095).
       ...(recoveryHeldProjectIds.size > 0
         ? { recoveryHeldProjectIds: [...recoveryHeldProjectIds] }

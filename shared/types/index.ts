@@ -566,6 +566,7 @@ export type {
   VoiceInputError,
   VoiceInputErrorSeverity,
   VoiceLiveSessionUpdate,
+  VoiceRevealRequest,
   VoiceSessionElsewhere,
   VoiceKeytermSource,
   VoiceSentTerm,

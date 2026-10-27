@@ -274,6 +274,10 @@ import {
   _resetPanelRecoveryStateForTests,
   recordPanelRecoveryState,
 } from "../../services/panelRecoveryQuery.js";
+import {
+  _resetDictationViewHoldsForTests,
+  holdDictationView,
+} from "../../services/voice/dictationViewHold.js";
 
 // The shared snapshot is module-level state; without a reset, a test could be
 // served metrics cached by the previous test's differently-mocked sweep.
@@ -4337,6 +4341,119 @@ describe("ProjectViewManager — MCP bound sessions and dispatch leases (#11790)
     });
   });
 
+  describe("views a dictation still needs (#14773)", () => {
+    const dictateIn = (mgr: ProjectViewManager, projectId: string) =>
+      holdDictationView(webContentsIdFor(mgr, projectId));
+
+    beforeEach(() => _resetDictationViewHoldsForTests());
+    afterEach(() => _resetDictationViewHoldsForTests());
+
+    it("keeps the dictating view however small the cap, and reports why", async () => {
+      const mgr = makeManager(3);
+      await seedThreeViews(mgr);
+      dictateIn(mgr, "proj-a");
+
+      mgr.setCachedViewLimit(1);
+
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-a", "proj-c"]);
+      expect(evictedProjectIds()).toEqual(["proj-b"]);
+      expect(skippedLog()?.dictationHeldProjectIds).toEqual(["proj-a"]);
+    });
+
+    it("keeps it through the forced reclaim, which takes everything else", async () => {
+      const mgr = makeManager(3);
+      mgr.setMemoryPressurePolicy(BAND);
+      setAvailableMb(2500);
+      await seedThreeViews(mgr);
+      dictateIn(mgr, "proj-a");
+
+      mgr.reclaimCachedViewsUnderPressure();
+
+      expect(evictedProjectIds()).toEqual(["proj-b"]);
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-a", "proj-c"]);
+    });
+
+    it("keeps it while the user clicks through other projects", async () => {
+      const mgr = makeManager(3);
+      await seedThreeViews(mgr);
+      dictateIn(mgr, "proj-a");
+      mgr.setCachedViewLimit(2);
+
+      await mgr.switchTo("proj-d", "/path/d");
+      await flushImmediates();
+      await mgr.switchTo("proj-e", "/path/e");
+      await flushImmediates();
+
+      expect(mgr.getAllViews().map((v) => v.projectId)).toContain("proj-a");
+      expect(mgr.getActiveProjectId()).toBe("proj-e");
+    });
+
+    it("holds it until the last of several holds is released", async () => {
+      const mgr = makeManager(3);
+      await seedThreeViews(mgr);
+      const session = dictateIn(mgr, "proj-a");
+      const cleanup = dictateIn(mgr, "proj-a");
+      mgr.setCachedViewLimit(1);
+
+      session();
+      session();
+      await flushImmediates();
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-a", "proj-c"]);
+
+      cleanup();
+      await flushImmediates();
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+    });
+
+    it("lets a hold with a deadline lapse on its own", async () => {
+      const mgr = makeManager(3);
+      await seedThreeViews(mgr);
+      vi.useFakeTimers();
+      try {
+        holdDictationView(webContentsIdFor(mgr, "proj-a"), 5_000);
+        mgr.setCachedViewLimit(1);
+        expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-a", "proj-c"]);
+
+        vi.advanceTimersByTime(5_000);
+        vi.runOnlyPendingTimers();
+      } finally {
+        vi.useRealTimers();
+      }
+      await flushImmediates();
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+    });
+
+    it("won't hand the dictating view to another window", async () => {
+      const mgr = makeManager(3);
+      await seedThreeViews(mgr);
+      dictateIn(mgr, "proj-a");
+
+      expect(mgr.canReleaseCachedView("proj-a")).toBe(false);
+      expect(mgr.releaseCachedView("proj-a")).toBe(false);
+      expect(mgr.canReleaseCachedView("proj-b")).toBe(true);
+    });
+
+    it("keeps a host's view held by its dictation, apart from another host's view of the same id", async () => {
+      const mgr = makeManager(3);
+      const wcA = createMockWebContents();
+      mgr.registerInitialView({ webContents: wcA, setBounds: vi.fn() } as never, "proj-a", "/a");
+      await mgr.switchToHostProject("studio-01", "proj-r", "/srv/r");
+      await flushImmediates();
+      await mgr.switchToHostProject("studio-02", "proj-r", "/srv/r");
+      await flushImmediates();
+      await mgr.switchTo("proj-c", "/path/c");
+      await flushImmediates();
+      holdDictationView(webContentsIdFor(mgr, toHostScopedKey("studio-01", "proj-r")));
+
+      mgr.setCachedViewLimit(1);
+
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual([
+        toHostScopedKey("studio-01", "proj-r"),
+        "proj-c",
+      ]);
+    });
+  });
+
   describe("quiet bound sessions", () => {
     it("evicts an active-agent view before a quiet bound one", async () => {
       // An agent view is cheap to lose — its PTY lives in the pty-host and
@@ -5068,6 +5185,20 @@ describe("ProjectViewManager — releasing views that sit unused (#14217)", () =
 
       mgr.evictIdleViews();
       expect(projectIds(mgr)).toEqual(["proj-a", "proj-c"]);
+    });
+
+    it("that a dictation still needs (#14773)", async () => {
+      const mgr = makeManager();
+      await seedThreeViews(mgr);
+      const release = holdDictationView(entryOf(mgr, "proj-a").view.webContents.id);
+      ageAll(mgr);
+
+      try {
+        mgr.evictIdleViews();
+        expect(projectIds(mgr)).toEqual(["proj-a", "proj-c"]);
+      } finally {
+        release();
+      }
     });
   });
 
