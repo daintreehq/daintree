@@ -92,6 +92,8 @@ export interface CanopyClosedTrashDeps {
 export class CanopyClosedTrash {
   private entries: CanopyTrashEntry[] = [];
   private records = new Map<string, AgentSessionRecord>();
+  /** The journal as last read. */
+  private journal: readonly AgentSessionRecord[] = [];
   /** Each worktree checked, and whether it was gone; unchecked reads as present. */
   private readonly worktreesGone = new Map<string, boolean>();
   private read = false;
@@ -103,7 +105,7 @@ export class CanopyClosedTrash {
   list(): readonly CanopyTrashEntry[] {
     if (!this.read && !this.disposed) {
       this.read = true;
-      this.rebuild();
+      this.rebuild(true);
       this.checkUnseenWorktrees();
     }
     return this.entries;
@@ -131,7 +133,7 @@ export class CanopyClosedTrash {
   refresh(): void {
     if (this.disposed) return;
     this.read = true;
-    if (this.rebuild()) this.deps.onChange();
+    if (this.rebuild(true)) this.deps.onChange();
     this.checkUnseenWorktrees();
   }
 
@@ -146,6 +148,7 @@ export class CanopyClosedTrash {
 
   dispose(): void {
     this.disposed = true;
+    this.journal = [];
     this.entries = [];
     this.records.clear();
     this.worktreesGone.clear();
@@ -170,14 +173,16 @@ export class CanopyClosedTrash {
     ).then((checked) => {
       if (this.disposed) return;
       for (const [path, gone] of checked) this.worktreesGone.set(path, gone);
-      if (this.rebuild()) this.deps.onChange();
+      // The same records, placed again: a worktree check reads no journal.
+      if (this.rebuild(false)) this.deps.onChange();
     });
   }
 
-  private rebuild(): boolean {
+  private rebuild(readJournal: boolean): boolean {
+    if (readJournal) this.journal = this.deps.readRecords();
     const records = new Map<string, AgentSessionRecord>();
     const entries = new Map<string, CanopyTrashEntry>();
-    for (const record of this.deps.readRecords()) {
+    for (const record of this.journal) {
       const gone = record.worktreeId ? this.worktreesGone.get(record.worktreeId) === true : false;
       const entry = endedEntryOf(record, gone);
       if (!entry) continue;

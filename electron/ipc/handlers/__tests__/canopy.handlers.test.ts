@@ -56,6 +56,8 @@ const ptyClient = vi.hoisted(() => ({
 /** Who drives every project: this screen, another one, or nobody (no lease service at all). */
 const lease = vi.hoisted(() => ({
   holder: null as "self" | "other" | null,
+  /** The handle of the endpoint holding the lease, when one is attached. */
+  holderHandle: undefined as number | undefined,
   listeners: new Set<() => void>(),
 }));
 vi.mock("../../../services/DriveLeaseService.js", async (importOriginal) => ({
@@ -65,6 +67,8 @@ vi.mock("../../../services/DriveLeaseService.js", async (importOriginal) => ({
       ? null
       : {
           isDriving: () => lease.holder === "self",
+          getHolderEndpoint: () =>
+            lease.holderHandle === undefined ? null : { handle: lease.holderHandle },
           onChange: (listener: () => void) => {
             lease.listeners.add(listener);
             return () => lease.listeners.delete(listener);
@@ -1249,6 +1253,35 @@ describe("canopy IPC", () => {
         expect(await restoring).toBe("Its agent can't resume.");
         expect(removeFromCanopyTrash).not.toHaveBeenCalled();
         expect(await trash()).toHaveLength(1);
+      });
+
+      it("asks the view that drives the project, never one that would hold the launch", async () => {
+        journaled();
+        // The caller watches the project from this machine; a remote Shell drives it.
+        const watcher = { id: 1, send: vi.fn(), isDestroyed: () => false };
+        const driver = { id: -7, send: vi.fn(), isDestroyed: () => false };
+        state.views = [watcher, driver];
+        lease.holder = "self";
+        lease.holderHandle = -7;
+        try {
+          await trash();
+          const restoring = invoke(
+            CANOPY_METHOD_CHANNELS.restoreTrashed,
+            fakeSender(1),
+            "run-1",
+            target
+          );
+          await vi.waitFor(() => expect(driver.send).toHaveBeenCalled());
+          expect(watcher.send).not.toHaveBeenCalled();
+          const { requestId } = driver.send.mock.calls[0]![1] as { requestId: string };
+          await invoke(CANOPY_METHOD_CHANNELS.resumeSettled, fakeSender(-7), requestId, {
+            runId: "run-9",
+          });
+          expect(await restoring).toEqual({ runId: "run-9" });
+        } finally {
+          lease.holder = null;
+          lease.holderHandle = undefined;
+        }
       });
 
       it("says to open the project when no view of it is open, and resumes nothing", async () => {

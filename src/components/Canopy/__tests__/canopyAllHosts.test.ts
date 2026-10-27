@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CanopyCard, CanopySnapshot } from "@shared/types/ipc/canopy";
+import type { CanopyCard, CanopyRestoreOutcome, CanopySnapshot } from "@shared/types/ipc/canopy";
 import type { FleetRunRow, FleetSnapshot } from "@shared/types/ipc/fleet";
 
 const invoke = vi.hoisted(() => vi.fn());
@@ -18,7 +18,9 @@ const ownCalls = vi.hoisted(() => ({
   refresh: vi.fn(() => Promise.resolve()),
   setRead: vi.fn((): Promise<unknown> => Promise.resolve(null)),
   onTerminalData: vi.fn((_callback: (chunk: unknown) => void) => () => {}),
-  restoreTrashed: vi.fn((runId: string, _target: unknown) => Promise.resolve({ runId })),
+  restoreTrashed: vi.fn((runId: string, _target: unknown): Promise<CanopyRestoreOutcome> =>
+    Promise.resolve({ runId })
+  ),
   removeTrashed: vi.fn((_runId: string, _target: unknown) => Promise.resolve()),
   emptyTrash: vi.fn((targets: unknown[]) => Promise.resolve(targets.length)),
 }));
@@ -314,7 +316,7 @@ describe("createAllHostsRoute", () => {
     });
     expect(invoke).toHaveBeenCalledWith("remote", "canopy:restore-trashed", "t1", target);
     expect(ownCalls.restoreTrashed).not.toHaveBeenCalled();
-    ownCalls.restoreTrashed.mockResolvedValueOnce({ open: { workspaceId: "p9" } } as never);
+    ownCalls.restoreTrashed.mockResolvedValueOnce({ open: { workspaceId: "p9" } });
     expect(await api.restoreTrashed(allHostsKey("own", "t1"), target)).toEqual({
       open: { workspaceId: allHostsKey("own", "p9") },
     });

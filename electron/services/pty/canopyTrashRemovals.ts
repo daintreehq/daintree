@@ -33,20 +33,10 @@ export function noteCanopyTrashRemoval(terminal: AgentSessionTerminal, now = Dat
   }
 }
 
-/** Whether the user removed this run from Canopy's Trash, without spending the note. */
+/** Whether the user removed this run from Canopy's Trash while it was ending. */
 export function hasCanopyTrashRemoval(terminal: AgentSessionTerminal, now = Date.now()): boolean {
   const until = removals.get(keyOf(terminal));
   return until !== undefined && until > now;
-}
-
-/** Whether the run this close came from was removed from Canopy's Trash; the note is spent. */
-export function takeCanopyTrashRemoval(
-  terminal: AgentSessionTerminal | undefined,
-  now = Date.now()
-): boolean {
-  if (!terminal) return false;
-  prune(now);
-  return removals.delete(keyOf(terminal));
 }
 
 export function resetCanopyTrashRemovalsForTests(): void {

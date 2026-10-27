@@ -62,6 +62,15 @@ describe("resumeSessionForPerson", () => {
     expect(spawnedIn.worktreeId).toBe("/repo/feature");
   });
 
+  it("trusts the session's own place where the view has no worktree list to check", async () => {
+    await resumeSessionForPerson({ ...session, worktreeId: "/repo/elsewhere" }, null);
+    expect(resumeSessionIntoPanel).toHaveBeenCalledWith(
+      expect.anything(),
+      { cwd: "/repo/feature/web", worktreeId: "/repo/elsewhere" },
+      expect.anything()
+    );
+  });
+
   it("refuses a session whose worktree this view no longer has, launching nothing", async () => {
     await expect(
       resumeSessionForPerson({ ...session, worktreeId: "/repo/deleted" }, worktrees)

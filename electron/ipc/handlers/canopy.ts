@@ -1128,12 +1128,20 @@ function settleResume(requestId: string, answer: CanopyResumeAnswer): void {
 function askViewToResume(
   ctx: IpcContext,
   workspaceId: string,
-  request: Omit<CanopyResumeRequest, "requestId">
+  request: Omit<CanopyResumeRequest, "requestId" | "answerWithinMs">
 ): Promise<CanopyResumeAnswer> | null {
   const views = getProjectPushTargets(workspaceId, CHANNELS.CANOPY_RESUME_REQUESTED).filter(
     (view) => !view.isDestroyed()
   );
-  const view = views.find((candidate) => candidate.id === ctx.webContentsId) ?? views[0];
+  // A view that doesn't drive the project would hold the launch for control
+  // while reporting a pane: only the driver's, or with a window of this
+  // machine driving, any of this machine's windows.
+  const driver = peekDriveLeaseService()?.getHolderEndpoint(workspaceId)?.handle;
+  const permitted =
+    driver === undefined
+      ? views
+      : views.filter((view) => view.id === driver || (driver > 0 && view.id > 0));
+  const view = permitted.find((candidate) => candidate.id === ctx.webContentsId) ?? permitted[0];
   if (!view) return null;
   if (pendingResumes.size >= MAX_PENDING_RESUMES) {
     throw new AppError({
@@ -1154,6 +1162,7 @@ function askViewToResume(
       try {
         view.send(CHANNELS.CANOPY_RESUME_REQUESTED, {
           requestId,
+          answerWithinMs: RESUME_ANSWER_MS,
           ...request,
         } satisfies CanopyResumeRequest);
       } catch {
@@ -1247,8 +1256,12 @@ function reconciledScope(): string | null {
 
 function syncActive(): void {
   const canopy = getService();
-  // A worktree deleted while no panel looked: its ended runs say so on opening.
-  if (activeViews.size > 0) closedTrash?.recheckWorktrees();
+  // History pruned, or a worktree deleted, while no panel looked: an opening
+  // panel sees the closes as they stand now.
+  if (activeViews.size > 0) {
+    closedTrash?.refresh();
+    closedTrash?.recheckWorktrees();
+  }
   // Opening, scope first, so the scan the opening starts reads the right runs;
   // closing, the close first, so a wider scope starts nothing while it settles.
   if (activeViews.size > 0) {
@@ -1963,6 +1976,8 @@ export const canopyNamespace = defineIpcNamespace({
           return { runId };
         }
         if (isEndingTrash(runId, target)) throw stillClosing();
+        // Read the journal again: a close aged out of history since is not resumed.
+        closedTrash?.refresh();
         const workspaceId = closedTrash?.find(runId, target)?.entry.run.workspaceId;
         if (workspaceId === undefined) throw leftTheTrash();
         if (!drivesProject(ctx, workspaceId)) throw drivenElsewhere(workspaceId);
@@ -2373,9 +2388,10 @@ export function registerCanopyHandlers(): () => void {
     onChange: () => service?.trashChanged(),
     isRemoved: (entry) =>
       hasCanopyTrashRemoval({ id: entry.run.runId, spawnedAt: entry.run.spawnedAt }),
-    // No close of the run reached the journal: its agent had quit before the
-    // pane was closed, or that quit's own capture took the record first. The
-    // incarnation's record becomes the close, so the run stays.
+    // The incarnation's own record becomes the close when none of the close
+    // lands: its agent had quit before the pane was closed, or that quit's own
+    // capture took the record first. Tried as the trash lets the run go, so a
+    // quit straight after keeps it, and again once the close had time to land.
     onSettle: (entry) =>
       adoptCanopyTrashClose(
         { id: entry.run.runId, spawnedAt: entry.run.spawnedAt },

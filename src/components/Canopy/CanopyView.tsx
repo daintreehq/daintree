@@ -982,7 +982,8 @@ function CanopyInbox({
     // than a restore, and its run has a new id.
     return (runId: string | null) => {
       if (runId === null || request !== restoreRequests.current) return;
-      if (shownRunIdRef.current !== from) return;
+      // The run itself, arrived first and shown with nothing else to show, is no choice of the user's.
+      if (shownRunIdRef.current !== from && shownRunIdRef.current !== runId) return;
       setRestored({ runId, from, request });
     };
   }, []);

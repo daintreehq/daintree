@@ -293,6 +293,8 @@ export interface CanopyRemoveRequest {
  */
 export interface CanopyResumeRequest {
   requestId: string;
+  /** How long main waits for the answer: a request still unstarted after that is stale. */
+  answerWithinMs: number;
   session: import("./agentSessionHistory.js").AgentSessionRecord;
 }
 

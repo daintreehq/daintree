@@ -46,6 +46,7 @@ import { readSessionHistory } from "../agentSessionHistory.js";
 import { getLifecycleLedger, disposeLifecycleLedger } from "../lifecycleLedger.js";
 import { events } from "../../events.js";
 import {
+  hasCanopyTrashRemoval,
   noteCanopyTrashRemoval,
   resetCanopyTrashRemovalsForTests,
 } from "../canopyTrashRemovals.js";
@@ -119,6 +120,8 @@ describe("journalAgentSession", () => {
     );
     expect(typeof records.get("removed")?.trash?.removedAt).toBe("number");
     expect(records.get("kept")?.trash?.removedAt).toBeUndefined();
+    // Not spent by the write: a retried write of the same close lands removed too.
+    expect(hasCanopyTrashRemoval({ id: "term-1", spawnedAt: 1 })).toBe(true);
   });
 
   it("never journals a throwaway run, and claims nothing for it (#14445)", async () => {

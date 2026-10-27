@@ -514,8 +514,9 @@ describe("CanopyView Trash", () => {
     });
 
     it("opens the run's project to resume it there when no view of it is open", async () => {
-      const switchProject = vi.fn(async () => {});
-      useProjectStore.setState({ switchProject } as never);
+      const switchProject = vi
+        .spyOn(useProjectStore.getState(), "switchProject")
+        .mockResolvedValue(undefined);
       const canopy = await open([ended("older", 3_600_000)]);
       canopy.restoreTrashed.mockResolvedValueOnce({ open: { workspaceId: "p1" } });
       fireEvent.click(trashBar()!);
@@ -534,6 +535,54 @@ describe("CanopyView Trash", () => {
         },
       });
       expect(useCanopyStore.getState().isOpen).toBe(false);
+    });
+
+    it("goes nowhere when the panel closed before main said where the run is", async () => {
+      const switchProject = vi
+        .spyOn(useProjectStore.getState(), "switchProject")
+        .mockResolvedValue(undefined);
+      const canopy = await open([ended("older", 3_600_000)]);
+      let answer: () => void = () => {};
+      canopy.restoreTrashed.mockImplementationOnce(
+        () =>
+          new Promise<CanopyRestoreOutcome>(
+            (resolve) => (answer = () => resolve({ open: { workspaceId: "p1" } }))
+          )
+      );
+      fireEvent.click(trashBar()!);
+      await act(async () => {
+        fireEvent.click(trashRows()[0]!.querySelector<HTMLElement>("[data-canopy-trash-restore]")!);
+      });
+      await act(async () => {
+        useCanopyStore.setState({ isOpen: false });
+      });
+      await act(async () => answer());
+      expect(switchProject).not.toHaveBeenCalled();
+    });
+
+    it("takes the keyboard to a resumed run that reached the inbox before main answered", async () => {
+      const canopy = await open([ended("older", 3_600_000)], []);
+      let answer: () => void = () => {};
+      canopy.restoreTrashed.mockImplementationOnce(
+        () =>
+          new Promise<CanopyRestoreOutcome>(
+            (resolve) => (answer = () => resolve({ runId: "resumed" }))
+          )
+      );
+      fireEvent.click(trashBar()!);
+      fireEvent.keyDown(trashBar()!, { key: "ArrowDown" });
+      await act(async () => {
+        fireEvent.keyDown(trashRows()[0]!, { key: "Enter" });
+      });
+      // The pane is in the fleet, and its row out of the Trash, before the answer.
+      await act(async () => {
+        useCanopyStore.setState({ snapshot: { ...baseSnapshot, trash: [] } });
+        useFleetSnapshotStore.setState({ snapshot: fleet(["resumed"]) });
+      });
+      await frames();
+      await act(async () => answer());
+      await frames();
+      expect(document.activeElement?.id).toBe("canopy-card-resumed");
     });
 
     it("says its worktree was removed, and offers no Restore", async () => {
@@ -589,6 +638,43 @@ describe("CanopyView Trash", () => {
         { runId: "older", spawnedAt: NOW - 3_600_000, expiresAt: NOW - 3_600_000 + 20_000 },
       ]);
       expect(within(document.body).queryByText("Empty trash?")).toBeNull();
+    });
+
+    it("asks before emptying a trash that holds a live run beside ended ones", async () => {
+      const canopy = await open([TRASH[0]!, ended("older", 3_600_000)]);
+      const options = within(document.body).getByRole("button", {
+        name: "Trash options",
+        hidden: true,
+      });
+      const ask = async () => {
+        await act(async () => {
+          fireEvent.keyDown(options, { key: "Enter" });
+        });
+        const item = await within(document.body).findByRole("menuitem", {
+          name: "Empty trash…",
+          hidden: true,
+        });
+        await act(async () => {
+          fireEvent.click(item);
+        });
+      };
+      await ask();
+      expect(within(document.body).getByText("Empty trash?")).toBeTruthy();
+      expect(document.body.textContent).toContain("1 running agent will be ended");
+      expect(canopy.emptyTrash).not.toHaveBeenCalled();
+      await act(async () => {
+        fireEvent.click(dialogButton("Cancel"));
+      });
+      expect(canopy.emptyTrash).not.toHaveBeenCalled();
+
+      await ask();
+      await act(async () => {
+        fireEvent.click(dialogButton("Empty trash"));
+      });
+      expect(canopy.emptyTrash).toHaveBeenCalledWith([
+        { runId: "newer", spawnedAt: NOW - 3_600_000, expiresAt: TRASH[0]!.expiresAt },
+        { runId: "older", spawnedAt: NOW - 3_600_000, expiresAt: NOW - 3_600_000 + 20_000 },
+      ]);
     });
 
     it("says nothing when a run's process ends and its row stays, ended", async () => {

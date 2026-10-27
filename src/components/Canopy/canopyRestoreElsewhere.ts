@@ -14,13 +14,15 @@ import type { CanopyTrashItem } from "./canopyTrash";
  * host: the window goes to that project, as Go to terminal takes it, and the
  * project asks its host again once it is up, landing on the pane the run
  * comes back in. The panel closes with the switch, as it does for Go to
- * terminal; on another host it closes once the window lands there.
+ * terminal; on another host it closes once the window lands there. A panel
+ * closed, or showing another host, since the restore was asked goes nowhere.
  */
 export function restoreInItsProject(
   item: Pick<CanopyTrashItem, "runId" | "spawnedAt" | "expiresAt" | "row">,
   shown: { hostId: HostId | null; ownHostId: HostId },
   panel: { closeForTerminal: (runId: string) => void; stillShows: () => boolean }
 ): void {
+  if (!panel.stillShows()) return;
   const place = placeOf(
     { runId: item.runId, workspaceId: item.row.run.workspaceId },
     shown.hostId,

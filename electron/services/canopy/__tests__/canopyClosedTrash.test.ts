@@ -120,11 +120,16 @@ describe("CanopyClosedTrash", () => {
     return { trash, onChange, readRecords, records };
   }
 
-  it("reads the journal only once asked, and again only on refresh", () => {
-    const { trash, readRecords } = setup([close("t1", 1_000)]);
+  it("reads the journal only once asked, and again only on refresh", async () => {
+    const { trash, readRecords } = setup([close("t1", 1_000)], (path) => path === "/repo/wt");
     expect(readRecords).not.toHaveBeenCalled();
     expect(trash.list().map((entry) => entry.run.runId)).toEqual(["t1"]);
+    // Its worktree's check lands, and places the same records again.
+    await vi.waitFor(() => expect(trash.list()[0]!.ended).toEqual({ worktreeRemoved: true }));
     trash.list();
+    trash.recheckWorktrees();
+    await Promise.resolve();
+    await Promise.resolve();
     expect(readRecords).toHaveBeenCalledTimes(1);
     trash.refresh();
     expect(readRecords).toHaveBeenCalledTimes(2);

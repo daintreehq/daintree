@@ -28,16 +28,19 @@ export class ResumeWorktreeGoneError extends Error {
  *  3. **Once** — {@link resumeSessionIntoPanel} focuses a pane already running
  *     the session, and overlapping resumes share one launch.
  *
- * `worktrees` is this view's worktree list, id to path. Throws when it can't
- * resume; reporting that is the caller's.
+ * `worktrees` is this view's worktree list, id to path, or null where the
+ * view has none to offer (a scratch, a project with no worktrees, one whose
+ * list hasn't come): the record's own place is then trusted, and the caller
+ * must already know it is there. Throws when it can't resume; reporting that
+ * is the caller's.
  */
 export async function resumeSessionForPerson(
   session: AgentSessionRecord,
-  worktrees: ReadonlyMap<string, string>
+  worktrees: ReadonlyMap<string, string> | null
 ): Promise<ResumeSessionOutcome> {
   const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
   const currentProject = useProjectStore.getState().currentProject;
-  const activePath = activeWorktreeId ? worktrees.get(activeWorktreeId) : undefined;
+  const activePath = activeWorktreeId ? worktrees?.get(activeWorktreeId) : undefined;
   const defaultTerminalCwd = activePath ?? currentProject?.path ?? "";
 
   // Live worktree paths let a null-worktree record re-home by cwd, keeping the
@@ -45,9 +48,9 @@ export async function resumeSessionForPerson(
   const target = resolveResumeLaunchTarget(
     session,
     { defaultTerminalCwd, activeWorktreeId },
-    [...worktrees].map(([id, path]) => ({ id, path }))
+    worktrees ? [...worktrees].map(([id, path]) => ({ id, path })) : undefined
   );
-  if (target.worktreeId && !worktrees.has(target.worktreeId)) {
+  if (worktrees && target.worktreeId && !worktrees.has(target.worktreeId)) {
     throw new ResumeWorktreeGoneError();
   }
 

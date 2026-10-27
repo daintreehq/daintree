@@ -3,16 +3,16 @@ import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CanopyResumeRequest } from "@shared/types/ipc/canopy";
 
-const { onResumeRequested, resumeSettled, resumeSessionForPerson, whenWorktreesKnown, store } =
+const { onResumeRequested, resumeSettled, resumeSessionForPerson, whenWorktreesKnown, view } =
   vi.hoisted(() => ({
     onResumeRequested: vi.fn(),
     resumeSettled: vi.fn(async () => {}),
     resumeSessionForPerson: vi.fn(),
     whenWorktreesKnown: vi.fn(async () => true),
-    store: {
-      getState: () => ({
-        worktrees: new Map([["/repo/wt", { id: "/repo/wt", path: "/repo/wt" }]]),
-      }),
+    view: {
+      worktrees: new Map<string, { id: string; path: string }>(),
+      isInitialized: true,
+      isLoading: false,
     },
   }));
 
@@ -22,7 +22,10 @@ vi.stubGlobal("window", {
 });
 vi.mock("@/services/agentResumeForPerson", () => ({ resumeSessionForPerson }));
 vi.mock("@/services/worktreeLanding", () => ({ whenWorktreesKnown }));
-vi.mock("@/hooks/useWorktreeStore", () => ({ useWorktreeStoreApi: () => store }));
+vi.mock("@/store/viewWorkspaceId", () => ({ getViewWorkspaceId: () => "p1" }));
+vi.mock("@/hooks/useWorktreeStore", () => ({
+  useWorktreeStoreApi: () => ({ getState: () => view }),
+}));
 
 import { useCanopyResumeRequests } from "../useCanopyResumeRequests";
 
@@ -35,13 +38,26 @@ const session = {
   savedAt: 1,
 };
 
+function asked(requestId: string, answerWithinMs = 30_000): CanopyResumeRequest {
+  return { requestId, answerWithinMs, session };
+}
+
 describe("useCanopyResumeRequests", () => {
   let request: (payload: CanopyResumeRequest) => void = () => {};
   const unsubscribe = vi.fn();
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.useRealTimers();
+    view.worktrees = new Map([["/repo/wt", { id: "/repo/wt", path: "/repo/wt" }]]);
+    view.isInitialized = true;
+    view.isLoading = false;
     whenWorktreesKnown.mockResolvedValue(true);
+    resumeSessionForPerson.mockResolvedValue({
+      terminalId: "term-9",
+      outcome: "created",
+      worktreeId: "/repo/wt",
+    });
     onResumeRequested.mockImplementation((callback: (payload: CanopyResumeRequest) => void) => {
       request = callback;
       return unsubscribe;
@@ -49,20 +65,41 @@ describe("useCanopyResumeRequests", () => {
   });
 
   it("holds a request until the view has hydrated, then answers with the pane that runs it", async () => {
-    resumeSessionForPerson.mockResolvedValue({
-      terminalId: "term-9",
-      outcome: "created",
-      worktreeId: "/repo/wt",
-    });
     const { rerender } = renderHook(({ loaded }) => useCanopyResumeRequests(loaded), {
       initialProps: { loaded: false },
     });
-    act(() => request({ requestId: "r1", session }));
+    act(() => request(asked("r1")));
     expect(resumeSessionForPerson).not.toHaveBeenCalled();
 
     rerender({ loaded: true });
     await vi.waitFor(() => expect(resumeSettled).toHaveBeenCalledWith("r1", { runId: "term-9" }));
-    // Resumed against this view's own worktrees, by id and path.
+    // The view's own worktree list, by id and path, and no wait for one it has.
+    expect(resumeSessionForPerson).toHaveBeenCalledWith(
+      session,
+      new Map([["/repo/wt", "/repo/wt"]])
+    );
+    expect(whenWorktreesKnown).not.toHaveBeenCalled();
+  });
+
+  it("launches from the session's own place in a view with no worktree list, waiting for none", async () => {
+    view.worktrees = new Map();
+    renderHook(() => useCanopyResumeRequests(true));
+    act(() => request(asked("r2")));
+    await vi.waitFor(() => expect(resumeSettled).toHaveBeenCalledWith("r2", { runId: "term-9" }));
+    expect(resumeSessionForPerson).toHaveBeenCalledWith(session, null);
+    expect(whenWorktreesKnown).not.toHaveBeenCalled();
+  });
+
+  it("gives a project still opening a moment for its first worktree list", async () => {
+    view.worktrees = new Map();
+    view.isLoading = true;
+    whenWorktreesKnown.mockImplementation(async () => {
+      view.worktrees = new Map([["/repo/wt", { id: "/repo/wt", path: "/repo/wt" }]]);
+      return true;
+    });
+    renderHook(() => useCanopyResumeRequests(true));
+    act(() => request(asked("r3")));
+    await vi.waitFor(() => expect(resumeSettled).toHaveBeenCalledWith("r3", { runId: "term-9" }));
     expect(resumeSessionForPerson).toHaveBeenCalledWith(
       session,
       new Map([["/repo/wt", "/repo/wt"]])
@@ -74,24 +111,27 @@ describe("useCanopyResumeRequests", () => {
       new Error("That session's worktree has been removed.")
     );
     renderHook(() => useCanopyResumeRequests(true));
-    act(() => request({ requestId: "r2", session }));
+    act(() => request(asked("r4")));
     await vi.waitFor(() =>
-      expect(resumeSettled).toHaveBeenCalledWith("r2", {
+      expect(resumeSettled).toHaveBeenCalledWith("r4", {
         error: "That session's worktree has been removed.",
       })
     );
   });
 
-  it("resumes nothing while the view never learns its worktrees, and says so", async () => {
-    whenWorktreesKnown.mockResolvedValue(false);
-    renderHook(() => useCanopyResumeRequests(true));
-    act(() => request({ requestId: "r3", session }));
-    await vi.waitFor(() =>
-      expect(resumeSettled).toHaveBeenCalledWith("r3", {
-        error: "The project's worktrees didn't load in time.",
-      })
-    );
+  it("never starts a request main has stopped waiting for", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const { rerender } = renderHook(({ loaded }) => useCanopyResumeRequests(loaded), {
+      initialProps: { loaded: false },
+    });
+    act(() => request(asked("r5", 30_000)));
+    vi.setSystemTime(Date.now() + 30_000);
+    rerender({ loaded: true });
+    await act(async () => {
+      await Promise.resolve();
+    });
     expect(resumeSessionForPerson).not.toHaveBeenCalled();
+    expect(resumeSettled).not.toHaveBeenCalled();
   });
 
   it("stops listening when the view goes", () => {

@@ -32,6 +32,7 @@ import {
 } from "../../window/webContentsRegistry.js";
 import { getWindowRegistry } from "../../window/windowRef.js";
 import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
+import { thawThenSend } from "../../utils/thawThenSend.js";
 import { completeLocalProjectActivation } from "../../window/localProjectActivation.js";
 import {
   claimProjectActivation,
@@ -147,12 +148,21 @@ function createViewSink(hostOf: (webContentsId: number) => HostId | null): ViewS
     send(webContentsId, channel, args) {
       const wc = resolveLiveWebContents(webContentsId);
       if (!wc) return false;
-      try {
-        wc.send(channel, ...args);
+      const deliver = () => {
+        try {
+          wc.send(channel, ...args);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      // The host waits on this view's answer to a resume, and a cached view
+      // may be frozen: thawed first, as the host thaws its own.
+      if (channel === CHANNELS.CANOPY_RESUME_REQUESTED) {
+        thawThenSend(wc, () => !wc.isDestroyed(), deliver);
         return true;
-      } catch {
-        return false;
       }
+      return deliver();
     },
     watch(webContentsId, onGone) {
       const wc = resolveLiveWebContents(webContentsId);

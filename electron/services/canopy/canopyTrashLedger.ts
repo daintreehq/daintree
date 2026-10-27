@@ -34,9 +34,10 @@ export interface CanopyTrashLedgerDeps {
   /** The list changed: Canopy's snapshot carries it. */
   onChange: () => void;
   /**
-   * The trash let a run go and no close of it reached the journal in the time
-   * one takes to land. Resolves whether the caller kept it some other way (a
-   * session the journal held from before the close); the run leaves either way.
+   * The trash let a run go: once as it does, and again if no close of it
+   * reached the journal in the time one takes to land. The caller may keep it
+   * some other way (a session the journal held from before the close); after
+   * the second, the run leaves the ledger either way.
    */
   onSettle?: (entry: CanopyTrashEntry) => Promise<boolean> | boolean;
   /** The user took this run out of Canopy's Trash: when the trash lets it go, it goes. */
@@ -146,6 +147,9 @@ export class CanopyTrashLedger {
     timer.unref?.();
     this.timers.set(id, timer);
     this.deps.onChange();
+    void Promise.resolve()
+      .then(() => this.deps.onSettle?.(ended))
+      .catch(() => {});
   }
 
   /**

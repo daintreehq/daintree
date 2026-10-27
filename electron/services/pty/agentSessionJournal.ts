@@ -2,7 +2,7 @@ import { persistAgentSession, type AgentSessionRecord } from "./agentSessionHist
 import { isClaudeSessionWithoutTranscript } from "../claude/ClaudeSessionStore.js";
 import { getAgentSessionRetentionDays } from "./agentSessionRetention.js";
 import { getLifecycleLedger } from "./lifecycleLedger.js";
-import { takeCanopyTrashRemoval } from "./canopyTrashRemovals.js";
+import { hasCanopyTrashRemoval } from "./canopyTrashRemovals.js";
 import { events } from "../events.js";
 import { createLogger } from "../../utils/logger.js";
 import { isHostThrowawayWorkspaceId } from "../../../shared/config/hostThrowaway.js";
@@ -103,8 +103,10 @@ export async function journalAgentSessionRecord(
 
   // Removed from Canopy's Trash while its process was still ending: the close
   // lands already out of the Trash, so no later read can bring the row back.
+  // The note is not spent here: a write that fails and is retried lands the
+  // same way.
   const landing =
-    record.trash && takeCanopyTrashRemoval(record.terminal)
+    record.trash && record.terminal && hasCanopyTrashRemoval(record.terminal)
       ? { ...record, trash: { ...record.trash, removedAt: Date.now() } }
       : record;
 

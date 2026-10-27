@@ -8,6 +8,7 @@ import { activateAssistantLane } from "@/services/assistantSubject";
 import { landOnWorktree } from "@/services/worktreeLanding";
 import { useWorktreeStoreApi } from "@/hooks/useWorktreeStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
 /**
  * Cross-project focus intent receiver.
@@ -31,7 +32,10 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 export function useFocusOnActivateIntent(isStateLoaded: boolean): void {
   const [pending, setPending] = useState<ProjectFocusOnActivateIntent | null>(null);
   const worktreeStore = useWorktreeStoreApi();
-  /** A worktree landing still waiting on the list: a newer intent or unmount cancels it. */
+  /**
+   * A landing still waiting (on the worktree list, or on a restore's pane): a
+   * newer intent or unmount cancels it.
+   */
   const cancelLanding = useRef<(() => void) | null>(null);
 
   useEffect(() => {
@@ -83,24 +87,33 @@ export function useFocusOnActivateIntent(isStateLoaded: boolean): void {
     }
     if (pending.intent === "restore-trashed") {
       // This project was opened to resume a run from Canopy's Trash: its
-      // host resumes it in this view now, and the pane it lands in is shown.
+      // host resumes it in this view now, and the pane it lands in is shown,
+      // unless a newer destination came meanwhile.
       const { runId, spawnedAt, expiresAt } = pending;
-      void window.electron.canopy
-        .restoreTrashed(runId, { spawnedAt, expiresAt })
-        .then(async (outcome) => {
-          if (!("runId" in outcome)) throw new Error("This project's view isn't ready.");
-          await actionService.dispatch("panel.focus", { panelId: outcome.runId });
-        })
-        .catch((error: unknown) => {
-          // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-          notify({
-            type: "error",
-            title: "Couldn't restore terminal",
-            message: formatErrorMessage(error, "It has left the trash."),
-            context: { eventKind: "agent" },
-            replaceKey: "focus-on-activate:restore-trashed",
-          });
-        });
+      let superseded = false;
+      cancelLanding.current = () => {
+        superseded = true;
+      };
+      safeFireAndForget(
+        window.electron.canopy
+          .restoreTrashed(runId, { spawnedAt, expiresAt })
+          .then(async (outcome) => {
+            if (!("runId" in outcome)) throw new Error("This project's view isn't ready.");
+            if (superseded) return;
+            await actionService.dispatch("panel.focus", { panelId: outcome.runId });
+          })
+          .catch((error: unknown) => {
+            // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+            notify({
+              type: "error",
+              title: "Couldn't restore terminal",
+              message: formatErrorMessage(error, "It has left the trash."),
+              context: { eventKind: "agent" },
+              replaceKey: "focus-on-activate:restore-trashed",
+            });
+          }),
+        { context: "Restoring a run from Canopy's Trash" }
+      );
       return;
     }
     if (pending.intent === "focus-worktree") {
