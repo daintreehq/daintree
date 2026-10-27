@@ -4,6 +4,11 @@ import { isActiveVoiceSession, type VoiceLiveSessionUpdate } from "@shared/types
 // Capture suspend/wake callbacks registered by the service.
 const suspendCallbacks = vi.hoisted(() => [] as Array<() => void>);
 
+const focusDictationComposer = vi.hoisted(() => vi.fn());
+// The real one reads the DOM, which these suites stub in part; its own suite
+// is voiceComposerFocus.test.tsx.
+vi.mock("@/services/voiceComposerFocus", () => ({ focusDictationComposer }));
+
 vi.mock("@/store/voiceRecordingStore", () => {
   const state = {
     activeTarget: null as { panelId: string } | null,
@@ -782,6 +787,186 @@ describe("isActiveVoiceSession helper", () => {
     // press during arming as continuing the start, not stopping a session
     // that hasn't begun.
     expect(isActiveVoiceSession("arming")).toBe(false);
+  });
+});
+
+describe("VoiceRecordingService — the keyboard follows a start (#14770)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    suspendCallbacks.length = 0;
+    focusDictationComposer.mockClear();
+  });
+
+  afterEach(() => {
+    // The store mock is shared with the suites after this one, and one of them
+    // compares the first arming call with its own start.
+    if (arranged) {
+      arranged.state.status = "idle";
+      arranged.state.activeTarget = null;
+      arranged.state.pendingTarget = null;
+      arranged.state.lockedTarget = null;
+      for (const fn of arranged.calls) fn.mockClear();
+      arranged = null;
+    }
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  type VoiceState = {
+    status: string;
+    activeTarget: { panelId: string } | null;
+    pendingTarget: { panelId: string } | null;
+    lockedTarget: { panelId: string } | null;
+  };
+  let arranged: { state: VoiceState; calls: Mock[] } | null = null;
+
+  async function arrange(recordingMode: "toggle" | "push-to-talk" = "toggle") {
+    const electron = buildElectronStub();
+    electron.voiceInput.getSettings.mockResolvedValue({
+      enabled: true,
+      openaiApiKey: "sk-key",
+      correctionEnabled: false,
+      recordingMode,
+    });
+    setupGlobals(electron);
+
+    const panelState: { focusedId: string | null; panelsById: Record<string, unknown> } =
+      Reflect.get(await import("@/store/panelStore"), "__state");
+    panelState.focusedId = "panel-1";
+    panelState.panelsById = {
+      "panel-1": { id: "panel-1", title: "One", location: "grid", launchAgentId: "claude" },
+      "panel-2": { id: "panel-2", title: "Two", location: "grid", launchAgentId: "claude" },
+    };
+    const voiceState: VoiceState = Reflect.get(
+      await import("@/store/voiceRecordingStore"),
+      "__state"
+    );
+    const { setArming, recordRecentTarget } = (
+      await import("@/store/voiceRecordingStore")
+    ).useVoiceRecordingStore.getState();
+    arranged = { state: voiceState, calls: [vi.mocked(setArming), vi.mocked(recordRecentTarget)] };
+    voiceState.status = "idle";
+    voiceState.activeTarget = null;
+    voiceState.pendingTarget = null;
+    voiceState.lockedTarget = null;
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const startSpy = vi.spyOn(voiceRecordingService, "start").mockResolvedValue();
+    const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+    voiceRecordingService.initialize();
+    await vi.waitFor(() => {
+      expect(electron.voiceInput.getSettings).toHaveBeenCalled();
+    });
+    return { voiceRecordingService, voiceState, startSpy, stopSpy };
+  }
+
+  // The mic button in a pane's input bar.
+  it("asks for the target's composer when a toggle starts dictation, before the mic opens", async () => {
+    const { voiceRecordingService, startSpy } = await arrange();
+
+    await voiceRecordingService.toggle({ panelId: "panel-1" });
+
+    expect(focusDictationComposer).toHaveBeenCalledTimes(1);
+    expect(focusDictationComposer).toHaveBeenCalledWith("panel-1");
+    expect(focusDictationComposer.mock.invocationCallOrder[0]).toBeLessThan(
+      startSpy.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it("asks for it from the dictation key", async () => {
+    const { voiceRecordingService, startSpy } = await arrange();
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(startSpy).toHaveBeenCalledTimes(1);
+    expect(focusDictationComposer).toHaveBeenCalledTimes(1);
+    expect(focusDictationComposer).toHaveBeenCalledWith("panel-1");
+  });
+
+  it("asks for it from a held key in push-to-talk", async () => {
+    const { voiceRecordingService, startSpy } = await arrange("push-to-talk");
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(startSpy).toHaveBeenCalledTimes(1);
+    expect(focusDictationComposer).toHaveBeenCalledTimes(1);
+    expect(focusDictationComposer).toHaveBeenCalledWith("panel-1");
+    expect(focusDictationComposer.mock.invocationCallOrder[0]).toBeLessThan(
+      startSpy.mock.invocationCallOrder[0]!
+    );
+  });
+
+  // The resolved target, not the selected pane: the two differ for the assistant.
+  it("names the resolved target in push-to-talk", async () => {
+    const { voiceRecordingService, startSpy } = await arrange("push-to-talk");
+    const { isAssistantFocused } = await import("@/store/macroFocusStore");
+    const helpState: { terminalId: string | null } = Reflect.get(
+      await import("@/store/helpPanelStore"),
+      "__state"
+    );
+    vi.mocked(isAssistantFocused).mockReturnValue(true);
+    helpState.terminalId = "assistant-term-1";
+    const panelState: { panelsById: Record<string, unknown> } = Reflect.get(
+      await import("@/store/panelStore"),
+      "__state"
+    );
+    panelState.panelsById["assistant-term-1"] = { id: "assistant-term-1", location: "background" };
+
+    try {
+      await voiceRecordingService.toggleFocusedPanel();
+    } finally {
+      vi.mocked(isAssistantFocused).mockReturnValue(false);
+      helpState.terminalId = null;
+    }
+
+    expect(startSpy).toHaveBeenCalledWith(expect.objectContaining({ panelId: "assistant-term-1" }));
+    expect(focusDictationComposer).toHaveBeenCalledTimes(1);
+    expect(focusDictationComposer).toHaveBeenCalledWith("assistant-term-1");
+  });
+
+  // The helper decides what a pane other than the selected one gets; the
+  // service names the pane dictation goes to, not the one holding focus.
+  it("names the locked target's pane rather than the focused one", async () => {
+    const { voiceRecordingService, voiceState } = await arrange();
+    voiceState.lockedTarget = { panelId: "panel-2" };
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(focusDictationComposer).toHaveBeenCalledTimes(1);
+    expect(focusDictationComposer).toHaveBeenCalledWith("panel-2");
+  });
+
+  it("leaves the keyboard alone when the press stops the session", async () => {
+    const { voiceRecordingService, voiceState, stopSpy } = await arrange();
+    voiceState.status = "recording";
+    voiceState.activeTarget = { panelId: "panel-1" };
+
+    await voiceRecordingService.toggle({ panelId: "panel-1" });
+
+    expect(stopSpy).toHaveBeenCalledTimes(1);
+    expect(focusDictationComposer).not.toHaveBeenCalled();
+  });
+
+  it("leaves the keyboard alone when the press stops a session from the key", async () => {
+    const { voiceRecordingService, voiceState, stopSpy } = await arrange("push-to-talk");
+    voiceState.status = "recording";
+    voiceState.activeTarget = { panelId: "panel-1" };
+
+    await voiceRecordingService.toggleFocusedPanel();
+
+    expect(stopSpy).toHaveBeenCalledTimes(1);
+    expect(focusDictationComposer).not.toHaveBeenCalled();
+  });
+
+  it("leaves the keyboard alone when the press cancels the arming window", async () => {
+    const { voiceRecordingService, voiceState, startSpy } = await arrange();
+    voiceState.status = "arming";
+    voiceState.activeTarget = { panelId: "panel-1" };
+
+    await voiceRecordingService.toggle({ panelId: "panel-1" });
+
+    expect(startSpy).not.toHaveBeenCalled();
+    expect(focusDictationComposer).not.toHaveBeenCalled();
   });
 });
 

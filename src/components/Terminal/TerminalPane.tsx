@@ -133,6 +133,7 @@ import {
   isFocusEpochCurrent,
   paneSurfaceHoldingFocus,
   requestPaneFocus,
+  requestedForDictation,
   requestedPaneSurface,
 } from "./paneFocusRequest";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
@@ -1232,7 +1233,14 @@ function TerminalPaneComponent({
     // surface, or a request still current for this pane, gets that one
     // instead; a held pane has only its recovery controls.
     return registerPanelFocusHandler(id, (surface) => {
+      // Dictation asks for the composer by name and nothing else. A recovery
+      // control or the terminal isn't one: Enter after dictating would press the
+      // control or reach the agent's prompt. The ask stays current, so the
+      // composer takes it once it can; any other way in still falls back as
+      // before (#14770).
+      const forDictation = surface === "hybridInput" && requestedForDictation(id);
       if (isHeldPane) {
+        if (forDictation) return false;
         const gate = recoveryGateRef.current;
         if (!gate) return false;
         (gate.querySelector<HTMLElement>("button:not([disabled])") ?? gate).focus();
@@ -1249,6 +1257,9 @@ function TerminalPaneComponent({
       // An xterm that already owns the keyboard while holding a selection is a
       // completed handoff — the pane has focus, just not on the input bar.
       if (action === "preserve") return true;
+      // A requested hybrid input resolves to the terminal only when the bar
+      // can't take the keyboard now.
+      if (forDictation && action === "xterm") return false;
       if (action === "hybridInput") {
         // The bar is rendered but its editor may still be lazy-loading. Decline
         // rather than falling through to xterm: the pane's own pass keeps a
