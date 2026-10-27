@@ -36,6 +36,8 @@ export interface VadObservation {
   errors: number;
   /** Children that exited before the provider asked them to. */
   unexpectedExits: number;
+  /** Children still running when the session's teardown gave up on them. */
+  leftRunning?: number;
 }
 
 export interface SessionObservation {
@@ -83,6 +85,7 @@ export function collectSegments(observation: SessionObservation): {
   const vad = observation.vad;
   if (vad.forks === 0 || vad.ready === 0) anomalies.add("VAD never ready");
   if (vad.errors > 0 || vad.unexpectedExits > 0) anomalies.add("VAD failed");
+  if ((vad.leftRunning ?? 0) > 0) anomalies.add("VAD outlived the session");
 
   const previews = new Map<string, { text: string; deltas: number }>();
   const segments: Segment[] = [];
@@ -291,13 +294,21 @@ export function scoreSession(
   // Where each span's first final word sits in the session's joined words.
   const spanStarts: number[] = [];
   segments.forEach((segment, index) => {
-    const preview = normaliseWords(segment.preview);
-    const final = normaliseWords(segment.final);
-    if (preview.length === 0 && final.length === 0) {
+    // Silence is judged literally: the replay normaliser also empties a
+    // segment of nothing but spoken symbols, which still has words to compare.
+    const literalPreview = literalWords(segment.preview);
+    const literalFinal = literalWords(segment.final);
+    if (literalPreview.length === 0 && literalFinal.length === 0) {
       silentSegments++;
       return;
     }
+    const literal = disagreementSpans(literalPreview, literalFinal);
+    if (literal.length > 0) segmentsDisagreeingLiteral++;
+    literalDisagreeingWords += literal.reduce((n, span) => n + span.finalWords.length, 0);
+
     if (segment.preview.trim() === segment.final.trim()) segmentsVerbatim++;
+    const preview = normaliseWords(segment.preview);
+    const final = normaliseWords(segment.final);
     const kinds = new Array<FinalWord["kind"]>(final.length).fill(null);
     const segmentSpans = disagreementSpans(preview, final);
     if (segmentSpans.length > 0) segmentsDisagreeing++;
@@ -308,10 +319,6 @@ export function scoreSession(
       for (let k = 0; k < span.finalWords.length; k++) kinds[span.finalStart + k] = span.kind;
     }
     final.forEach((word, k) => words.push({ word, segment: index, wrong: false, kind: kinds[k]! }));
-
-    const literal = disagreementSpans(literalWords(segment.preview), literalWords(segment.final));
-    if (literal.length > 0) segmentsDisagreeingLiteral++;
-    literalDisagreeingWords += literal.reduce((n, span) => n + span.finalWords.length, 0);
   });
 
   const referenceWords = normaliseWords(reference);

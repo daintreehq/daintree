@@ -369,12 +369,12 @@ async function dictate(
     };
   } finally {
     provider.destroy();
-    const left = await host.waitForRetiringVadProcesses(host.retireWaitMs);
+    // Recorded on the observation already returned, which shares `vad`: the
+    // session is kept and excluded, and the run stops after saving it.
+    vad.leftRunning = await host.waitForRetiringVadProcesses(host.retireWaitMs);
     host.vadEvents.off("fork", onFork);
     host.vadEvents.off("message", onMessage);
     host.vadEvents.off("exit", onExit);
-    // A VAD still running would share the next session's CPU and socket timing.
-    if (left > 0) throw new Error(`${left} VAD process(es) outlived the session`);
   }
 }
 
@@ -561,9 +561,10 @@ async function main(): Promise<number> {
   });
 
   // Passes outermost, so a run cut short has every clip it reached equally often.
-  for (let pass = 1; pass <= options.repeats && !interrupted; pass++) {
+  let stopped = false;
+  for (let pass = 1; pass <= options.repeats && !interrupted && !stopped; pass++) {
     for (const prepared of seededShuffle(clips, options.seed + pass)) {
-      if (interrupted) break;
+      if (interrupted || stopped) break;
       const session = await dictate(host, prepared, samples.get(prepared.clip.id)!, pass, settings);
       run.sessions.push(session);
       save();
@@ -572,10 +573,15 @@ async function main(): Promise<number> {
       console.error(
         `[voice-preview-final] pass ${pass} · ${prepared.clip.id}: ${completions} segment(s), VAD ${session.vad.ready > 0 ? "ready" : "not ready"}${errors ? `, ${errors} error(s)` : ""}${session.startResult.ok ? "" : ", start failed"}`
       );
+      // A VAD still running would share the next session's CPU and timing.
+      if (session.vad.leftRunning) {
+        console.error(`[voice-preview-final] a VAD process outlived its session; stopping`);
+        stopped = true;
+      }
     }
   }
 
-  run.complete = !interrupted;
+  run.complete = !interrupted && !stopped;
   run.finishedAt = new Date().toISOString();
   const markdownPath = jsonPath.replace(/\.json$/, ".md");
   run.summary = writeReport(run, markdownPath);
@@ -584,7 +590,7 @@ async function main(): Promise<number> {
   console.error(
     `\n[voice-preview-final] wrote ${path.relative(REPO_ROOT, jsonPath)} and .md (both quote transcripts; keep them in .tmp/)`
   );
-  return interrupted ? 130 : 0;
+  return interrupted ? 130 : stopped ? 1 : 0;
 }
 
 main().then(

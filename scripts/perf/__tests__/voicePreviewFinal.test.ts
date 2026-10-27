@@ -160,6 +160,8 @@ describe("collectSegments", () => {
     expect(reasons({ vad: vad({ ready: 0 }) })).toEqual(["VAD never ready"]);
     expect(reasons({ vad: vad({ errors: 1 }) })).toEqual(["VAD failed"]);
     expect(reasons({ vad: vad({ unexpectedExits: 1 }) })).toEqual(["VAD failed"]);
+    expect(reasons({ vad: vad({ leftRunning: 0 }) })).toEqual([]);
+    expect(reasons({ vad: vad({ leftRunning: 1 }) })).toEqual(["VAD outlived the session"]);
   });
 
   it("flags a session that produced no segment", () => {
@@ -391,6 +393,16 @@ describe("scoreRun and the report", () => {
     expect(summary.silentSegments).toBe(1);
     expect(summary.segmentsDisagreeing).toBe(1);
     expect(summary.segmentsVerbatim).toBe(0);
+  });
+
+  it("judges silence literally, so spoken symbols still count as words", () => {
+    // The replay normaliser drops both words; the literal one keeps them apart.
+    const score = scoreSession({ clip: "c", pass: 1 }, [segment(" dot", "slash")], "slash");
+    expect(score.silentSegments).toBe(0);
+    expect(score.segments).toBe(1);
+    expect(score.segmentsDisagreeing).toBe(0);
+    expect(score.segmentsDisagreeingLiteral).toBe(1);
+    expect(score.literalDisagreeingWords).toBe(1);
   });
 
   it("scores clean sessions and lists the rest with their reasons", () => {
