@@ -18,6 +18,8 @@ const ownCalls = vi.hoisted(() => ({
   refresh: vi.fn(() => Promise.resolve()),
   setRead: vi.fn((): Promise<unknown> => Promise.resolve(null)),
   onTerminalData: vi.fn((_callback: (chunk: unknown) => void) => () => {}),
+  restoreTrashed: vi.fn(() => Promise.resolve()),
+  emptyTrash: vi.fn((targets: unknown[]) => Promise.resolve(targets.length)),
 }));
 
 vi.mock("@/clients/canopyHostClient", () => ({
@@ -241,6 +243,24 @@ describe("mergeHostReadings", () => {
     expect([...merged.offRuns]).toEqual([allHostsKey("a", "r1")]);
   });
 
+  it("keys every host's trash as the fleet's runs are, newest first across hosts", () => {
+    const entry = (runId: string, trashedAt: number) => ({
+      run: run(runId, "ws"),
+      trashedAt,
+      expiresAt: trashedAt + 20_000,
+    });
+    const { canopy: merged } = mergeHostReadings([
+      { hostId: "a", canopy: canopy({ trash: [entry("t1", 10)] }), fleet: null, error: null },
+      // The same run id on another host, trashed later; an older host has no trash field.
+      { hostId: "b", canopy: canopy({ trash: [entry("t1", 20)] }), fleet: null, error: null },
+      { hostId: "c", canopy: canopy(), fleet: null, error: null },
+    ]);
+    expect(merged?.trash?.map((item) => [item.run.runId, item.run.workspaceId])).toEqual([
+      [allHostsKey("b", "t1"), allHostsKey("b", "ws")],
+      [allHostsKey("a", "t1"), allHostsKey("a", "ws")],
+    ]);
+  });
+
   it("has no snapshots until some host has answered", () => {
     expect(mergeHostReadings([{ hostId: "a", canopy: null, fleet: null, error: null }])).toEqual({
       canopy: null,
@@ -279,6 +299,32 @@ describe("createAllHostsRoute", () => {
     expect(ownCalls.archive).not.toHaveBeenCalled();
     await api.archive(allHostsKey("own", "t1"), { spawnedAt: 8 });
     expect(ownCalls.archive).toHaveBeenCalledWith("t1", { spawnedAt: 8 });
+  });
+
+  it("restores and empties a trash on the host holding each run, with bare ids", async () => {
+    invoke.mockResolvedValue(1);
+    const { api } = createAllHostsRoute("own", ["own", "remote"]);
+    const target = { spawnedAt: 7, expiresAt: 99 };
+    await api.restoreTrashed(allHostsKey("remote", "t1"), target);
+    expect(invoke).toHaveBeenCalledWith("remote", "canopy:restore-trashed", "t1", target);
+    expect(ownCalls.restoreTrashed).not.toHaveBeenCalled();
+
+    const removed = await api.emptyTrash([
+      { runId: allHostsKey("own", "t1"), ...target },
+      { runId: allHostsKey("remote", "t2"), ...target },
+    ]);
+    expect(ownCalls.emptyTrash).toHaveBeenCalledWith([{ runId: "t1", ...target }]);
+    expect(invoke).toHaveBeenCalledWith("remote", "canopy:empty-trash", [{ runId: "t2", ...target }]);
+    expect(removed).toBe(2);
+
+    // A host that refuses fails the whole: nothing is reported done that wasn't.
+    invoke.mockRejectedValueOnce(new Error("offline"));
+    await expect(
+      api.emptyTrash([{ runId: allHostsKey("remote", "t2"), ...target }])
+    ).rejects.toThrow("offline");
+    await expect(
+      api.emptyTrash([{ runId: allHostsKey("gone", "t3"), ...target }])
+    ).rejects.toThrow();
   });
 
   it("refuses a run that isn't on a host shown", async () => {
