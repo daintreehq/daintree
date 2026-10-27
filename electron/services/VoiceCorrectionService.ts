@@ -18,6 +18,7 @@ import {
 import type { VoiceRewriteOutcome } from "../../shared/types/voice.js";
 import type { VoiceCorrectionVerdict } from "../../shared/types/voiceSessionSummary.js";
 import { voiceErrorLogFields } from "../../shared/utils/voiceLogFields.js";
+import { pluralize } from "../../shared/utils/pluralize.js";
 import { buildOpenAIHeaders } from "../../shared/utils/openaiHeaders.js";
 import { createTimeoutSignal, withTimeoutSignal } from "../../shared/utils/timeoutSignal.js";
 import { validateRewrite } from "./voiceRewriteGuard.js";
@@ -403,9 +404,9 @@ function describeAgo(at: number | null, now: number): string {
   const elapsed = Math.max(0, now - at);
   if (elapsed < 60_000) return "under a minute before this request";
   const minutes = Math.round(elapsed / 60_000);
-  if (minutes < 60) return `about ${minutes} minute${minutes === 1 ? "" : "s"} before this request`;
+  if (minutes < 60) return `about ${pluralize(minutes, "minute")} before this request`;
   const hours = Math.round(minutes / 60);
-  if (hours < 48) return `about ${hours} hour${hours === 1 ? "" : "s"} before this request`;
+  if (hours < 48) return `about ${pluralize(hours, "hour")} before this request`;
   return `about ${Math.round(hours / 24)} days before this request`;
 }
 
