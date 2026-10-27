@@ -202,6 +202,22 @@ describe("useEditorKeymap", () => {
       expect(setActiveCompletionContext).toHaveBeenCalledWith(null);
     });
 
+    it("dismisses a menu still waiting on its rows and carries on to the agent", () => {
+      const onSendKey = vi.fn<(key: string) => void>();
+      const { handlers } = renderKeymap(
+        makeLatest({
+          isAutocompleteOpen: false,
+          autocompleteItems: [],
+          activeCompletionContext: { triggerChar: "#", start: 0, tokenEnd: 1, query: "" },
+          value: "#",
+          onSendKey,
+        })
+      );
+      expect(handlers.onEscape()).toBe(true);
+      expect(setActiveCompletionContext).toHaveBeenCalledWith(null);
+      expect(onSendKey).toHaveBeenCalledWith("escape");
+    });
+
     it("cancels a pending voice wait-submit before touching autocomplete", () => {
       cancelVoiceWaitSubmit.mockReturnValue(true);
       const { handlers } = renderKeymap(makeLatest());

@@ -79,7 +79,7 @@ export function filterForgeReferences(
     }
     return [...exact, ...prefixed].slice(0, limit);
   }
-  const needle = query.toLocaleLowerCase();
+  const needle = query.normalize("NFC").toLocaleLowerCase();
   const matches: ForgeReference[] = [];
   for (const ref of refs) {
     if (titleWords(ref.title).some((word) => word.startsWith(needle))) {
@@ -90,6 +90,11 @@ export function filterForgeReferences(
   return matches;
 }
 
+// Marks stay in the word: a Devanagari vowel sign or a decomposed accent is
+// part of the letter it follows, not a break.
 function titleWords(title: string): string[] {
-  return title.toLocaleLowerCase().split(/[^\p{L}\p{N}]+/u);
+  return title
+    .normalize("NFC")
+    .toLocaleLowerCase()
+    .split(/[^\p{L}\p{M}\p{N}]+/u);
 }

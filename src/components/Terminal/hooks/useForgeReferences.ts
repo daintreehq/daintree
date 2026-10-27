@@ -25,6 +25,20 @@ interface Slot {
 // Shared by every composer in this project's view, so a fleet of panes typing
 // `#` asks the forge once: both list channels are rate limited per call.
 const slots = new Map<string, Slot>();
+// Bumped when any remote changes: a remote can move to another repository on
+// the same forge, which changes nothing in a slot's key.
+let generation = 0;
+let unwatchRemotes: (() => void) | null = null;
+
+function watchRemotes(): void {
+  if (unwatchRemotes) return;
+  const forge = window.electron?.forge;
+  if (typeof forge?.onRemoteChanged !== "function") return;
+  unwatchRemotes = forge.onRemoteChanged(() => {
+    generation++;
+    slots.clear();
+  });
+}
 
 const NO_REFERENCES: ForgeReference[] = [];
 
@@ -49,14 +63,18 @@ async function fetchReferences(
 }
 
 function refresh(key: string, cwd: string, prefixes: ForgeReferencePrefixes): Promise<void> {
+  watchRemotes();
   const slot = slots.get(key);
   if (slot?.inFlight) return slot.inFlight;
   if (slot && Date.now() - slot.settledAt < (slot.failed ? FAILED_MS : FRESH_MS)) {
     return Promise.resolve();
   }
+  const startedIn = generation;
   const inFlight = fetchReferences(cwd, prefixes)
     .catch(() => null)
     .then((refs) => {
+      // Asked of a remote that has since changed: the answer is another repository's.
+      if (generation !== startedIn) return;
       slots.set(key, { refs, settledAt: Date.now(), failed: refs === null, inFlight: null });
     });
   slots.set(key, {
@@ -70,6 +88,8 @@ function refresh(key: string, cwd: string, prefixes: ForgeReferencePrefixes): Pr
 
 export function _resetForgeReferencesForTests(): void {
   slots.clear();
+  unwatchRemotes?.();
+  unwatchRemotes = null;
 }
 
 interface UseForgeReferencesParams {

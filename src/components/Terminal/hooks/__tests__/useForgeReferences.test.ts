@@ -17,19 +17,20 @@ import { useForgeReferences, _resetForgeReferencesForTests } from "../useForgeRe
 
 function provider(
   referencePrefixes: { issue?: string; pr?: string } | undefined,
-  issuesVia: "code" | "override" = "code"
+  issuesVia: "code" | "override" = "code",
+  providerId = "github"
 ): ResolvedForgeProviderState & { refresh: () => void } {
   const entry = {
     pluginId: "daintree.github",
-    contribution: { id: "github", name: "GitHub", matches: ["github.com"], referencePrefixes },
+    contribution: { id: providerId, name: providerId, matches: ["forge.test"], referencePrefixes },
   };
   return {
     entry,
-    providerId: "github",
+    providerId,
     resolvedVia: "hostname",
     issues: {
       entry,
-      providerId: issuesVia === "code" ? "github" : "daintree.linear.linear",
+      providerId: issuesVia === "code" ? providerId : "daintree.linear.linear",
       resolvedVia: issuesVia,
     },
     loading: false,
@@ -230,5 +231,90 @@ describe("useForgeReferences", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(result.current.map((ref) => ref.number)).toEqual([2]);
+  });
+
+  it("never shows one provider's rows once the project resolves to another", async () => {
+    let finishFirst: (value: Page<PR>) => void = () => {};
+    listPRs.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishFirst = resolve;
+        })
+    );
+    listIssues.mockResolvedValue(page([]));
+    const { result, rerender } = renderReferences({ enabled: true });
+    resolved.mockImplementation((projectId) =>
+      projectId ? provider({ issue: "#", pr: "!" }, "code", "daintree.gitlab.gitlab") : NO_PROVIDER
+    );
+    listPRs.mockResolvedValue(page([pr(2, 1)]));
+    rerender({ enabled: true });
+    await waitFor(() => expect(result.current.map((ref) => ref.reference)).toEqual(["!2"]));
+
+    finishFirst(page([pr(1, 1)]));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(result.current.map((ref) => ref.reference)).toEqual(["!2"]);
+  });
+
+  describe("when a remote changes", () => {
+    let remoteChanged: () => void = () => {};
+    const originalElectron = Object.getOwnPropertyDescriptor(window, "electron");
+
+    beforeEach(() => {
+      Object.defineProperty(window, "electron", {
+        configurable: true,
+        value: {
+          forge: {
+            onRemoteChanged: (callback: () => void) => {
+              remoteChanged = callback;
+              return () => {
+                remoteChanged = () => {};
+              };
+            },
+          },
+        },
+      });
+    });
+
+    afterEach(() => {
+      _resetForgeReferencesForTests();
+      if (originalElectron) Object.defineProperty(window, "electron", originalElectron);
+      else delete (window as { electron?: unknown }).electron;
+    });
+
+    it("asks again on the next `#`, since the repository may be another", async () => {
+      const { result, rerender } = renderReferences({ enabled: true });
+      await waitFor(() => expect(result.current).toHaveLength(2));
+      rerender({ enabled: false });
+      remoteChanged();
+      listPRs.mockResolvedValue(page([pr(7, 9)]));
+      listIssues.mockResolvedValue(page([]));
+      rerender({ enabled: true });
+      await waitFor(() => expect(result.current.map((ref) => ref.number)).toEqual([7]));
+      expect(listPRs).toHaveBeenCalledTimes(2);
+    });
+
+    it("never keeps an answer asked of the remote before it changed", async () => {
+      let finishFirst: (value: Page<PR>) => void = () => {};
+      listPRs.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishFirst = resolve;
+          })
+      );
+      listIssues.mockResolvedValue(page([]));
+      const { result, rerender } = renderReferences({ enabled: true });
+      await waitFor(() => expect(listPRs).toHaveBeenCalledTimes(1));
+      rerender({ enabled: false });
+      remoteChanged();
+      finishFirst(page([pr(1, 1)]));
+      await Promise.resolve();
+      await Promise.resolve();
+
+      listPRs.mockResolvedValue(page([pr(2, 1)]));
+      rerender({ enabled: true });
+      await waitFor(() => expect(result.current.map((ref) => ref.number)).toEqual([2]));
+      expect(listPRs).toHaveBeenCalledTimes(2);
+    });
   });
 });

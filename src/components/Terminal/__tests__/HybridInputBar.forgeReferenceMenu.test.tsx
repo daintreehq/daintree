@@ -10,7 +10,8 @@ import type { Issue, ListOptions, Page, PR } from "@shared/types/forge";
 const forge = vi.hoisted(() => ({
   listIssues: vi.fn<(cwd: string, opts?: ListOptions) => Promise<Page<Issue>>>(),
   listPRs: vi.fn<(cwd: string, opts?: ListOptions) => Promise<Page<PR>>>(),
-  referencePrefixes: { issue: "#", pr: "#" } as { issue?: string; pr?: string } | null,
+  hasProvider: true,
+  referencePrefixes: { issue: "#", pr: "#" } as { issue?: string; pr?: string },
 }));
 
 vi.mock("@/clients/forgeClient", async (importOriginal) => {
@@ -24,7 +25,7 @@ vi.mock("@/clients/forgeClient", async (importOriginal) => {
 vi.mock("@/hooks/useResolvedForgeProvider", () => ({
   useResolvedForgeProvider: (projectId: string | null | undefined) => {
     const entry =
-      projectId && forge.referencePrefixes
+      projectId && forge.hasProvider
         ? {
             pluginId: "daintree.github",
             contribution: {
@@ -49,7 +50,6 @@ vi.mock("@/hooks/useResolvedForgeProvider", () => ({
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { EditorView, runScopeHandlers } from "@codemirror/view";
 import type { PtyPanelData } from "@shared/types/panel";
-import type { Project } from "@shared/types";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
 import { createWorktreeStore, setCurrentViewStore } from "@/store/createWorktreeStore";
@@ -140,9 +140,10 @@ beforeEach(() => {
     focusedId: panel.id,
   });
   useProjectStore.setState({
-    currentProject: { id: "p1", name: "Repo", path: "/repo" } as Project,
+    currentProject: { id: "p1", name: "Repo", path: "/repo", emoji: "", lastOpened: 0 },
   });
   useTerminalInputStore.setState({ draftInputs: new Map(), hybridInputAutoFocus: false });
+  forge.hasProvider = true;
   forge.referencePrefixes = { issue: "#", pr: "#" };
   forge.listIssues
     .mockReset()
@@ -159,12 +160,18 @@ afterEach(() => {
   cleanup();
 });
 
-async function mount() {
-  const onSend = vi.fn(async () => true);
+async function mount({ isolated = false } = {}) {
+  const onSend = vi.fn(async (_payload: { text: string }) => true);
   const result = render(
     <TooltipProvider>
       <WorktreeStoreContext.Provider value={createWorktreeStore()}>
-        <HybridInputBar terminalId="term-1" cwd={WT_ID} agentId="claude" onSend={onSend} />
+        <HybridInputBar
+          terminalId="term-1"
+          cwd={WT_ID}
+          agentId="claude"
+          onSend={onSend}
+          isolated={isolated}
+        />
       </WorktreeStoreContext.Provider>
     </TooltipProvider>
   );
@@ -254,13 +261,33 @@ describe("HybridInputBar `#` references", () => {
     expect(onSend.mock.calls[0]![0]).toMatchObject({ text: "color: #333" });
   });
 
-  it("opens no menu when the provider declares no reference prefixes", async () => {
-    forge.referencePrefixes = null;
+  it("opens no menu when no provider resolves", async () => {
+    forge.hasProvider = false;
     const { type, options } = await mount();
     await type("see #");
     expect(options()).toEqual([]);
     expect(screen.queryByRole("listbox")).toBeNull();
     expect(forge.listIssues).not.toHaveBeenCalled();
+  });
+
+  it("opens no menu when the provider declares no reference prefixes", async () => {
+    forge.referencePrefixes = {};
+    const { type, press, onSend } = await mount();
+    await type("see #");
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(forge.listIssues).not.toHaveBeenCalled();
+    expect(forge.listPRs).not.toHaveBeenCalled();
+    await press("Enter");
+    expect(onSend.mock.calls[0]![0]).toMatchObject({ text: "see #" });
+  });
+
+  it("offers nothing in an isolated composer, whose terminal may be another project's", async () => {
+    const { type, press, onSend } = await mount({ isolated: true });
+    await type("see #148");
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(forge.listIssues).not.toHaveBeenCalled();
+    await press("Enter");
+    expect(onSend.mock.calls[0]![0]).toMatchObject({ text: "see #148" });
   });
 
   it("opens no menu when the forge can't be read", async () => {

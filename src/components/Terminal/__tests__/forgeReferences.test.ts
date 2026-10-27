@@ -84,11 +84,13 @@ describe("toForgeReferences", () => {
 
   it("keeps drafts and drops anything no longer open", () => {
     const refs = toForgeReferences(
-      [issue(1, "Closed", 5, { state: "closed" }), issue(2, "Open", 4)],
+      [issue(1, "Closed", 7, { state: "closed" }), issue(2, "Open", 6)],
       [
-        pr(3, "Draft", 3, { isDraft: true }),
-        pr(4, "Merged", 2, { state: "merged", merged: true }),
-        pr(5, "Declined", 1, { state: "declined" }),
+        pr(3, "Draft", 5, { isDraft: true }),
+        pr(4, "Merged by state", 4, { state: "merged" }),
+        pr(5, "Merged by flag", 3, { merged: true }),
+        pr(6, "Declined", 2, { state: "declined" }),
+        pr(7, "Closed", 1, { state: "closed" }),
       ],
       GITHUB
     );
@@ -148,6 +150,14 @@ describe("filterForgeReferences", () => {
     expect(filterForgeReferences(titled, "tool", 10).map((r) => r.number)).toEqual([2, 3]);
     expect(filterForgeReferences(titled, "SUGG", 10).map((r) => r.number)).toEqual([1]);
     expect(filterForgeReferences(titled, "face", 10)).toEqual([]);
+  });
+
+  it("keeps combining marks inside the word they belong to", () => {
+    const titled = [ref(1, "किताब सूची"), ref(2, "Cafe\u0301 menu")];
+    expect(filterForgeReferences(titled, "कि", 10).map((r) => r.number)).toEqual([1]);
+    expect(filterForgeReferences(titled, "किताब", 10).map((r) => r.number)).toEqual([1]);
+    expect(filterForgeReferences(titled, "café", 10).map((r) => r.number)).toEqual([2]);
+    expect(filterForgeReferences(titled, "cafe\u0301", 10).map((r) => r.number)).toEqual([2]);
   });
 
   it("finds nothing for hex colours and shebangs", () => {

@@ -16,6 +16,8 @@ interface LatestRefShape {
   isAgentTerminal: boolean;
   isInHistoryMode: boolean;
   isAutocompleteOpen: boolean;
+  /** A token being completed, whether or not its menu shows yet. */
+  activeCompletionContext?: ActiveCompletionContext | null;
   autocompleteItems: AutocompleteItem[];
   staleItemKeys: ReadonlySet<string>;
   selectedIndex: number;
@@ -158,6 +160,9 @@ export function useEditorKeymap({
         setActiveCompletionContext(null);
         return true;
       }
+      // A `#` menu still waiting on its rows is dismissed before it can show,
+      // and Escape carries on to wherever it would have gone.
+      if (latest.activeCompletionContext) setActiveCompletionContext(null);
 
       if (latest.isExpanded) {
         setIsExpanded(false);
