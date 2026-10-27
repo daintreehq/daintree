@@ -1245,10 +1245,10 @@ describe("pendingAIField", () => {
     view.dispatch({
       effects: setPendingAIRanges.of([
         { from: 0, to: 8, rewrite: { to: 8, text: "Fix bug." } },
-        { from: 9, to: 21, rewrite: { to: 13, text: "Add" } },
+        { from: 9, to: 21, rewrite: { to: 12, text: "Add" } },
       ]),
     });
-    expect(underlined(view)).toEqual(["test now"]);
+    expect(underlined(view)).toEqual([" test now"]);
     view.destroy();
   });
 
