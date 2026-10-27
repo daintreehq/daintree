@@ -99,6 +99,8 @@ import {
   createHeardAsRewriter,
   type HeardAsRewriter,
 } from "@shared/utils/voiceHeardAs";
+import { stripHesitations } from "@shared/utils/voiceHesitations";
+import { normalizeVoiceLanguage } from "@shared/config/voiceLanguages";
 import {
   findBuiltInMic,
   isBluetoothMicLabel,
@@ -563,6 +565,9 @@ class VoiceRecordingService {
   private sessionId: string | null = null;
   // The dictionary's heard-as rules as last read; every start reads them.
   private heardAsRules: HeardAsRewriter | null = null;
+  // Main drops hesitations from every completion; this covers the preview a
+  // stop commits without one. English only: "um" is a word in other languages.
+  private dropHesitations = true;
   // Sessions Escape cancelled. Main ends them without a drain, but whatever
   // they had already sent is still on its way and has nowhere left to land.
   // Each is let go once main reports it ended, the last thing it sends for it.
@@ -1243,6 +1248,7 @@ class VoiceRecordingService {
     this.hasOpenAIKey = hasCleanupKey(settings);
     this.transcriptionProvider = settings.transcriptionProvider;
     this.heardAsRules = createHeardAsRewriter(collectHeardAsRules(settings.dictionary ?? []));
+    this.dropHesitations = normalizeVoiceLanguage(settings.language) === "en";
     logDebug(`${LOG_PREFIX} refreshConfiguration`, {
       enabled: settings.enabled,
       provider: settings.transcriptionProvider,
@@ -2667,7 +2673,8 @@ class VoiceRecordingService {
           } else if (currentTarget) {
             const { panelId, projectId } = currentTarget;
             const buffer = useVoiceRecordingStore.getState().panelBuffers[panelId];
-            const remaining = buffer?.liveText?.trim();
+            const preview = buffer?.liveText?.trim();
+            const remaining = preview && this.dropHesitations ? stripHesitations(preview) : preview;
             if (remaining) {
               const { words } = writeVoiceWords(
                 panelId,
