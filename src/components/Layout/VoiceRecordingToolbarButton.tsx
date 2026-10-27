@@ -1,5 +1,5 @@
 import { useEffect, useRef, type ReactNode } from "react";
-import { Lock, Mic } from "lucide-react";
+import { Clock, Lock, Mic, Pause } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -31,29 +31,23 @@ import {
 import { isLocalHostId } from "@shared/types/remoteHosts";
 import type { VoiceSessionElsewhere } from "@shared/types";
 
-// The level meter's feel: a quick rise so a syllable registers at once, a
-// slower fall so the bars don't flicker between words.
-const TAU_ATTACK = 0.06; // sec
-const TAU_RELEASE = 0.22; // sec
+// The level meter's envelope: a rise fast enough that a syllable registers at
+// once, a fall that settles back to rest within a few hundred milliseconds of
+// the voice stopping, so the bars never claim sound that has ended.
+const TAU_ATTACK = 0.015; // sec
+const TAU_RELEASE = 0.08; // sec
 // Room noise sits around 0.02-0.04 on the store's level scale; below the
 // floor the bars hold flat instead of twitching in silence.
 const NOISE_FLOOR = 0.04;
-const BAR_REST = 0.2; // scaleY in silence: a flat line, not empty
-const WAVE_GAIN = 1.3; // so ordinary speech reaches the tallest bar's top
+const BAR_REST = 0.3; // scaleY in silence: short pills, still read as bars
 
-// Each bar's share of the level and its wobble, so the bars move apart
-// rather than as one block. The middle bars carry the most.
-const WAVE_BARS = [
-  { weight: 0.6, rate: 7.1, phase: 0 },
-  { weight: 1, rate: 9.3, phase: 1.7 },
-  { weight: 0.85, rate: 8.2, phase: 3.1 },
-  { weight: 0.55, rate: 10.4, phase: 4.6 },
-] as const;
-// Listening's shape under reduced motion. Paused stands level instead, so the
-// two stay apart where colour can't tell them apart (forced colours).
+// The bars show the envelope's recent history, newest on the right, one step
+// apart, so speech travels across them instead of moving them as one block;
+// the weights give the meter its shape.
+const HISTORY_STEP = 0.07; // sec
+const WAVE_WEIGHTS = [0.6, 1, 0.8, 0.65] as const;
+// Listening under reduced motion: one still shape at full ink.
 const STILL_SHAPE = [0.45, 0.8, 0.65, 0.4] as const;
-const HELD_SCALE = 0.6;
-const WAITING_SCALE = 0.35;
 
 // One width for every state the slot shows — placeholder, locked, elsewhere,
 // and the mic with its waveform — so starting or ending a session never moves
@@ -223,12 +217,13 @@ function VoiceToolbarMenu({
 type VoiceWaveMode = "level" | "waiting" | "held";
 
 /**
- * The mic's small waveform. "level" follows the input level from a RAF loop
- * that writes the bars' transforms directly: audioLevel updates ~60Hz while
- * recording, and a React subscription would re-render the button every frame.
- * "waiting" (arming, the mic starting, reconnecting, finishing) is neutral
- * bars in a slow travelling fade; "held", a pause the user chose, is neutral
- * bars standing still. Nothing in the toolbar spins.
+ * What sits beside the mic. "level" is four bars that follow the input level
+ * from a RAF loop writing their transforms directly: audioLevel updates ~60Hz
+ * while recording, and a React subscription would re-render the button every
+ * frame. "waiting" (arming, the mic starting, reconnecting, finishing) is a
+ * still clock: no bars, so it can't pass for a quiet room. "held", a pause the
+ * user chose, is the pause glyph. Each state keeps its own shape where colour
+ * is gone (forced colours), and nothing in the toolbar spins or pulses.
  */
 function VoiceWave({ mode }: { mode: VoiceWaveMode }) {
   const barRefs = useRef<Array<HTMLSpanElement | null>>([]);
@@ -237,7 +232,8 @@ function VoiceWave({ mode }: { mode: VoiceWaveMode }) {
     if (mode !== "level") return;
 
     let lastTime = performance.now();
-    let smoothLevel = 0;
+    let envelope = 0;
+    const history: Array<{ t: number; v: number }> = [];
     let rafId = 0;
 
     const tick = (now: number) => {
@@ -246,25 +242,34 @@ function VoiceWave({ mode }: { mode: VoiceWaveMode }) {
 
       const rawLevel = useVoiceRecordingStore.getState().audioLevel;
       const gated = Math.max(0, (rawLevel - NOISE_FLOOR) / (1 - NOISE_FLOOR));
-      const tau = gated > smoothLevel ? TAU_ATTACK : TAU_RELEASE;
-      smoothLevel += (gated - smoothLevel) * (1 - Math.exp(-dt / tau));
-      // Lift the quiet end so ordinary speech fills the bars.
-      const level = Math.sqrt(smoothLevel);
+      // Lift the quiet end before smoothing, so the envelope's timing is the
+      // timing the eye sees.
+      const target = Math.sqrt(gated);
+      const tau = target > envelope ? TAU_ATTACK : TAU_RELEASE;
+      envelope += (target - envelope) * (1 - Math.exp(-dt / tau));
 
-      // Reduced motion holds the bars in one shape; their brightness still
-      // follows the voice, so they stay a live level meter without moving.
-      // Read per frame so flipping the preference mid-dictation applies at once.
-      const still = prefersReducedMotion();
       const t = now / 1000;
-      WAVE_BARS.forEach((bar, i) => {
+      history.push({ t, v: envelope });
+      const horizon = t - HISTORY_STEP * WAVE_WEIGHTS.length;
+      while (history.length > 1 && history[1]!.t <= horizon) history.shift();
+      const at = (lag: number) => {
+        for (let k = history.length - 1; k >= 0; k--) {
+          if (history[k]!.t <= t - lag) return history[k]!.v;
+        }
+        return 0;
+      };
+
+      // Reduced motion holds one still shape. Read per frame so flipping the
+      // preference mid-dictation applies at once.
+      const still = prefersReducedMotion();
+      WAVE_WEIGHTS.forEach((weight, i) => {
         const el = barRefs.current[i];
         if (!el) return;
-        const wobble = 0.75 + 0.25 * Math.sin(t * bar.rate + bar.phase);
+        const level = at((WAVE_WEIGHTS.length - 1 - i) * HISTORY_STEP);
         const scale = still
           ? STILL_SHAPE[i]!
-          : BAR_REST + (1 - BAR_REST) * Math.min(1, WAVE_GAIN * level * bar.weight * wobble);
+          : BAR_REST + (1 - BAR_REST) * Math.min(1, level * weight);
         el.style.transform = `scaleY(${scale.toFixed(3)})`;
-        el.style.opacity = (0.7 + level * 0.3).toFixed(3);
       });
 
       rafId = requestAnimationFrame(tick);
@@ -277,27 +282,27 @@ function VoiceWave({ mode }: { mode: VoiceWaveMode }) {
   return (
     <span
       aria-hidden="true"
-      className="flex h-3.5 w-3.5 shrink-0 items-center justify-between pointer-events-none"
+      // The ink sits on the wrapper so the glyph inherits it: forced colours
+      // repaints an inherited currentColor, not one set on the svg itself.
+      className={cn(
+        "flex h-3.5 w-3.5 shrink-0 items-center justify-between pointer-events-none",
+        mode !== "level" && "text-text-secondary"
+      )}
       data-voice-wave={mode}
     >
-      {WAVE_BARS.map((bar, i) => (
-        <span
-          key={bar.phase}
-          ref={(el) => {
-            barRefs.current[i] = el;
-          }}
-          className={cn(
-            "h-full w-0.5 rounded-full",
-            mode === "level" ? "bg-accent-primary" : "bg-text-secondary",
-            mode === "waiting" && "animate-voice-wave-wait"
-          )}
-          style={{
-            transform: `scaleY(${mode === "level" ? BAR_REST : mode === "held" ? HELD_SCALE : WAITING_SCALE})`,
-            opacity: mode === "level" ? 0.7 : undefined,
-            animationDelay: mode === "waiting" ? `${i * 150}ms` : undefined,
-          }}
-        />
-      ))}
+      {mode === "waiting" && <Clock className="h-3.5 w-3.5" />}
+      {mode === "held" && <Pause className="h-3.5 w-3.5" />}
+      {mode === "level" &&
+        WAVE_WEIGHTS.map((_, i) => (
+          <span
+            key={i}
+            ref={(el) => {
+              barRefs.current[i] = el;
+            }}
+            className="h-full w-0.5 rounded-full bg-accent-primary"
+            style={{ transform: `scaleY(${BAR_REST})` }}
+          />
+        ))}
     </span>
   );
 }

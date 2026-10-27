@@ -702,78 +702,87 @@ describe("VoiceRecordingToolbarButton — waveform (#14911)", () => {
     expect(waveMode(container)).toBe(c.mode);
     expect(container.querySelector("[data-voice-ring]")).toBeNull();
     expect(container.querySelector(".animate-spin")).toBeNull();
-    expect(bars(container)).toHaveLength(4);
-    // Only listening runs a level loop; the waits and the pause cost no frames.
+    // Bars only while listening; the waits and the pause draw a glyph instead
+    // and cost no frames.
+    expect(bars(container)).toHaveLength(c.mode === "level" ? 4 : 0);
     expect(frames.size).toBe(c.mode === "level" ? 1 : 0);
   });
 
-  it("tells waiting, paused and listening apart by more than colour", () => {
-    const shapeOf = (status: Status, micSignal?: MicSignal) => {
+  it("tells waiting, paused and listening apart by shape, not colour", () => {
+    const markOf = (status: Status, micSignal?: MicSignal) => {
       const { container, unmount } = renderStatus(status, micSignal);
-      const shape = {
-        scales: barScales(container).join(),
-        animated: bars(container).map((bar) => bar.className.includes("animate-voice-wave-wait")),
-        delays: bars(container).map((bar) => bar.style.animationDelay),
+      const wave = container.querySelector("[data-voice-wave]")!;
+      const mark = {
+        bars: bars(container).length,
+        glyph: wave.querySelector("svg")?.getAttribute("class") ?? null,
       };
       unmount();
-      return shape;
+      return mark;
     };
-    const waiting = shapeOf("arming", "pending");
-    const held = shapeOf("paused");
-    motion.reduced = true;
-    const { container } = renderStatus("recording");
-    runFrames(1);
-    const stillListening = barScales(container).join();
+    const waiting = markOf("arming", "pending");
+    const held = markOf("paused");
+    const listening = markOf("recording");
 
-    expect(waiting.animated).toEqual([true, true, true, true]);
-    // Staggered, so the fade travels across the bars.
-    expect(new Set(waiting.delays).size).toBe(4);
-    expect(held.animated).toEqual([false, false, false, false]);
-    expect(new Set([waiting.scales, held.scales, stillListening]).size).toBe(3);
+    expect(listening).toEqual({ bars: 4, glyph: null });
+    expect(waiting.bars).toBe(0);
+    expect(held.bars).toBe(0);
+    // Two different glyphs, neither of them a spinner.
+    expect(waiting.glyph).not.toBeNull();
+    expect(held.glyph).not.toBeNull();
+    expect(waiting.glyph).not.toBe(held.glyph);
+    expect(`${waiting.glyph} ${held.glyph}`).not.toMatch(/spin|loader/);
   });
 
-  it("stays flat in silence and rises when the user speaks", () => {
+  it("stays at rest in silence, rises when the user speaks, and settles once they stop", () => {
     const { container } = renderStatus("recording");
     runFrames(30);
     const silent = barScales(container);
     expect(silent).toHaveLength(4);
-    expect(Math.max(...silent)).toBeLessThanOrEqual(0.21);
+    expect(Math.max(...silent)).toBeLessThanOrEqual(0.31);
 
     useVoiceRecordingStore.setState({ audioLevel: 0.8 });
     runFrames(30);
     const speaking = barScales(container);
-    expect(Math.max(...speaking)).toBeGreaterThan(0.6);
-    // The bars move apart, not as one block.
+    expect(Math.max(...speaking)).toBeGreaterThan(0.8);
+    // The bars keep a shape, not one block.
     expect(new Set(speaking.map((v) => v.toFixed(2))).size).toBeGreaterThan(1);
 
+    // Back at rest within 0.6s of the voice stopping: the release, plus the
+    // oldest bar's trail through the history.
     useVoiceRecordingStore.setState({ audioLevel: 0 });
-    runFrames(120);
-    expect(Math.max(...barScales(container))).toBeLessThanOrEqual(0.21);
+    runFrames(36);
+    expect(Math.max(...barScales(container))).toBeLessThanOrEqual(0.31);
   });
 
-  it("holds its shape under reduced motion while brightness follows the voice", () => {
+  it("travels: a burst reaches the newest bar first and the oldest after", () => {
+    const { container } = renderStatus("recording");
+    runFrames(10);
+    useVoiceRecordingStore.setState({ audioLevel: 0.8 });
+    runFrames(3);
+    const [oldest, , , newest] = barScales(container);
+    expect(newest!).toBeGreaterThan(0.5);
+    expect(oldest!).toBeLessThanOrEqual(0.31);
+  });
+
+  it("holds one still shape under reduced motion, whatever the level", () => {
     const { container } = renderStatus("recording");
     useVoiceRecordingStore.setState({ audioLevel: 0.8 });
     runFrames(20);
     const moving = barScales(container);
 
-    // Turned on mid-dictation: the bars stop where the preference says.
+    // Turned on mid-dictation: the bars stop in the still shape.
     motion.reduced = true;
+    runFrames(5);
+    const still = barScales(container);
+    expect(still).not.toEqual(moving);
     useVoiceRecordingStore.setState({ audioLevel: 0 });
-    runFrames(60);
-    const quietShape = barScales(container);
-    const quietOpacity = Number(bars(container)[0]!.style.opacity);
-    expect(quietShape).not.toEqual(moving);
-
-    useVoiceRecordingStore.setState({ audioLevel: 0.8 });
-    runFrames(20);
-    expect(barScales(container)).toEqual(quietShape);
-    expect(Number(bars(container)[0]!.style.opacity)).toBeGreaterThan(quietOpacity);
+    runFrames(30);
+    expect(barScales(container)).toEqual(still);
 
     // And off again: the bars follow the level once more.
     motion.reduced = false;
-    runFrames(20);
-    expect(barScales(container)).not.toEqual(quietShape);
+    runFrames(30);
+    expect(barScales(container)).not.toEqual(still);
   });
 
   it("moves the bars without a React commit per level update", () => {
@@ -819,8 +828,7 @@ describe("VoiceRecordingToolbarButton — waveform (#14911)", () => {
     });
     expect(frames.size).toBe(0);
     expect(waveMode(container)).toBe(mode);
-    // The loop's last writes don't outlive it: no bar keeps a level height.
-    expect(new Set(barScales(container)).size).toBe(1);
-    expect(bars(container).every((bar) => bar.style.opacity === "")).toBe(true);
+    // The loop's bars go with it.
+    expect(bars(container)).toHaveLength(0);
   });
 });
