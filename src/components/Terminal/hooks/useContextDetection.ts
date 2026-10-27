@@ -1,7 +1,10 @@
 import { useEffect, useRef, type Dispatch, type SetStateAction } from "react";
 import { type ViewUpdate } from "@codemirror/view";
-import type { CompletionTrigger } from "@shared/types";
-import { getActiveCompletionContext, type ActiveCompletionContext } from "../hybridInputParsing";
+import {
+  getActiveCompletionContext,
+  type ActiveCompletionContext,
+  type ComposerTrigger,
+} from "../hybridInputParsing";
 import { chipPendingDeleteField, isOwnedByAttachmentChip } from "../inputEditorExtensions";
 import { with as withTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 
@@ -15,7 +18,7 @@ interface LatestRefShape {
 interface UseContextDetectionParams {
   latestRef: React.RefObject<LatestRefShape | null>;
   /** Trigger chars that open a menu — derived from the agent's completionSources. */
-  activeTriggers: ReadonlySet<CompletionTrigger>;
+  activeTriggers: ReadonlySet<ComposerTrigger>;
   // Owner stores the next document value (typically into a ref + setState pair).
   // Returning true signals the value actually changed (i.e. differed from the last emit).
   applyDocChange: (next: string) => boolean;

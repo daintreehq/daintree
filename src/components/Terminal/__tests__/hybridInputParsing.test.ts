@@ -23,6 +23,7 @@ import {
   RESERVED_AT_TOKEN_PATHS,
   getAllAtContextReferences,
   resolveTokenExpansions,
+  type ComposerTrigger,
 } from "../hybridInputParsing";
 
 const ALL: ReadonlySet<CompletionTrigger> = new Set(["/", "$", "@"]);
@@ -140,6 +141,25 @@ describe("getActiveCompletionContext", () => {
   it("returns null when the caret precedes the trigger or follows the token", () => {
     expect(getActiveCompletionContext("check @diff", 3, ALL)).toBeNull();
     expect(getActiveCompletionContext("@diff rest", "@diff r".length, ALL)).toBeNull();
+  });
+
+  it("opens `#` only where it is an active trigger", () => {
+    const withHash: ReadonlySet<ComposerTrigger> = new Set([...ALL, "#"]);
+    expect(getActiveCompletionContext("see #148", 8, ALL)).toBeNull();
+    expect(getActiveCompletionContext("see #148", 8, withHash)).toMatchObject({
+      triggerChar: "#",
+      start: 4,
+      query: "148",
+    });
+  });
+
+  it("lets go of `#` text that isn't a reference once the token ends", () => {
+    const withHash: ReadonlySet<ComposerTrigger> = new Set([...ALL, "#"]);
+    expect(getActiveCompletionContext("# Heading", "# Heading".length, withHash)).toBeNull();
+    expect(getActiveCompletionContext("## Heading", 2, withHash)).toBeNull();
+    expect(getActiveCompletionContext("#include <stdio.h>", 18, withHash)).toBeNull();
+    expect(getActiveCompletionContext("a#b", 3, withHash)).toBeNull();
+    expect(getActiveCompletionContext("color:#fff", 10, withHash)).toBeNull();
   });
 });
 
