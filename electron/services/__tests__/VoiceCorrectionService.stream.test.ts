@@ -199,6 +199,38 @@ describe("VoiceCorrectionService streaming", () => {
     for (const text of heard) expect(result.correctedText.startsWith(text)).toBe(true);
   });
 
+  it("never shows a pause mark the reply copies, whole or still arriving", async () => {
+    const json = reply(
+      "Leave the tests. <pause /> Failing builds can wait, <pause/> until the branch is cut."
+    );
+    const frames: Frame[] = [...json].map((delta) => ({
+      type: "response.output_text.delta",
+      delta,
+    }));
+    frames.push({ type: "response.output_text.done", text: json }, completed(json));
+    stubFetch(streamed(frames, 7));
+    const heard: string[] = [];
+
+    const result = await new VoiceCorrectionService().correct(
+      {
+        rawText: "leave the tests failing builds can wait until the branch is cut",
+        pauses: [15, 39],
+      },
+      { ...SETTINGS, model: "gpt-6.1-terra" },
+      undefined,
+      (text) => heard.push(text)
+    );
+
+    expect(result.correctedText).toBe(
+      "Leave the tests. Failing builds can wait, until the branch is cut."
+    );
+    expect(heard.length).toBeGreaterThan(5);
+    for (const text of heard) {
+      expect(text).not.toContain("<");
+      expect(result.correctedText.startsWith(text)).toBe(true);
+    }
+  });
+
   it("reports nothing for a reply that keeps the passage", async () => {
     stubFetch(streamed(replyFrames(reply("ship it", "no_change"))));
     const onText = vi.fn();

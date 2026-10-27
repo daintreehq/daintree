@@ -26,6 +26,7 @@ import { PROMPT_VARIANTS, revise } from "../lib/voiceCleanupPrompts";
 import {
   codeNamesOf,
   corpusProblems,
+  locatePauses,
   locateUncertain,
   longestSentence,
   percentile,
@@ -100,7 +101,9 @@ describe("cleanup corpus", () => {
           score.addedWords === 0 &&
           (!fixesApply || score.missedFixes.length === 0) &&
           score.missedDrops.length === 0 &&
-          score.lostKeeps.length === 0;
+          score.lostKeeps.length === 0 &&
+          score.missedBreaks.length === 0 &&
+          score.splitSpans.length === 0;
         return perfect ? [] : [`${entry.id}: ${reference}`];
       })
     );
@@ -306,6 +309,14 @@ describe("inputHash", () => {
       terminalOutput: "Should I write a migration now, or add a shim?",
     });
     expect(inputHash(legacy)).toBe("1c51b64b79aa");
+  });
+
+  it("changes with where the speaker paused, and not for no pauses", () => {
+    const bare = inputHash(passage);
+    const early = inputHash({ ...passage, pauses: ["compare"] });
+    expect(inputHash({ ...passage, pauses: [] })).toBe(bare);
+    expect(early).not.toBe(bare);
+    expect(inputHash({ ...passage, pauses: ["GPT 6.1"] })).not.toBe(early);
   });
 
   it("changes with the recent prompts it carries, and not for none", () => {
@@ -935,6 +946,71 @@ describe("run-ons and agent-ready text", () => {
     }
   });
 
+  it("needs a break where the case puts one, by full stop, semicolon or line, and none inside an unbroken span", () => {
+    const entry = makeCase({
+      raw: "leave the tests failing builds can wait",
+      reference: "Leave the tests. Failing builds can wait.",
+      fixes: {},
+      drops: [],
+      breaks: ["leave the tests"],
+      unbroken: ["failing builds can wait"],
+    });
+    for (const text of [entry.reference, "Leave the tests; failing builds can wait."]) {
+      expect(scoreText(entry, text), text).toMatchObject({ missedBreaks: [], agentReady: true });
+    }
+    expect(scoreText(entry, "Leave the tests\nFailing builds can wait.").missedBreaks).toEqual([]);
+    expect(scoreText(entry, "Leave the tests, failing builds can wait.")).toMatchObject({
+      missedBreaks: ["leave the tests"],
+      splitSpans: [],
+      agentReady: false,
+    });
+    expect(scoreText(entry, "Leave the tests failing. Builds can wait.")).toMatchObject({
+      missedBreaks: ["leave the tests"],
+      splitSpans: ["failing builds can wait"],
+      agentReady: false,
+    });
+  });
+
+  it("reads a laid-out list's lines as breaks, without its item numbers", () => {
+    const entry = makeCase({
+      raw: "two things before you merge bump the timeout and log every retry",
+      reference: "Two things before you merge:\n1. Bump the timeout.\n2. Log every retry.",
+      fixes: {},
+      drops: [],
+      breaks: ["two things before you merge", "bump the timeout"],
+      unbroken: ["log every retry"],
+    });
+    expect(scoreText(entry, entry.reference)).toMatchObject({ missedBreaks: [], splitSpans: [] });
+    expect(
+      scoreText(entry, "Two things before you merge: bump the timeout and log every retry.")
+        .missedBreaks
+    ).toEqual(["two things before you merge", "bump the timeout"]);
+  });
+
+  it("flags a break the raw already makes or a reference misses, an unbroken span a reference splits, and a pause it can't place or that marks nothing", () => {
+    const problems = corpusProblems([
+      makeCase({
+        id: "breaks",
+        raw: "leave the tests. failing builds can wait",
+        reference: "Leave the tests. Failing builds can wait.",
+        alsoAccept: ["Leave the tests failing. Builds can wait."],
+        fixes: {},
+        drops: [],
+        breaks: ["leave the tests"],
+        unbroken: ["failing builds"],
+        pauses: ["the tests", "no such words"],
+      }),
+      makeCase({ id: "last", pauses: ["changes"] }),
+    ]);
+    expect(problems).toEqual([
+      'breaks: the raw already ends a sentence after "leave the tests"',
+      'breaks: "Leave the tests failing. Builds can wait." ends no sentence after "leave the tests"',
+      'breaks: "Leave the tests failing. Builds can wait." splits "failing builds"',
+      'breaks: pause after "no such words" is not in the raw transcript',
+      "last: a pause after the last word marks nothing",
+    ]);
+  });
+
   it("flags a run-on cap the raw already meets, or a reference breaks", () => {
     const problems = corpusProblems([
       makeCase({ id: "short", maxSentenceWords: 20 }),
@@ -1030,6 +1106,23 @@ describe("prompt variants", () => {
       expect(core.length, name).toBeGreaterThan(4_800);
       expect(suffix, name).toContain("JSON object");
     }
+  });
+});
+
+describe("locatePauses", () => {
+  it("places each pause after its words and their punctuation, repeated words in order", () => {
+    expect(locatePauses("so, it works. so it works", ["so", "it works", "so"])).toEqual([3, 13, 16]);
+  });
+
+  it("refuses a phrase the transcript doesn't have", () => {
+    expect(() => locatePauses("ship it", ["merge"])).toThrow(/pause after "merge"/);
+  });
+
+  it("sends a passage's pauses as production carries them, and none for a passage without", () => {
+    expect(requestFor(makeCase({ raw: "fix it, then ship", pauses: ["fix it"] })).pauses).toEqual([
+      7,
+    ]);
+    expect(requestFor(makeCase({}))).not.toHaveProperty("pauses");
   });
 });
 

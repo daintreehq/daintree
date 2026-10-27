@@ -46,6 +46,7 @@ import {
   codeNamesOf,
   corpusProblems,
   fixesOf,
+  locatePauses,
   locateUncertain,
   MODEL_PRICES,
   PROMPT_LENGTH_MIN_CHARS,
@@ -362,6 +363,7 @@ export function requestFor(entry: CleanupCase, now: number = Date.now()): VoiceC
     reason: "stop",
     startsPrompt: entry.startsPrompt ?? recentContext.length === 0,
     ...(entry.uncertain?.length ? { uncertain: locateUncertain(entry.raw, entry.uncertain) } : {}),
+    ...(entry.pauses?.length ? { pauses: locatePauses(entry.raw, entry.pauses) } : {}),
   };
 }
 
@@ -806,6 +808,8 @@ export function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): st
       }),
       score.missedDrops.length ? `left ${score.missedDrops.join(", ")}` : "",
       score.split === false ? `run-on (${score.longestSentence} words)` : "",
+      score.missedBreaks.length ? `no break after ${score.missedBreaks.join(", ")}` : "",
+      score.splitSpans.length ? `split ${score.splitSpans.join(", ")}` : "",
       score.lostKeeps.length ? `lost ${score.lostKeeps.join(", ")}` : "",
       score.broken ? `${score.broken} broken` : "",
       score.novelWords ? `${score.novelWords} novel` : "",
@@ -822,6 +826,9 @@ export function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): st
       `### ${entry.id}`,
       "",
       `- raw: ${JSON.stringify(entry.raw)}`,
+      ...(entry.pauses?.length
+        ? [`- pauses after: ${entry.pauses.map((phrase) => JSON.stringify(phrase)).join(", ")}`]
+        : []),
       `- reference: ${JSON.stringify(entry.reference)}`
     );
     for (const variant of run.variants) {

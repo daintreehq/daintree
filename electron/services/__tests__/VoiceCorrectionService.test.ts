@@ -16,6 +16,7 @@ import {
 } from "../VoiceCorrectionService.js";
 import {
   CORE_CORRECTION_PROMPT,
+  LITERAL_CORRECTION_INSTRUCTIONS,
   LITERAL_CORRECTION_PROMPT,
 } from "../../../shared/config/voiceCorrection.js";
 import type { VoiceCommandTarget } from "../voiceCommandTarget.js";
@@ -979,21 +980,121 @@ describe("VoiceCorrectionService", () => {
     expect(body.input[1].content).not.toContain("<uncertain>");
   });
 
-  // Carried for the prompt to use later (#14897); until then nothing sent changes.
-  it("sends OpenAI the same request whether or not the passage carries pauses", async () => {
+  // Luna's rules never learned what a pause mark is (#14898).
+  it("sends Luna the same request whether or not the passage carries pauses", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(makeFetchResponse({ action: "no_change", corrected_text: "" }));
+    vi.stubGlobal("fetch", fetchMock);
+    const luna = { ...BASE_SETTINGS, model: "gpt-6-luna" };
+
+    const svc = new VoiceCorrectionService();
+    await svc.correct({ rawText: "  fix it then ship\n", pauses: [8, 18] }, luna);
+    await svc.correct({ rawText: "  fix it then ship\n" }, luna);
+
+    const [withPauses, without] = fetchMock.mock.calls.map(
+      (call) => (call as unknown as [string, RequestInit])[1].body as string
+    );
+    expect(withPauses).toBe(without);
+  });
+
+  it("marks Terra's target where the speaker paused, and leaves the rules and cache key alone", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValue(makeFetchResponse({ action: "no_change", corrected_text: "" }));
     vi.stubGlobal("fetch", fetchMock);
 
     const svc = new VoiceCorrectionService();
-    await svc.correct({ rawText: "  fix it then ship\n", pauses: [8, 18] }, BASE_SETTINGS);
-    await svc.correct({ rawText: "  fix it then ship\n" }, BASE_SETTINGS);
+    await svc.correct({ rawText: "  fix it, then ship it\n", pauses: [9, 23] }, BASE_SETTINGS);
+    await svc.correct({ rawText: "  fix it, then ship it\n" }, BASE_SETTINGS);
 
-    const [withPauses, without] = fetchMock.mock.calls.map(
-      (call) => (call as unknown as [string, RequestInit])[1].body as string
+    const [withPauses, without] = fetchMock.mock.calls.map((call) =>
+      JSON.parse((call as unknown as [string, RequestInit])[1].body as string)
     );
-    expect(withPauses).toBe(without);
+    // The pause after the passage's last word marks nothing.
+    expect(withPauses.input[1].content).toContain("<target>\nfix it, <pause/> then ship it\n</target>");
+    expect(withPauses.input[0]).toEqual(without.input[0]);
+    expect(withPauses.prompt_cache_key).toBe(without.prompt_cache_key);
+  });
+
+  it("marks no pause for rules that don't say what one is, custom instructions or not", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(makeFetchResponse({ action: "no_change", corrected_text: "" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await new VoiceCorrectionService().correct(
+      { rawText: "fix it then ship it", pauses: [6] },
+      {
+        ...BASE_SETTINGS,
+        instructions: LITERAL_CORRECTION_INSTRUCTIONS,
+        customInstructions: "A <pause/> marks where I paused.",
+      }
+    );
+
+    const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
+    expect(body.input[1].content).toContain("<target>\nfix it then ship it\n</target>");
+  });
+
+  it("takes out a pause mark the reply copies, leaving the words around it spaced", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        makeFetchResponse({
+          action: "replace",
+          corrected_text: "<pause/> Leave the tests. <pause /> Failing builds can<pause/>wait,<pause/>\nuntil the cut.",
+          confidence: "high",
+        })
+      )
+    );
+
+    const result = await new VoiceCorrectionService().correct(
+      { rawText: "leave the tests failing builds can wait until the cut", pauses: [15, 39] },
+      BASE_SETTINGS
+    );
+
+    expect(result.correctedText).toBe("Leave the tests. Failing builds can wait,\nuntil the cut.");
+  });
+
+  it("keeps a mark in the reply when none was sent, and marks none in words that already hold one", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      makeFetchResponse({
+        action: "replace",
+        corrected_text: "Swap <pause/> for a comma, then ship it.",
+        confidence: "high",
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const svc = new VoiceCorrectionService();
+
+    const unpaused = await svc.correct(
+      { rawText: "swap less than pause slash greater than for a comma then ship it" },
+      BASE_SETTINGS
+    );
+    const literal = await svc.correct(
+      { rawText: "swap <pause/> for a comma then ship it", pauses: [4, 25] },
+      BASE_SETTINGS
+    );
+
+    expect(unpaused.correctedText).toBe("Swap <pause/> for a comma, then ship it.");
+    expect(literal.correctedText).toBe("Swap <pause/> for a comma, then ship it.");
+    const body = JSON.parse((fetchMock.mock.calls[1] as [string, RequestInit])[1].body as string);
+    expect(body.input[1].content).toContain("<target>\nswap <pause/> for a comma then ship it\n</target>");
+  });
+
+  it("keeps a pause mark in the screen's output from reading as one", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(makeFetchResponse({ action: "no_change", corrected_text: "" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await new VoiceCorrectionService().correct(
+      { rawText: "fix it", terminalOutput: "done <pause/> ok" },
+      BASE_SETTINGS
+    );
+
+    const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
+    expect(body.input[1].content).toContain("done ‹pause/> ok");
   });
 
   async function targetFor(request: Parameters<VoiceCorrectionService["correct"]>[0]) {
@@ -1024,10 +1125,10 @@ describe("VoiceCorrectionService", () => {
     ).toBe("racked <uncertain>native</uncertain>");
   });
 
-  describe("annotateUncertainSpans", () => {
+  describe("annotateTarget", () => {
     it("gives words flagged side by side one tag", () => {
       expect(
-        VoiceCorrectionService.annotateUncertainSpans("the a sync handler", [
+        VoiceCorrectionService.annotateTarget("the a sync handler", [
           { from: 6, to: 10 },
           { from: 4, to: 5 },
         ])
@@ -1036,7 +1137,7 @@ describe("VoiceCorrectionService", () => {
 
     it("keeps separate tags across punctuation, a line break or an unflagged word", () => {
       expect(
-        VoiceCorrectionService.annotateUncertainSpans("a, b\nc d e", [
+        VoiceCorrectionService.annotateTarget("a, b\nc d e", [
           { from: 0, to: 1 },
           { from: 3, to: 4 },
           { from: 5, to: 6 },
@@ -1049,7 +1150,7 @@ describe("VoiceCorrectionService", () => {
 
     it("ignores spans out of bounds, overlapping, empty, fractional or holding no word", () => {
       expect(
-        VoiceCorrectionService.annotateUncertainSpans("one two", [
+        VoiceCorrectionService.annotateTarget("one two", [
           { from: 0, to: 3 },
           { from: 2, to: 5 },
           { from: 3, to: 4 },
@@ -1059,6 +1160,25 @@ describe("VoiceCorrectionService", () => {
           { from: -1, to: 2 },
         ])
       ).toBe("<uncertain>one</uncertain> two");
+    });
+
+    it("marks a pause after its word and that word's punctuation, once, and only between words", () => {
+      expect(
+        VoiceCorrectionService.annotateTarget("fix it, then ship it", [], [7, 7, 0, 8, 20, 3.5, -1, 99])
+      ).toBe("fix it, <pause/> then ship it");
+    });
+
+    it("keeps words flagged either side of a pause apart, the tag closed before the mark", () => {
+      expect(
+        VoiceCorrectionService.annotateTarget(
+          "the a sync handler",
+          [
+            { from: 4, to: 5 },
+            { from: 6, to: 10 },
+          ],
+          [5]
+        )
+      ).toBe("the <uncertain>a</uncertain> <pause/> <uncertain>sync</uncertain> handler");
     });
   });
 

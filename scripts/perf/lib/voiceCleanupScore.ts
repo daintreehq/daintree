@@ -29,7 +29,7 @@ export const VOICE_CLEANUP_SCHEMA_VERSION = 4;
 // rescore still reads them and lands each saved reply once, as schema 4 does.
 export const VOICE_CLEANUP_READABLE_SCHEMAS: readonly number[] = [3, VOICE_CLEANUP_SCHEMA_VERSION];
 // Bump when a definition below changes, so runs scored differently aren't compared.
-export const VOICE_CLEANUP_SCORING_VERSION = 6;
+export const VOICE_CLEANUP_SCORING_VERSION = 7;
 
 /** Today's send yardstick (#14793): the wait a send used to give cleanup. */
 export const SEND_WAIT_TARGET_MS = 2000;
@@ -69,10 +69,14 @@ export interface TextScore {
   longestSentence: number;
   /** Whether a run-on came back broken up within the case's `maxSentenceWords`; null when it sets none. */
   split: boolean | null;
+  /** The case's `breaks` no sentence or line ends straight after. */
+  missedBreaks: string[];
+  /** The case's `unbroken` spans that came back split across sentences or lines. */
+  splitSpans: string[];
   /**
    * The message the speaker would have typed: an accepted reference's words
-   * and lines, every fix and drop landed, nothing kept lost, and any run-on
-   * broken up.
+   * and lines, every fix and drop landed, nothing kept lost, any run-on
+   * broken up, and its sentences ending where the case says they do.
    */
   agentReady: boolean;
 }
@@ -200,6 +204,36 @@ export function longestSentence(text: string): number {
   );
 }
 
+// A semicolon breaks two clauses apart as a full stop does, wherever it's put.
+const CLAUSE_END_RE = /(?<=[.!?;])\s+|\n+/u;
+
+/** Each sentence, clause a semicolon ends, or line of `text` as its words, a laid-out list's item numbers aside. */
+function sentencesOf(text: string): string[][] {
+  return text
+    .replace(LIST_ITEM_NUMBER_RE, "")
+    .split(CLAUSE_END_RE)
+    .map(cleanupWords)
+    .filter((words) => words.length > 0);
+}
+
+function hasRun(words: readonly string[], run: readonly string[], at: number): boolean {
+  return run.length > 0 && run.every((word, i) => words[at + i] === word);
+}
+
+/** Whether a sentence, clause or line of `text` ends straight after the words of `phrase`. */
+export function endsSentenceAfter(text: string, phrase: string): boolean {
+  const run = cleanupWords(phrase);
+  return sentencesOf(text).some((words) => hasRun(words, run, words.length - run.length));
+}
+
+/** Whether the words of `phrase` come one after another inside one sentence, clause or line of `text`. */
+export function keepsInOneSentence(text: string, phrase: string): boolean {
+  const run = cleanupWords(phrase);
+  return sentencesOf(text).some((words) =>
+    words.some((_word, at) => at + run.length <= words.length && hasRun(words, run, at))
+  );
+}
+
 // Three or more capitals joined by hyphens, as cleanup types a spelling
 // ("T-E-R-R-A"), and not part of a longer hyphened word. Two letters or
 // lowercase ones are more often an expression or an identifier ("x-y", "a-b-c").
@@ -314,6 +348,8 @@ export function scoreText(entry: CleanupCase, text: string): TextScore {
   const matchesReference = references.some((reference) => sameLines(lines, lineWords(reference)));
   const longest = longestSentence(text);
   const split = entry.maxSentenceWords === undefined ? null : longest <= entry.maxSentenceWords;
+  const missedBreaks = (entry.breaks ?? []).filter((phrase) => !endsSentenceAfter(text, phrase));
+  const splitSpans = (entry.unbroken ?? []).filter((phrase) => !keepsInOneSentence(text, phrase));
   return {
     referenceWords: referenceWords.length,
     edits: edits(textAlignment),
@@ -334,13 +370,33 @@ export function scoreText(entry: CleanupCase, text: string): TextScore {
     untouched: text === entry.raw,
     longestSentence: longest,
     split,
+    missedBreaks,
+    splitSpans,
     agentReady:
       matchesReference &&
       missedFixes.length === 0 &&
       missedDrops.length === 0 &&
       lostKeeps.length === 0 &&
-      split !== false,
+      split !== false &&
+      missedBreaks.length === 0 &&
+      splitSpans.length === 0,
   };
+}
+
+function locatePhrases(
+  raw: string,
+  phrases: readonly string[],
+  what: string
+): Array<{ from: number; to: number }> {
+  const spans: Array<{ from: number; to: number }> = [];
+  let cursor = 0;
+  for (const phrase of phrases) {
+    const from = raw.indexOf(phrase, cursor);
+    if (from === -1) throw new Error(`${what} "${phrase}" is not in the raw transcript`);
+    spans.push({ from, to: from + phrase.length });
+    cursor = from + phrase.length;
+  }
+  return spans;
 }
 
 /** The words a passage's unsure spans cover, placed in order so a repeated word is found once each. */
@@ -348,15 +404,20 @@ export function locateUncertain(
   raw: string,
   phrases: readonly string[]
 ): Array<{ from: number; to: number }> {
-  const spans: Array<{ from: number; to: number }> = [];
-  let cursor = 0;
-  for (const phrase of phrases) {
-    const from = raw.indexOf(phrase, cursor);
-    if (from === -1) throw new Error(`unsure phrase "${phrase}" is not in the raw transcript`);
-    spans.push({ from, to: from + phrase.length });
-    cursor = from + phrase.length;
-  }
-  return spans;
+  return locatePhrases(raw, phrases, "unsure phrase");
+}
+
+// What a provider counts as part of the word a pause comes after.
+const TRAILING_PUNCTUATION_RE = /^\p{P}*/u;
+
+/**
+ * Where a passage's pauses fall, as production carries them (#14897): each
+ * straight after the words it follows and their punctuation, placed in order.
+ */
+export function locatePauses(raw: string, phrases: readonly string[]): number[] {
+  return locatePhrases(raw, phrases, "pause after").map(
+    ({ to }) => to + TRAILING_PUNCTUATION_RE.exec(raw.slice(to))![0].length
+  );
 }
 
 // Each identifier as an added line of a diff of its own, so only those main's
@@ -433,6 +494,32 @@ export function corpusProblems(corpus: readonly CleanupCase[]): string[] {
           );
         }
       }
+    }
+    // A break the raw already makes, or one no reference makes, measures nothing.
+    for (const phrase of entry.breaks ?? []) {
+      if (endsSentenceAfter(entry.raw, phrase)) {
+        problems.push(`${entry.id}: the raw already ends a sentence after "${phrase}"`);
+      }
+      for (const reference of acceptedReferences(entry)) {
+        if (!endsSentenceAfter(reference, phrase)) {
+          problems.push(`${entry.id}: "${reference}" ends no sentence after "${phrase}"`);
+        }
+      }
+    }
+    for (const phrase of entry.unbroken ?? []) {
+      for (const reference of acceptedReferences(entry)) {
+        if (!keepsInOneSentence(reference, phrase)) {
+          problems.push(`${entry.id}: "${reference}" splits "${phrase}"`);
+        }
+      }
+    }
+    try {
+      // Cleanup is shown no pause after the last word: nothing follows it to break from.
+      if (locatePauses(entry.raw, entry.pauses ?? []).some((at) => !entry.raw.slice(at).trim())) {
+        problems.push(`${entry.id}: a pause after the last word marks nothing`);
+      }
+    } catch (error) {
+      problems.push(`${entry.id}: ${(error as Error).message}`);
     }
     if (entry.uncertain?.length && entry.style !== "deepgram") {
       problems.push(`${entry.id}: only Deepgram flags unsure words`);

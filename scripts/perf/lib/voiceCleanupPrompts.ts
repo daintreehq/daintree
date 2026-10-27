@@ -502,6 +502,39 @@ const AGENT_REPLY = revise(CODE_NAMES, {
   ],
 });
 
+// #14898 marked in <target> where the speaker paused, and told Terra how to
+// read a pause: where a sentence breaks, where a counted list's items start
+// and where a correction begins, but only as evidence, and never in a
+// sentence that carries on through it.
+const PAUSES_1 = revise(AGENT_REPLY, {
+  core: [
+    [
+      "\n\nNAMES AND SPELLINGS:",
+      '\n\nPAUSE MARKS: A <pause/> inside <target> marks where the speaker stopped talking for a moment, straight after the word before it. A pause is evidence of where they ended a thought, never an order to break the text there, and never on its own a reason to add, drop or change a word.\n- Where the words either side of a pause each read as a sentence, put the sentence break at the pause rather than where the words alone would put it: "the build passes locally <pause/> on CI it times out" is "The build passes locally. On CI it times out.", and "the build passes locally on CI <pause/> it times out" is "The build passes locally on CI. It times out."\n- After the speaker says how many things they have ("two problems", "there are three things to fix"), the things they then give one per pause are a spoken list, under LISTS, even without counting words.\n- A bare "no" straight after a pause, followed by words that take the place of the ones just before it, is a self-correction, under SELF-CORRECTIONS: "open the settings file <pause/> no the keybindings file" is "Open the keybindings file". A "no" that says what to avoid stays ("add a retry <pause/> no more than three times", "<pause/> no one calls it").\n- A pause is often only a breath, or the speaker finding the next word, in a sentence that carries straight on ("the dialog should close when you <pause/> click outside it", "if the file is missing <pause/> create it"): keep that one sentence, and where the transcript ended a sentence at such a pause, join it back up.\n- The marks are never part of the text: never write <pause/> in your reply.\n\nNAMES AND SPELLINGS:',
+    ],
+    [
+      '("first… second… third", "one… two… three", "step one… step two"), lay them out as a numbered list',
+      '("first… second… third", "one… two… three", "step one… step two"), or says how many there are and gives them one per pause (see PAUSE MARKS), lay them out as a numbered list',
+    ],
+    [
+      'drop only the counting words ("first", "two", "step three", and an "and" or "then" in front of them)',
+      'drop only the counting words ("first", "two", "step three") and an "and" or "then" that opens an item',
+    ],
+    [
+      'or a bare "no" between commas)',
+      'or a bare "no" between commas or straight after a pause)',
+    ],
+    [
+      "its item numbers take the place of the spoken counting words.",
+      "its item numbers take the place of the spoken counting words, or of the pauses between its items.",
+    ],
+    [
+      '(an inline series, not a list)\n',
+      '(an inline series, not a list)\n- Target: "there are two problems with the export <pause/> it ignores the filter <pause/> and the file name has no date"\n  Corrected: "There are two problems with the export:\\n1. It ignores the filter.\\n2. The file name has no date."\n- Target: "the dialog should close when you <pause/> click outside it <pause/> currently it stays open"\n  Corrected: "The dialog should close when you click outside it. Currently it stays open." (a breath inside the first sentence, a break at the second pause)\n',
+    ],
+  ],
+});
+
 const LUNA_REPLY = revise(LUNA, {
   core: [
     [
@@ -585,6 +618,11 @@ export const PROMPT_VARIANTS: Readonly<Record<string, PromptVariant>> = {
   agentreply: {
     description: "codenames, told about the agent's last reply and the state Daintree observed",
     instructionsFor: fixed(AGENT_REPLY),
+  },
+  pauses1: {
+    description:
+      "agentreply, shown where the speaker paused and how to read a pause: a break, a list item, a correction or only a breath",
+    instructionsFor: fixed(PAUSES_1),
   },
   luna: {
     description: "v11 told about recent prompts: Luna's rules before #14900",

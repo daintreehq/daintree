@@ -64,7 +64,7 @@ const REWRITE_CACHE_PREFIX = "voice-rewrite-v1";
 const MIN_REWRITE_TIMEOUT_MS = 10000;
 const FILE_LINK_CACHE_PREFIX = "voice-file-link-v2";
 const PROMPT_TAG_OPEN_RE =
-  /<(?=\/?(?:recent_prompts|terminal_output|agent_last_reply|code_names|target|job|confirmed_history|uncertain)\b)/gi;
+  /<(?=\/?(?:recent_prompts|terminal_output|agent_last_reply|code_names|target|job|confirmed_history|uncertain|pause)\b)/gi;
 const OPENAI_ORIGIN = "https://api.openai.com/";
 const RESPONSES_URL = "https://api.openai.com/v1/responses";
 // OpenAI keeps an unused prefix cached for five to ten minutes. Checked once a
@@ -96,6 +96,16 @@ const JSON_ESCAPES: Record<string, string> = {
 };
 // Two flagged words with only spaces between them are one unsure phrase.
 const UNCERTAIN_JOIN_RE = /^[^\S\r\n]+$/;
+// Where the speaker paused, after the word before it (#14898). Only rules that
+// name it are shown one.
+const PAUSE_MARK = "<pause/>";
+// A mark however a reply writes it back, with the spaces on its line around it.
+const PAUSE_MARK_RE = /[^\S\n]*<\/?pause\s*\/?>[^\S\n]*/gi;
+const PAUSE_MARK_TEXT_RE = /<\/?pause\s*\/?>/i;
+// The start of one still streaming in, at the end of the text so far.
+const PARTIAL_PAUSE_MARK_RE = /[^\S\n]*<\/?(?:p(?:a(?:u(?:s(?:e\s*\/?)?)?)?)?)?$/i;
+const SPACE_RE = /\s/;
+const CLOSES_UP_RE = /[\s,.;:!?)]/;
 
 const FILE_LINK_DETECTION_SCHEMA = {
   type: "object",
@@ -214,7 +224,7 @@ export interface VoiceCorrectionRequest {
   uncertain?: readonly VoiceTextSpan[];
   /**
    * Positions in `rawText` where the speaker paused, each straight after a
-   * word. Carried for the prompt to use; it doesn't yet (#14897).
+   * word (#14897), marked in the target for rules that read them (#14898).
    */
   pauses?: readonly number[];
   /** Nothing comes before the passage in the draft, so it may open with a command. */
@@ -303,12 +313,52 @@ interface CorrectionStreamEvent {
 }
 
 /**
- * The corrected text a partial reply has written so far, as it would land:
- * leading filler gone, and cut at its last whitespace so a word still
- * arriving isn't shown half-written. Null until a reply that replaces the
- * text has started it.
+ * Whether pauses can be marked in `rawText`: not when the speaker's own words
+ * already read as a mark, which a reply's marks could then not be told from.
  */
-function streamedCorrectionText(reply: string): string | null {
+function canMarkPauses(rawText: string): boolean {
+  return !PAUSE_MARK_TEXT_RE.test(rawText);
+}
+
+/**
+ * The pauses in `text` a mark can show, sorted and once each: those straight
+ * after a word with another word still to come.
+ */
+function markablePauses(text: string, pauses: readonly number[]): number[] {
+  const marks = new Set(
+    pauses.filter(
+      (at) =>
+        Number.isInteger(at) &&
+        at > 0 &&
+        at < text.length &&
+        !SPACE_RE.test(text[at - 1]!) &&
+        text.slice(at).trim() !== ""
+    )
+  );
+  return [...marks].sort((a, b) => a - b);
+}
+
+/**
+ * `text` with every pause mark a reply wrote taken out, and the spaces beside
+ * it, leaving one space between the words either side, or none where it met
+ * a line, punctuation or the edge of the text.
+ */
+function stripPauseMarks(text: string): string {
+  return text.replace(PAUSE_MARK_RE, (mark: string, at: number, whole: string) => {
+    const before = whole[at - 1];
+    const after = whole[at + mark.length];
+    if (before === undefined || after === undefined) return "";
+    return SPACE_RE.test(before) || CLOSES_UP_RE.test(after) ? "" : " ";
+  });
+}
+
+/**
+ * The corrected text a partial reply has written so far, as it would land:
+ * pause marks and leading filler gone, and cut at its last whitespace so a
+ * word or mark still arriving isn't shown half-written. Null until a reply that
+ * replaces the text has started it.
+ */
+function streamedCorrectionText(reply: string, stripMarks: boolean): string | null {
   const start = STREAMED_TEXT_START_RE.exec(reply);
   if (!start) return null;
   let text = "";
@@ -331,7 +381,8 @@ function streamedCorrectionText(reply: string): string | null {
       i++;
     }
   }
-  const cleaned = text.replace(LEADING_FILLER_RE, "").trimStart();
+  const unmarked = stripMarks ? stripPauseMarks(text).replace(PARTIAL_PAUSE_MARK_RE, "") : text;
+  const cleaned = unmarked.replace(LEADING_FILLER_RE, "").trimStart();
   const cut = cleaned.search(/\s\S*$/);
   return cut > 0 ? cleaned.slice(0, cut) : "";
 }
@@ -655,9 +706,10 @@ export class VoiceCorrectionService {
       parts.push(`<job>\n${metadata.join("\n")}\n</job>`);
     }
 
-    const targetText = VoiceCorrectionService.annotateUncertainSpans(
+    const targetText = VoiceCorrectionService.annotateTarget(
       request.rawText,
-      request.uncertain ?? []
+      request.uncertain ?? [],
+      request.pauses ?? []
     );
     parts.push(`<target>\n${targetText}\n</target>`);
 
@@ -685,12 +737,20 @@ export class VoiceCorrectionService {
   }
 
   /**
-   * Wraps each span of `text` in <uncertain>, by position, so only the words
-   * flagged are tagged even where the same word appears again. Words flagged
-   * side by side, with only spaces between, share one tag. A span out of
-   * bounds, overlapping an earlier one, or holding no word is ignored.
+   * The target as cleanup is shown it: each span of `text` wrapped in
+   * <uncertain>, by position, so only the words flagged are tagged even where
+   * the same word appears again, and a <pause/> after each word the speaker
+   * paused after. Words flagged side by side, with only spaces and no pause
+   * between, share one tag. A span out of bounds, overlapping an earlier one,
+   * or holding no word is ignored, and so is a pause that doesn't come
+   * straight after a word or has no word after it.
    */
-  static annotateUncertainSpans(text: string, spans: readonly VoiceTextSpan[]): string {
+  static annotateTarget(
+    text: string,
+    spans: readonly VoiceTextSpan[],
+    pauses: readonly number[] = []
+  ): string {
+    const marks = new Set(markablePauses(text, pauses));
     const tags: VoiceTextSpan[] = [];
     for (const span of [...spans].sort((a, b) => a.from - b.from)) {
       const { from, to } = span;
@@ -700,14 +760,24 @@ export class VoiceCorrectionService {
       if (from >= to || !text.slice(from, to).trim()) continue;
       const last = tags[tags.length - 1];
       if (last && from < last.to) continue;
-      if (last && UNCERTAIN_JOIN_RE.test(text.slice(last.to, from))) last.to = to;
-      else tags.push({ from, to });
+      // Only spaces lie between, so a pause there can only be straight after the earlier word.
+      if (last && UNCERTAIN_JOIN_RE.test(text.slice(last.to, from)) && !marks.has(last.to)) {
+        last.to = to;
+      } else tags.push({ from, to });
     }
+    // At one position a tag closes before a pause, and a pause comes before a tag opens.
+    const inserts = [
+      ...tags.flatMap(({ from, to }) => [
+        { at: from, order: 2, text: "<uncertain>" },
+        { at: to, order: 0, text: "</uncertain>" },
+      ]),
+      ...[...marks].map((at) => ({ at, order: 1, text: ` ${PAUSE_MARK}` })),
+    ].sort((a, b) => a.at - b.at || a.order - b.order);
     let out = "";
     let copied = 0;
-    for (const { from, to } of tags) {
-      out += `${text.slice(copied, from)}<uncertain>${text.slice(from, to)}</uncertain>`;
-      copied = to;
+    for (const { at, text: insert } of inserts) {
+      out += text.slice(copied, at) + insert;
+      copied = at;
     }
     return out + text.slice(copied);
   }
@@ -927,8 +997,9 @@ export class VoiceCorrectionService {
     );
   }
 
-  private normalizeCorrectedText(text: string): string {
-    return text.replace(LEADING_FILLER_RE, "");
+  // With pauses marked, a mark in the reply is one copied: none was in the speaker's words.
+  private normalizeCorrectedText(text: string, marked: boolean): string {
+    return (marked ? stripPauseMarks(text) : text).replace(LEADING_FILLER_RE, "");
   }
 
   private async callApi(
@@ -939,16 +1010,21 @@ export class VoiceCorrectionService {
     onText: ((text: string) => void) | undefined
   ): Promise<VoiceCorrectionProposal> {
     const systemPrompt = this.buildSystemPrompt(settings);
-    // Code names and the agent's reply go only to rules that say what they
-    // are: Luna's never learned of code names, and the cleanup benchmark's
-    // frozen rules of either. Read from the rules alone, so custom
-    // instructions can't switch them on.
+    // Code names, the agent's reply and pause marks go only to rules that say
+    // what they are: Luna's never learned of code names or pauses, and the
+    // cleanup benchmark's frozen rules of any. Read from the rules alone, so
+    // custom instructions can't switch them on.
     const rules = settings.instructions ?? correctionInstructionsFor(settings.model);
+    const pauses =
+      rules.core.includes(PAUSE_MARK) && canMarkPauses(request.rawText)
+        ? markablePauses(request.rawText, request.pauses ?? [])
+        : [];
     const userMessage = this.buildUserMessage(
       {
         ...request,
         ...(rules.core.includes("<code_names>") ? {} : { codeNames: undefined }),
         ...(rules.core.includes("<agent_last_reply>") ? {} : { agentReply: undefined }),
+        pauses,
       },
       settings.model
     );
@@ -964,6 +1040,7 @@ export class VoiceCorrectionService {
       codeNameCount: request.codeNames?.length ?? 0,
       uncertainCount: request.uncertain?.length ?? 0,
       pauseCount: request.pauses?.length ?? 0,
+      pauseMarkCount: pauses.length,
       reason: request.reason ?? "unspecified",
       segmentCount: request.segmentCount ?? 0,
     });
@@ -978,7 +1055,8 @@ export class VoiceCorrectionService {
           userMessage,
           deadline,
           trace,
-          onText
+          onText,
+          pauses.length > 0
         ),
       signal
     );
@@ -1178,7 +1256,8 @@ export class VoiceCorrectionService {
     userMessage: UserContent,
     signal: AbortSignal,
     trace: RequestTrace,
-    onText: ((text: string) => void) | undefined
+    onText: ((text: string) => void) | undefined,
+    marked: boolean
   ): Promise<VoiceCorrectionProposal> {
     const maxOutputTokens = this.getMaxOutputTokens(request);
     const body = JSON.stringify({
@@ -1200,7 +1279,8 @@ export class VoiceCorrectionService {
         signal,
         maxOutputTokens,
         onText,
-        trace
+        trace,
+        marked
       );
       this.notePromptUsed(this.promptIdentity(settings, systemPrompt), sentAt);
       return result;
@@ -1216,7 +1296,8 @@ export class VoiceCorrectionService {
     signal: AbortSignal,
     maxOutputTokens: number,
     onText: ((text: string) => void) | undefined,
-    trace: RequestTrace
+    trace: RequestTrace,
+    marked: boolean
   ): Promise<VoiceCorrectionProposal> {
     const response = await fetch(RESPONSES_URL, {
       method: "POST",
@@ -1233,7 +1314,7 @@ export class VoiceCorrectionService {
     }
 
     const data = onText
-      ? await this.readCorrectionStream(response, onText)
+      ? await this.readCorrectionStream(response, onText, marked)
       : ((await response.json()) as CorrectionReply);
     // A reply thrown away below was still billed.
     trace.usage = readUsage(data.usage);
@@ -1268,7 +1349,7 @@ export class VoiceCorrectionService {
       correctedText:
         parsed.action === "no_change"
           ? request.rawText
-          : this.normalizeCorrectedText(parsed.corrected_text),
+          : this.normalizeCorrectedText(parsed.corrected_text, marked),
       confidence: parsed.confidence,
     };
   }
@@ -1282,7 +1363,8 @@ export class VoiceCorrectionService {
    */
   private async readCorrectionStream(
     response: Response,
-    onText: (text: string) => void
+    onText: (text: string) => void,
+    stripMarks: boolean
   ): Promise<CorrectionReply> {
     const reader = response.body?.getReader();
     if (!reader) throw new CorrectionDiscardedError("malformed");
@@ -1318,7 +1400,7 @@ export class VoiceCorrectionService {
         if (done) break;
         const now = performance.now();
         if (reply === null && now - reportedAt >= STREAM_PROGRESS_INTERVAL_MS) {
-          const shown = streamedCorrectionText(text);
+          const shown = streamedCorrectionText(text, stripMarks);
           if (shown && shown.length > reported.length) {
             reported = shown;
             reportedAt = now;
