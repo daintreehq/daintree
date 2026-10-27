@@ -217,6 +217,7 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611)", () => {
       rawText: "hello wrld",
       startsPrompt: true,
       terminalId: "panel-1",
+      sessionId: expect.any(String),
     });
     expect(result.current.voiceSubmitPhase).toBe("polishing");
     expect(isEditable()).toBe(false);
