@@ -469,7 +469,7 @@ function normalizeSpoken(text: string): string {
   return text.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-const VALID_TRANSCRIPTION_PROVIDERS: VoiceTranscriptionProvider[] = ["openai", "deepgram"];
+const VALID_TRANSCRIPTION_PROVIDERS: VoiceTranscriptionProvider[] = ["openai", "deepgram", "grok"];
 
 // The only fields setSettings writes. Everything else is refused: `keyterms` is
 // assembled per session, the dictionary and its suggestion queue change only
@@ -481,6 +481,7 @@ const WRITABLE_VOICE_FIELDS: Record<keyof VoiceInputSettingsPatch, true> = {
   enabled: true,
   openaiApiKey: true,
   deepgramApiKey: true,
+  xaiApiKey: true,
   language: true,
   transcriptionProvider: true,
   transcriptionModel: true,
@@ -500,6 +501,7 @@ const VOICE_INPUT_DEFAULTS: VoiceInputSettings = {
   enabled: false,
   openaiApiKey: "",
   deepgramApiKey: "",
+  xaiApiKey: "",
   language: "en",
   dictionary: [],
   transcriptionProvider: "openai",
@@ -626,6 +628,10 @@ export function getVoiceSettings(): VoiceInputSettings {
   const envDeepgramKey = process.env.DEEPGRAM_API_KEY?.trim();
   if (envDeepgramKey) {
     merged.deepgramApiKey = envDeepgramKey;
+  }
+  const envXaiKey = process.env.XAI_API_KEY?.trim();
+  if (envXaiKey) {
+    merged.xaiApiKey = envXaiKey;
   }
 
   return merged;

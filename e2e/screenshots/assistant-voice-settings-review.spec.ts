@@ -85,6 +85,7 @@ const VOICE_BASE = {
   enabled: false,
   openaiApiKey: "",
   deepgramApiKey: "",
+  xaiApiKey: "",
   language: "en",
   dictionary: [] as { term: string; heardAs: string[]; source: string; addedAt: number }[],
   transcriptionProvider: "openai",

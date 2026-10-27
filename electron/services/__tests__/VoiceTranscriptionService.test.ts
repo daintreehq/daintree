@@ -170,6 +170,7 @@ const OPENAI_SETTINGS: VoiceInputSettings = {
   enabled: true,
   openaiApiKey: "sk-test",
   deepgramApiKey: "",
+  xaiApiKey: "",
   language: "en",
   dictionary: [],
   transcriptionProvider: "openai",

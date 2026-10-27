@@ -1,6 +1,15 @@
 import { allFixtureTerms } from "./voiceReplayFixtures";
 
-export type ReplayProvider = "openai" | "deepgram";
+export type ReplayProvider = "openai" | "deepgram" | "grok";
+
+const REPLAY_PROVIDERS: readonly ReplayProvider[] = ["openai", "deepgram", "grok"];
+
+/** The env var each provider's key is read from. */
+export const PROVIDER_KEY_VARIABLE: Readonly<Record<ReplayProvider, string>> = {
+  openai: "OPENAI_API_KEY",
+  deepgram: "DEEPGRAM_API_KEY",
+  grok: "XAI_API_KEY",
+};
 
 /** One arm of the benchmark: a provider, the settings it runs with, and the dictionary it starts with. */
 export interface ReplayConfig {
@@ -40,18 +49,22 @@ export const REPLAY_TUNABLE_SETTINGS: ReadonlySet<string> = new Set(["language"]
 export const REPLAY_PRESETS: Readonly<Record<string, Omit<ReplayConfig, "id">>> = {
   openai: { provider: "openai", settings: {}, dictionary: [] },
   deepgram: { provider: "deepgram", settings: {}, dictionary: [] },
+  grok: { provider: "grok", settings: {}, dictionary: [] },
   "openai+terms": { provider: "openai", settings: {}, dictionary: allFixtureTerms() },
   "deepgram+terms": { provider: "deepgram", settings: {}, dictionary: allFixtureTerms() },
+  "grok+terms": { provider: "grok", settings: {}, dictionary: allFixtureTerms() },
 };
 
-export const DEFAULT_REPLAY_CONFIGS = ["openai", "deepgram"];
+export const DEFAULT_REPLAY_CONFIGS = ["openai", "deepgram", "grok"];
 
 function validate(config: unknown, where: string): ReplayConfig {
   if (typeof config !== "object" || config === null) throw new Error(`${where}: not an object`);
   const { id, provider, settings = {}, dictionary = [] } = config as Record<string, unknown>;
   if (typeof id !== "string" || id.length === 0) throw new Error(`${where}: missing id`);
-  if (provider !== "openai" && provider !== "deepgram") {
-    throw new Error(`${where} (${id}): provider must be "openai" or "deepgram"`);
+  if (!REPLAY_PROVIDERS.includes(provider as ReplayProvider)) {
+    throw new Error(
+      `${where} (${id}): provider must be ${REPLAY_PROVIDERS.map((p) => `"${p}"`).join(", ")}`
+    );
   }
   if (typeof settings !== "object" || settings === null || Array.isArray(settings)) {
     throw new Error(`${where} (${id}): settings must be an object`);
@@ -67,7 +80,12 @@ function validate(config: unknown, where: string): ReplayConfig {
   if (!Array.isArray(dictionary) || dictionary.some((term) => typeof term !== "string")) {
     throw new Error(`${where} (${id}): dictionary must be a list of terms`);
   }
-  return { id, provider, settings: settings as Record<string, unknown>, dictionary };
+  return {
+    id,
+    provider: provider as ReplayProvider,
+    settings: settings as Record<string, unknown>,
+    dictionary,
+  };
 }
 
 /**
@@ -116,6 +134,7 @@ export function providerKeyEnv(
     const key = (env.OPENAI_API_KEY || env.WHISPER_API_KEY)?.trim();
     return key ? { WHISPER_API_KEY: key } : null;
   }
-  const key = env.DEEPGRAM_API_KEY?.trim();
-  return key ? { DEEPGRAM_API_KEY: key } : null;
+  const variable = PROVIDER_KEY_VARIABLE[provider];
+  const key = env[variable]?.trim();
+  return key ? { [variable]: key } : null;
 }

@@ -1651,6 +1651,8 @@ export const SETTINGS_REGISTRY = [
       "dictation",
       "openai",
       "deepgram",
+      "grok",
+      "xai",
       "transcription",
       "push to talk",
       "shortcut",
@@ -1676,7 +1678,7 @@ export const SETTINGS_REGISTRY = [
         section: "Speech-to-text",
         title: "Transcription provider",
         description: "Choose which provider transcribes your microphone audio",
-        keywords: ["provider", "openai", "deepgram", "stt", "privacy", "audio"],
+        keywords: ["provider", "openai", "deepgram", "grok", "xai", "stt", "privacy", "audio"],
         requiresEnabled: VOICE_REQUIRES_ENABLED,
       },
       {

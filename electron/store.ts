@@ -355,6 +355,7 @@ export interface StoreSchema {
     enabled: boolean;
     openaiApiKey: string;
     deepgramApiKey: string;
+    xaiApiKey: string;
     language: string;
     dictionary: VoiceDictionaryEntry[];
     transcriptionProvider: string;
@@ -1059,6 +1060,7 @@ const storeOptions = {
       enabled: false,
       openaiApiKey: "",
       deepgramApiKey: "",
+      xaiApiKey: "",
       language: "en",
       dictionary: [],
       transcriptionProvider: "openai",

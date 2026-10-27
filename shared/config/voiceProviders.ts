@@ -5,6 +5,8 @@ export type VoiceApiKeyField = Extract<keyof VoiceInputSettings, `${string}ApiKe
 
 export interface VoiceTranscriptionProviderInfo {
   name: string;
+  /** Who issues the key, as its settings row names it. */
+  keyIssuer: string;
   keyField: VoiceApiKeyField;
 }
 
@@ -17,8 +19,9 @@ export const VOICE_TRANSCRIPTION_PROVIDERS: Record<
   VoiceTranscriptionProvider,
   VoiceTranscriptionProviderInfo
 > = {
-  openai: { name: "OpenAI", keyField: "openaiApiKey" },
-  deepgram: { name: "Deepgram", keyField: "deepgramApiKey" },
+  openai: { name: "OpenAI", keyIssuer: "OpenAI", keyField: "openaiApiKey" },
+  deepgram: { name: "Deepgram", keyIssuer: "Deepgram", keyField: "deepgramApiKey" },
+  grok: { name: "Grok", keyIssuer: "xAI", keyField: "xaiApiKey" },
 };
 
 /** Cleanup, file-link detection and rewrite all run on OpenAI, whichever provider transcribes. */
@@ -35,6 +38,10 @@ export function transcriptionKeyField(provider: VoiceTranscriptionProvider): Voi
 
 export function transcriptionProviderName(provider: VoiceTranscriptionProvider): string {
   return providerInfo(provider).name;
+}
+
+export function transcriptionKeyIssuer(provider: VoiceTranscriptionProvider): string {
+  return providerInfo(provider).keyIssuer;
 }
 
 type KeySettings = Pick<VoiceInputSettings, "transcriptionProvider" | VoiceApiKeyField>;

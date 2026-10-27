@@ -34,6 +34,7 @@ const BASE = {
   enabled: true,
   openaiApiKey: "",
   deepgramApiKey: "",
+  xaiApiKey: "",
   language: "en",
   dictionary: [] as VoiceDictionaryEntry[],
   transcriptionProvider: "openai",
@@ -113,29 +114,34 @@ describe("maskApiKey", () => {
 describe("dictationBlockers", () => {
   it("names the missing key for whichever provider transcribes", () => {
     const openai = dictationBlockers(
-      { transcriptionProvider: "openai", openaiApiKey: "", deepgramApiKey: "dg_1" },
+      { transcriptionProvider: "openai", openaiApiKey: "", deepgramApiKey: "dg_1", xaiApiKey: "" },
       "granted"
     );
     const deepgram = dictationBlockers(
-      { transcriptionProvider: "deepgram", openaiApiKey: "sk-1", deepgramApiKey: "" },
+      { transcriptionProvider: "deepgram", openaiApiKey: "sk-1", deepgramApiKey: "", xaiApiKey: "" },
+      "granted"
+    );
+    const grok = dictationBlockers(
+      { transcriptionProvider: "grok", openaiApiKey: "sk-1", deepgramApiKey: "dg_1", xaiApiKey: "" },
       "granted"
     );
     expect(openai.join(" ")).toContain("OpenAI");
     expect(deepgram.join(" ")).toContain("Deepgram");
+    expect(grok.join(" ")).toContain("xAI API key");
   });
 
   it("reports nothing it cannot observe: a present key and an undecided mic are not blockers", () => {
     for (const mic of ["granted", "not-determined", "unknown"] as const) {
       expect(
         dictationBlockers(
-          { transcriptionProvider: "openai", openaiApiKey: "sk-1", deepgramApiKey: "" },
+          { transcriptionProvider: "openai", openaiApiKey: "sk-1", deepgramApiKey: "", xaiApiKey: "" },
           mic
         )
       ).toEqual([]);
     }
     expect(
       dictationBlockers(
-        { transcriptionProvider: "openai", openaiApiKey: "sk-1", deepgramApiKey: "" },
+        { transcriptionProvider: "openai", openaiApiKey: "sk-1", deepgramApiKey: "", xaiApiKey: "" },
         "denied"
       )
     ).toHaveLength(1);

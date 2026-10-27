@@ -2925,8 +2925,10 @@ export type VoiceTranscriptionModel = "gpt-live-transcribe";
  *   `OpenAITranscriptionProvider`.
  * - "deepgram": Deepgram Nova-3 streaming. Native server-side VAD / endpointing,
  *   so no client commit timer is needed.
+ * - "grok": xAI's `grok-voice-transcribe-2.0` streaming. Server-side endpointing
+ *   like Deepgram's, with utterance finals that restate the whole utterance.
  */
-export type VoiceTranscriptionProvider = "openai" | "deepgram";
+export type VoiceTranscriptionProvider = "openai" | "deepgram" | "grok";
 
 /**
  * The correction model is single-valued: gpt-6-luna replaced both the retired
@@ -2973,6 +2975,8 @@ export interface VoiceInputSettings {
   openaiApiKey: string;
   /** API key for the Deepgram transcription provider. Empty string when unset. */
   deepgramApiKey: string;
+  /** xAI API key for the Grok transcription provider. Empty string when unset. */
+  xaiApiKey: string;
   language: string;
   /**
    * The user's dictionary, oldest entry first. Main owns every write: the

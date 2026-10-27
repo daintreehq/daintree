@@ -176,6 +176,7 @@ const BASE_SETTINGS: VoiceInputSettings = {
   enabled: true,
   openaiApiKey: "",
   deepgramApiKey: "dg-test",
+  xaiApiKey: "",
   language: "en",
   dictionary: [],
   transcriptionProvider: "deepgram",

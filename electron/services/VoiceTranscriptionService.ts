@@ -1,6 +1,7 @@
 import type { VoiceInputSettings } from "../../shared/types/ipc/api.js";
 import { logInfo } from "../utils/logger.js";
 import { DeepgramTranscriptionProvider } from "./voice/DeepgramTranscriptionProvider.js";
+import { GrokTranscriptionProvider } from "./voice/GrokTranscriptionProvider.js";
 import { OpenAITranscriptionProvider } from "./voice/OpenAITranscriptionProvider.js";
 import type {
   ProviderSessionStats,
@@ -54,6 +55,8 @@ export class VoiceTranscriptionService {
     switch (settings.transcriptionProvider) {
       case "deepgram":
         return new DeepgramTranscriptionProvider();
+      case "grok":
+        return new GrokTranscriptionProvider();
       case "openai":
       default:
         return new OpenAITranscriptionProvider();
@@ -73,12 +76,14 @@ export class VoiceTranscriptionService {
   }
 
   /**
-   * Deepgram takes its bias terms on the socket URL, so it can't connect until
-   * they're assembled. OpenAI sends them in the `session.update` after its
-   * socket opens, so it takes them as a pending start context instead.
+   * Deepgram and Grok take their bias terms on the socket URL, so they can't
+   * connect until they're assembled. OpenAI sends them in the `session.update`
+   * after its socket opens, so it takes them as a pending start context instead.
    */
   keytermsNeededToConnect(settings: VoiceInputSettings): boolean {
-    return settings.transcriptionProvider === "deepgram";
+    return (
+      settings.transcriptionProvider === "deepgram" || settings.transcriptionProvider === "grok"
+    );
   }
 
   async start(

@@ -2962,8 +2962,9 @@ function buildElectronApi(): ElectronAPI {
           enabled: boolean;
           openaiApiKey: string;
           deepgramApiKey: string;
+          xaiApiKey: string;
           language: string;
-          transcriptionProvider: "openai" | "deepgram";
+          transcriptionProvider: "openai" | "deepgram" | "grok";
           transcriptionModel: "gpt-live-transcribe";
           correctionEnabled: boolean;
           correctionModel: "gpt-6-luna";

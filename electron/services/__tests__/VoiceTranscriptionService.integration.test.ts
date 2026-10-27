@@ -28,6 +28,7 @@ describe("VoiceTranscriptionService integration", () => {
           enabled: true,
           openaiApiKey: OPENAI_API_KEY,
           deepgramApiKey: "",
+          xaiApiKey: "",
           language: "en",
           dictionary: [],
           transcriptionProvider: "openai",
