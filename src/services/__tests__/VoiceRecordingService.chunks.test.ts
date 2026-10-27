@@ -92,6 +92,7 @@ function stubElectron() {
         onTranscriptionComplete: on("complete"),
         onParagraphBoundary: on("boundary"),
         onFileTokenResolved: on("fileToken"),
+        onCorrectionProgress: on("progress"),
         onError: vi.fn(() => () => {}),
         onStatus: vi.fn(() => () => {}),
         onSessionEnded: vi.fn(() => () => {}),
