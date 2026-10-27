@@ -11,6 +11,7 @@ import {
   type TerminalInfo,
 } from "../types.js";
 import type { TerminalProcess } from "../TerminalProcess.js";
+import { events } from "../../events.js";
 
 function hashProjectId(projectRootPath: string): string {
   const canonical = path.normalize(fs.realpathSync(projectRootPath));
@@ -532,5 +533,58 @@ describe("TerminalRegistry trash TTL override", () => {
     expect(onExpire).not.toHaveBeenCalled();
     vi.advanceTimersByTime(TRASH_TTL_MS - 3_000);
     expect(onExpire).toHaveBeenCalledWith("t1");
+  });
+});
+
+describe("TerminalRegistry trash leaving", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    events.removeAllListeners("terminal:trash-cleared");
+    vi.restoreAllMocks();
+  });
+
+  function cleared(): Array<{ id: string; expiresAt: number }> {
+    const heard: Array<{ id: string; expiresAt: number }> = [];
+    events.on("terminal:trash-cleared", (payload) => heard.push(payload));
+    return heard;
+  }
+
+  it("says once, with which trash it was, when a kill or delete takes a terminal from the trash", () => {
+    const heard = cleared();
+    const registry = new TerminalRegistry(20_000);
+    registry.add("t1", {} as unknown as TerminalProcess);
+    registry.trash("t1", () => {});
+    const expiresAt = registry.getTrashExpiresAt("t1")!;
+    registry.clearTrashTimeout("t1");
+    registry.delete("t1");
+    expect(heard).toEqual([{ id: "t1", expiresAt }]);
+  });
+
+  it("says so when its time runs out, whether or not the expiry's kill cleared it", () => {
+    const heard = cleared();
+    const registry = new TerminalRegistry(20_000);
+    registry.add("kills", {} as unknown as TerminalProcess);
+    registry.add("waits", {} as unknown as TerminalProcess);
+    registry.trash("kills", (id) => registry.clearTrashTimeout(id));
+    registry.trash("waits", () => {});
+    vi.advanceTimersByTime(20_000);
+    expect(heard.map((payload) => payload.id).sort()).toEqual(["kills", "waits"]);
+    expect(registry.isInTrash("waits")).toBe(false);
+  });
+
+  it("says nothing for a restore: the terminal is back, not gone", () => {
+    const heard = cleared();
+    const registry = new TerminalRegistry(20_000);
+    registry.add("t1", {} as unknown as TerminalProcess);
+    registry.trash("t1", () => {});
+    registry.restore("t1");
+    registry.delete("t1");
+    vi.advanceTimersByTime(20_000);
+    expect(heard).toEqual([]);
   });
 });

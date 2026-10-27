@@ -7,7 +7,6 @@ import { classifyRun } from "../projectAgentCounts.js";
 
 /** What the ledger reads off the host's record of a terminal it heard trashed. */
 export interface TrashedTerminalRecord {
-  id: string;
   projectId?: string;
   kind?: PanelKind;
   isAssistantTerminal?: boolean;
@@ -81,10 +80,10 @@ export class CanopyTrashLedger {
         if (this.disposed || this.turns.get(id) !== turn) return;
         if (!record || record.isTrashed !== true || record.trashExpiresAt !== expiresAt) return;
         if (!record.projectId) return;
-        if (classifyRun({ ...record, isTrashed: false }, this.deps.isHelpTerminal) !== null) {
+        if (classifyRun({ ...record, id, isTrashed: false }, this.deps.isHelpTerminal) !== null) {
           return;
         }
-        this.entries.set(id, { run: runOf(record, record.projectId), trashedAt, expiresAt });
+        this.entries.set(id, { run: runOf(id, record, record.projectId), trashedAt, expiresAt });
         // A backstop for a clear never heard: the entry goes at its deadline.
         const timer = setTimeout(
           () => this.onCleared(id, expiresAt),
@@ -140,9 +139,9 @@ export class CanopyTrashLedger {
 }
 
 /** The run as Canopy names and places it: who, where and which incarnation, never its state. */
-function runOf(record: TrashedTerminalRecord, workspaceId: string): FleetRunRow {
+function runOf(runId: string, record: TrashedTerminalRecord, workspaceId: string): FleetRunRow {
   return {
-    runId: record.id,
+    runId,
     workspaceId,
     ...(record.worktreeId !== undefined ? { worktreeId: record.worktreeId } : {}),
     ...(record.detectedAgentId !== undefined ? { agentId: record.detectedAgentId } : {}),
