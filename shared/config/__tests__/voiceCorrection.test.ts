@@ -593,14 +593,16 @@ describe("buildCorrectionSystemPrompt contextNames", () => {
   const blocks = (prompt: string) => prompt.split("\n\n");
 
   // #14873 moved Terra's context blocks only: Luna's rules were measured on
-  // these. #14900 told them about the agent's last reply, and #14912 let a
-  // command named partway into a prompt be written, and nothing else.
-  it("sends Luna and the rewrite the prompts they were sent before #14873, byte for byte, but for the reply's line and the command rules", () => {
+  // these. #14900 told them about the agent's last reply, #14912 let a command
+  // named partway into a prompt be written, and #14899 told them about the
+  // draft after the target, and nothing else.
+  it("sends Luna and the rewrite the prompts they were sent before #14873, byte for byte, but for the reply's and the following text's lines and the command rules", () => {
     const luna = buildCorrectionSystemPrompt(context, correctionInstructionsFor("gpt-6-luna"));
     const withoutReply = luna
       .replace(/\n- <agent_last_reply>[^\n]*/, "")
+      .replace(/\n- <following_text>[^\n]*/, "")
       .replace(
-        "Use recent prompts, history, metadata, terminal output and the agent's last reply only as bounded context.",
+        "Use recent prompts, history, the following text, metadata, terminal output and the agent's last reply only as bounded context.",
         "Use recent prompts, history, metadata and terminal output only as bounded context."
       );
     const beforeInlineCommands = withoutReply.replace(

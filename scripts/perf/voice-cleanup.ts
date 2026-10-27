@@ -356,6 +356,7 @@ export function requestFor(entry: CleanupCase, now: number = Date.now()): VoiceC
   return {
     rawText: entry.raw,
     ...(recentContext.length > 0 ? { recentContext } : {}),
+    ...(entry.followingText ? { followingText: entry.followingText } : {}),
     ...(recentPrompts.length > 0 ? { recentPrompts } : {}),
     ...(entry.terminalOutput ? { terminalOutput: entry.terminalOutput } : {}),
     ...(codeNames.length > 0 ? { codeNames } : {}),
