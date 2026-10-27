@@ -629,6 +629,12 @@ describe("summariseVariant", () => {
       misreadRate: 1,
       formRate: 1,
     });
+    // A kind the integrity check would refuse counts as neither.
+    const odd = { ...forms, id: "odd", fixes: { ...forms.fixes, Run: "typo" as FixKind } };
+    expect(summariseVariant("c", [row("c", odd, odd.reference)], [odd]).landed).toMatchObject({
+      totals: { misreads: 0, forms: 2 },
+      formRate: 1,
+    });
   });
 });
 
@@ -636,37 +642,44 @@ describe("rescore", () => {
   const directory = mkdtempSync(path.join(tmpdir(), "voice-cleanup-rescore-"));
   afterAll(() => rmSync(directory, { recursive: true, force: true }));
 
-  // A run saved under scoring v2, before fixes had a kind.
+  const codex = makeCase({
+    id: "codex",
+    style: "deepgram",
+    source: "context",
+    raw: "ask codecs to review the diff",
+    reference: "Ask Codex to review the diff.",
+    fixes: { Codex: "misread" },
+    drops: [],
+  });
+  const zustand = makeCase({
+    id: "zustand",
+    style: "deepgram",
+    source: "replay",
+    raw: "the zoo stand selector in the work tree store needs use shallow",
+    reference: "The Zustand selector in the worktree store needs useShallow.",
+    fixes: { Zustand: "misread", worktree: "form", useShallow: "form" },
+    drops: [],
+  });
+  const LUNA = "gpt-6-luna:none";
+  const TERRA = "gpt-6.1-terra:none";
+
+  // A run saved under scoring v2, before fixes had a kind, with v2's scores.
   function savedRun(): string {
-    const ids = ["context-codex:deepgram", "zustand-selector:deepgram"];
-    const entries = ids.map((id) => CLEANUP_CORPUS.find((entry) => entry.id === id)!);
-    const landed: Record<string, Record<string, string>> = {
-      "gpt-6-luna:none": {
-        "context-codex:deepgram": "Ask Codex to review the diff before you open the PR.",
-        "zustand-selector:deepgram":
-          "Zoo stand selector in the worktree store is returning a new array on every render. Wrap it in useShallow.",
-        "gone:openai": "Gone.",
-      },
-      "gpt-6.1-terra:none": {
-        "context-codex:deepgram": "Ask Codex to review the diff before you open the PR.",
-        "zustand-selector:deepgram": entries[1]!.raw,
-      },
-    };
-    const trials = Object.entries(landed).flatMap(([variant, texts]) =>
-      Object.entries(texts).map(([caseId, text]) => ({
-        caseId,
-        variant,
-        repeat: 1,
-        disposition: "applied",
-        landed: text,
-        proposal: text,
-        landedScore: { fixesLanded: 0, missedFixes: [] },
-        proposalScore: { fixesLanded: 0, missedFixes: [] },
-        roundTripMs: 900,
-        totalMs: 950,
-        costUsd: 0.001,
-      }))
-    );
+    const legacyScore = { fixesLanded: 0, missedFixes: [] };
+    const saved = (variant: string, caseId: string, landed: string, proposal = landed) => ({
+      caseId,
+      variant,
+      repeat: 1,
+      disposition: proposal === landed ? "applied" : "rejected",
+      ...(proposal === landed ? {} : { rejectReason: "edit_size" }),
+      landed,
+      proposal,
+      landedScore: legacyScore,
+      proposalScore: legacyScore,
+      roundTripMs: 900,
+      totalMs: 950,
+      costUsd: 0.001,
+    });
     const run = {
       schemaVersion: VOICE_CLEANUP_SCHEMA_VERSION,
       scoringVersion: 2,
@@ -681,14 +694,14 @@ describe("rescore", () => {
       repeats: 1,
       stream: true,
       variants: [
-        { id: "gpt-6-luna:none", model: "gpt-6-luna", effort: "none" },
-        { id: "gpt-6.1-terra:none", model: "gpt-6.1-terra", effort: "none" },
+        { id: LUNA, model: "gpt-6-luna", effort: "none" },
+        { id: TERRA, model: "gpt-6.1-terra", effort: "none" },
       ],
       profile: { customDictionary: [], projectName: "daintree", projectPath: "/p", language: "en" },
       promptHash: "prompt",
       corpusHash: "corpus",
       corpus: [
-        ...entries.map((entry) => ({
+        ...[codex, zustand].map((entry) => ({
           id: entry.id,
           style: entry.style,
           source: entry.source,
@@ -696,18 +709,18 @@ describe("rescore", () => {
           inputHash: inputHash(entry),
           sent: {},
         })),
-        {
-          id: "gone:openai",
-          style: "openai",
-          source: "context",
-          chars: 5,
-          inputHash: "x",
-          sent: {},
-        },
+        { id: "gone", style: "openai", source: "context", chars: 5, inputHash: "x", sent: {} },
       ],
       prices: {},
       predictionProbes: [],
-      trials,
+      trials: [
+        saved(LUNA, "codex", codex.reference),
+        saved(LUNA, "zustand", "The zoo stand selector in the worktree store needs useShallow."),
+        saved(LUNA, "gone", "Gone."),
+        saved(TERRA, "codex", codex.reference),
+        // Turned down whole: the proposal had every fix, the raw text landed.
+        saved(TERRA, "zustand", zustand.raw, zustand.reference),
+      ],
       summaries: [],
     };
     const file = path.join(directory, "saved.json");
@@ -715,10 +728,16 @@ describe("rescore", () => {
     return file;
   }
 
-  it("gives a run saved before fixes had a kind both scores, in the report too", () => {
-    const { run, corpus } = rescore(savedRun());
+  it("keeps a passage's input when only its fixes' kinds change", () => {
+    const reclassed = { ...zustand, fixes: { Zustand: "form", worktree: "form" } } as const;
+    expect(inputHash(reclassed)).toBe(inputHash(zustand));
+    expect(inputHash({ ...zustand, fixes: {} })).toBe(inputHash(zustand));
+  });
+
+  it("gives a run saved before fixes had a kind both scores, landed and proposed", () => {
+    const { run, corpus } = rescore(savedRun(), [codex, zustand]);
     expect(run.scoringVersion).toBe(VOICE_CLEANUP_SCORING_VERSION);
-    expect(run.rescoreExclusions).toEqual([{ id: "gone:openai", reason: "removed", trials: 1 }]);
+    expect(run.rescoreExclusions).toEqual([{ id: "gone", reason: "removed", trials: 1 }]);
     const [luna, terra] = run.summaries;
     expect(luna!.landed).toMatchObject({
       totals: { misreads: 2, forms: 2 },
@@ -727,15 +746,32 @@ describe("rescore", () => {
     });
     expect(luna!.proposed).toMatchObject({ misreadRate: 0.5, formRate: 1 });
     expect(terra!.landed).toMatchObject({ misreadRate: 0.5, formRate: 0 });
+    expect(terra!.proposed).toMatchObject({ misreadRate: 1, formRate: 1 });
 
     const report = renderReport(run, corpus);
-    expect(report).toContain(
-      "Rescored with scoring v3, leaving out gone:openai (removed, 1 trials)."
+    expect(report).toContain("Rescored with scoring v3, leaving out gone (removed, 1 trials).");
+    const section = (heading: string) => report.split(`## ${heading}`)[1]!.split("\n## ")[0]!;
+    // Misreads and Forms, the columns after Repaired.
+    const fixCells = (heading: string, variant: string) =>
+      section(heading)
+        .split("\n")
+        .find((line) => line.startsWith(`| ${variant} |`))
+        ?.split(" | ")
+        .slice(2, 4);
+    expect(section("What landed")).toContain("| Variant | Repaired | Misreads | Forms | Drops |");
+    expect(fixCells("What landed", LUNA)).toEqual(["50.0%", "100.0%"]);
+    expect(fixCells("What landed", TERRA)).toEqual(["50.0%", "0.0%"]);
+    expect(fixCells("What the model proposed", LUNA)).toEqual(["50.0%", "100.0%"]);
+    expect(fixCells("What the model proposed", TERRA)).toEqual(["100.0%", "100.0%"]);
+
+    const bySource = section("Misreads, forms and reference matches landed by source");
+    expect(bySource).toContain("| context | 1 | 1/1 · – · 1/1 | 1/1 · – · 1/1 |");
+    expect(bySource).toContain("| replay | 1 | 0/1 · 2/2 · 0/1 | 0/1 · 0/2 · 0/1 |");
+    expect(section("Misreads, forms and reference matches landed by style")).toContain(
+      "| deepgram | 2 | 1/2 · 2/2 · 1/2 | 1/2 · 0/2 · 1/2 |"
     );
-    expect(report).toContain("| Variant | Repaired | Misreads | Forms | Drops |");
-    // Once for what landed, once for what was proposed.
-    expect(report.match(/\| gpt-6-luna:none \| [^|]+ \| 50\.0% \| 100\.0% \|/g)).toHaveLength(2);
-    expect(report).toContain("| deepgram | 2 | 1/2 · 2/2 · 1/2 | 1/2 · 0/2 · 1/2 |");
-    expect(report).toContain("missed misreads Zustand; missed forms worktree, useShallow");
+    expect(report).toContain(
+      "rejected (edit_size); missed misreads Zustand; missed forms worktree, useShallow"
+    );
   });
 });

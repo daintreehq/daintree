@@ -593,14 +593,17 @@ export function inputHash(entry: CleanupCase): string {
 // A saved run scored again with today's references and checks. A passage the
 // corpus no longer has, or no longer sends exactly as it did, can't be: its
 // replies answered a different input. Those are left out and named.
-export function rescore(file: string): { run: RunRecord; corpus: CleanupCase[] } {
+export function rescore(
+  file: string,
+  today: readonly CleanupCase[] = CLEANUP_CORPUS
+): { run: RunRecord; corpus: CleanupCase[] } {
   const run = JSON.parse(readFileSync(file, "utf8")) as RunRecord;
   if (run.schemaVersion !== VOICE_CLEANUP_SCHEMA_VERSION) {
     throw new Error(
       `${file}: schema ${run.schemaVersion}, this script reads ${VOICE_CLEANUP_SCHEMA_VERSION}`
     );
   }
-  const current = new Map(CLEANUP_CORPUS.map((entry) => [entry.id, entry]));
+  const current = new Map(today.map((entry) => [entry.id, entry]));
   const corpus: CleanupCase[] = [];
   run.rescoreExclusions = [];
   for (const saved of run.corpus) {
