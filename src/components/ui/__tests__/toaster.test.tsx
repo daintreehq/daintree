@@ -1161,8 +1161,10 @@ describe("Toast screen-lock pause (issue #14885)", () => {
       vi.advanceTimersByTime(16);
     });
 
-    await act(async () => setScreenLocked(true));
-    await act(async () => {
+    // The deadline passes before React re-renders for the lock, so only the
+    // eager clear on the lock edge holds the toast.
+    act(() => {
+      setScreenLocked(true);
       vi.advanceTimersByTime(20_000);
     });
     expect(screen.getByText("Test message")).toBeTruthy();
@@ -1176,6 +1178,38 @@ describe("Toast screen-lock pause (issue #14885)", () => {
       vi.advanceTimersByTime(600);
     });
     expect(screen.queryByText("Test message")).toBeNull();
+  });
+
+  it("holds the success dwell through the lock", async () => {
+    render(<Toaster />);
+    await act(async () => {
+      addToast({
+        message: "Settings saved",
+        action: { label: "Undo", onClick: () => {}, successLabel: "Undone" },
+      });
+      vi.advanceTimersByTime(16);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByText("Undo"));
+    });
+
+    act(() => {
+      setScreenLocked(true);
+      vi.advanceTimersByTime(5000);
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(screen.getByText("Undone")).toBeTruthy();
+
+    await act(async () => setScreenLocked(false));
+    await act(async () => {
+      vi.advanceTimersByTime(2500);
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(200);
+    });
+    expect(screen.queryByText("Undone")).toBeNull();
   });
 
   it("starts paused when the toast is raised on a locked screen", async () => {

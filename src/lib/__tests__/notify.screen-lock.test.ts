@@ -235,6 +235,18 @@ describe("notify() suppression grace across a screen lock (#14885)", () => {
     expect(toasts()).toHaveLength(0);
   });
 
+  it("promotes when the user leaves the origin inside the restarted grace", () => {
+    raiseOnVisibleOrigin();
+    setScreenLocked(true);
+    vi.advanceTimersByTime(5_000);
+    setScreenLocked(false);
+
+    vi.advanceTimersByTime(200);
+    navigateAway();
+
+    expect(toasts()).toHaveLength(1);
+  });
+
   it("treats focus on a still-locked screen as no return", () => {
     raiseOnVisibleOrigin();
     setScreenLocked(true);

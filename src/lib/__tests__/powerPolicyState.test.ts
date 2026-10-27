@@ -110,13 +110,25 @@ describe("powerPolicyState", () => {
   it("fires level listeners on level changes only, with the lock already settled", () => {
     installBridge();
     const seen: Array<[string, boolean]> = [];
+    const lockEdges: boolean[] = [];
     subscribePowerPolicyLevel((level) => seen.push([level, isScreenLocked()]));
+    subscribeScreenLock((isLocked) => lockEdges.push(isLocked));
 
     push!(snapshot({ onBattery: false, anyWindowFocused: true }));
     push!(locked);
+    // Unlocked with the window hidden: still deep, no longer locked.
     push!(snapshot({ level: "deep", screenLocked: false, anyWindowVisible: false }));
 
     expect(seen).toEqual([["deep", true]]);
+    expect(lockEdges).toEqual([true, false]);
+    expect(isScreenLocked()).toBe(false);
+  });
+
+  it("reads a deep policy with no lock as unlocked", () => {
+    installBridge(snapshot({ level: "deep", canObserve: false, anyWindowVisible: false }));
+
+    expect(getPowerPolicyLevel()).toBe("deep");
+    expect(isScreenLocked()).toBe(false);
   });
 
   it("tries again after a subscription that throws", () => {

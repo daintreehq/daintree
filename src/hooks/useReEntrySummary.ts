@@ -199,30 +199,39 @@ export function useReEntrySummary(): ReEntrySummaryState {
       });
     };
 
-    const handleFocus = () => {
-      if (!document.hasFocus()) return;
-      // Focus on a still-locked screen is no return; the unlock is.
-      if (isScreenLocked()) return;
-      summarizeReturn();
+    // Focus and unlock both mark a return, in either order. Focus read inside
+    // a focus handler is stale on Chromium 148 (#10230), so the check runs a
+    // frame later and reads focus and the lock then. Focus on a still-locked
+    // screen is no return; its unlock is.
+    let returnFrame = 0;
+    const checkReturn = () => {
+      cancelAnimationFrame(returnFrame);
+      returnFrame = requestAnimationFrame(() => {
+        returnFrame = 0;
+        if (!document.hasFocus() || isScreenLocked()) return;
+        summarizeReturn();
+      });
     };
 
     const handleBlur = () => {
-      blurTimeRef.current = Date.now();
+      // A focus that didn't last to its frame was no return, so the absence it
+      // interrupted keeps its start.
+      cancelAnimationFrame(returnFrame);
+      returnFrame = 0;
+      blurTimeRef.current ??= Date.now();
     };
 
     // Locking fires no blur, so it starts an absence of its own (#14885).
-    // Unlocking into a focused window is the return, and focus read here,
-    // outside a focus handler, is current; unlocking anywhere else waits for
-    // the focus event. Where lock events never fire, none of this runs.
+    // Where lock events never fire, none of this runs.
     const handleScreenLock = (locked: boolean) => {
       if (locked) {
         lockTimeRef.current ??= Date.now();
         return;
       }
-      if (document.hasFocus()) summarizeReturn();
+      checkReturn();
     };
 
-    window.addEventListener("focus", handleFocus);
+    window.addEventListener("focus", checkReturn);
     window.addEventListener("blur", handleBlur);
     const offScreenLock = subscribeScreenLock(handleScreenLock);
     // Read after subscribing, so a lock the subscription replayed counts. A
@@ -230,7 +239,8 @@ export function useReEntrySummary(): ReEntrySummaryState {
     if (isScreenLocked()) lockTimeRef.current ??= Date.now();
 
     return () => {
-      window.removeEventListener("focus", handleFocus);
+      cancelAnimationFrame(returnFrame);
+      window.removeEventListener("focus", checkReturn);
       window.removeEventListener("blur", handleBlur);
       offScreenLock();
     };

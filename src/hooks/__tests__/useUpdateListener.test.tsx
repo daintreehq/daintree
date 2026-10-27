@@ -567,9 +567,32 @@ describe("useUpdateListener", () => {
         .getState()
         .entries.find((e) => e.title === "Update ready");
       expect(ready?.seenAsToast).toBe(false);
+      expect(useNotificationHistoryStore.getState().unreadCount).toBe(1);
     } finally {
       hasFocus.mockRestore();
       __resetPowerPolicyStateForTests();
+    }
+  });
+
+  it("marks the ready stage seen when it lands on a focused, unlocked window", () => {
+    const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    useNotificationHistoryStore.setState({ entries: [], unreadCount: 0 });
+    try {
+      renderHook(() => useUpdateListener());
+      act(() => {
+        capturedAvailable!({ version: "2.5.0" });
+      });
+
+      act(() => {
+        capturedDownloaded!({ version: "2.5.0" });
+      });
+
+      const ready = useNotificationHistoryStore
+        .getState()
+        .entries.find((e) => e.title === "Update ready");
+      expect(ready?.seenAsToast).toBe(true);
+    } finally {
+      hasFocus.mockRestore();
     }
   });
 
