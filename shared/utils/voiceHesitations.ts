@@ -9,9 +9,11 @@ const AFTER = `(?!${WORD})(?!${JOINER}${WORD})`;
 // um, umm, uh, uhh, uhm and erm, with any stretch of the vowel or the hum.
 // "hmm" and "mm" can answer a question, so they are left for cleanup.
 const SOUND = "(?:[Uu]+[HhMm]+|[Ee]+[Rr][Mm]+)";
-// "UM" and "UH" are as likely to be an acronym as a sound.
-const NOT_ACRONYM = `(?!U[MH](?!${WORD}))`;
-const HESITATION = `${BEFORE}${NOT_ACRONYM}${SOUND}${AFTER}`;
+// "UM", "UH" and "ERM" are as likely to be an acronym as a sound.
+const NOT_ACRONYM = `(?!(?:U[MH]|ERM)(?!${WORD}))`;
+// "Uh huh" and "um hm" say yes, and "huh" left on its own would ask a question.
+const NOT_AFFIRMATION = `(?![^\\S\\r\\n]+(?:[Hh]+[Uu]+[Hh]+|[Hh]+[Mm]+)(?!${WORD}))`;
+const HESITATION = `${BEFORE}${NOT_ACRONYM}${SOUND}${AFTER}${NOT_AFFIRMATION}`;
 // What a run of hesitations may be strung together with: "Uh, um, so". A full
 // stop is not among them, so the sentence it ends keeps its end.
 const BETWEEN = "(?:[^\\S\\r\\n]|[,;:…—–])+";
@@ -22,6 +24,15 @@ const PAUSE_RE = /[,;:—–]/u;
 const TERMINATOR_RE = /[.!?…]/u;
 const RUN_CHAR_RE = /[,;:.!?…—–]/u;
 const OPENER_RE = /[(["'“‘{]/u;
+const CLOSER_OF: Readonly<Record<string, string>> = {
+  "(": ")",
+  "[": "]",
+  "{": "}",
+  '"': '"',
+  "'": "'",
+  "“": "”",
+  "‘": "’",
+};
 const HORIZONTAL_SPACE_RE = /[^\S\r\n]/u;
 const LINE_BREAK_RE = /[\r\n]/u;
 // "iPhone", "eBay": capitalising the first letter would misspell the word.
@@ -66,6 +77,11 @@ export function stripHesitations(text: string, edits?: VoiceTextEdit[]): string 
     const prev = spaceStart > 0 ? text[spaceStart - 1]! : "";
     const atStart = prev === "" || LINE_BREAK_RE.test(prev);
     const opens = spaceStart === start && OPENER_RE.test(prev);
+    if (opens && text[runEnd] === CLOSER_OF[prev]) {
+      // `saying "um"` and "(um)" name the sound, and dropping it leaves an empty pair.
+      CLUSTER_RE.lastIndex = end;
+      continue;
+    }
     const afterPause = PAUSE_RE.test(prev);
     const terminators = run.replace(/[,;:—–]/gu, "");
 
@@ -87,6 +103,11 @@ export function stripHesitations(text: string, edits?: VoiceTextEdit[]): string 
     } else if (!afterPause && run) {
       from = spaceStart;
       to = end;
+    } else if (afterPause && !run && PAUSE_RE.test(text[next] ?? "")) {
+      // "I mean — uh — no": the pause after it would double the one before.
+      let after = next + 1;
+      while (after < text.length && HORIZONTAL_SPACE_RE.test(text[after]!)) after++;
+      if (after < text.length && !LINE_BREAK_RE.test(text[after]!)) to = after;
     }
     from = Math.max(from, copied);
 

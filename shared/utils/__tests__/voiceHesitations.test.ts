@@ -42,6 +42,11 @@ describe("stripHesitations", () => {
     expect(stripHesitations("We went, uh, to the store")).toBe("We went, to the store");
   });
 
+  it("leaves one dash where a hesitation sat between two", () => {
+    expect(stripHesitations("I mean — uh — no")).toBe("I mean — no");
+    expect(stripHesitations("I mean – um – no")).toBe("I mean – no");
+  });
+
   it("keeps the sentence end a trailing hesitation sat in front of", () => {
     expect(stripHesitations("That is the plan, um.")).toBe("That is the plan.");
     expect(stripHesitations("Is that right um?")).toBe("Is that right?");
@@ -94,6 +99,31 @@ describe("stripHesitations", () => {
     expect(stripHesitations(`open ${input} now`)).toBe(`open ${input} now`);
   });
 
+  it.each([
+    'He keeps saying "um" a lot.',
+    "He said 'uh' twice.",
+    "He said “um” twice.",
+    "He said ‘uh’ twice.",
+    'He said "um." twice.',
+    'He said "um, uh" twice.',
+    "I mean (um) no",
+    "I mean [uh] no",
+    "I mean {erm} no",
+  ])("leaves a hesitation named in quotes or brackets in %j", (text) => {
+    expect(stripHesitations(text)).toBe(text);
+  });
+
+  it.each(["Uh huh, that works.", "uh huh", "Um hm, sure", "uh hmm, yes", "Uhm HUH"])(
+    "leaves the yes in %j",
+    (text) => {
+      expect(stripHesitations(text)).toBe(text);
+    }
+  );
+
+  it("still drops a hesitation in front of a spaced yes", () => {
+    expect(stripHesitations("Um, uh huh, that works")).toBe("Uh huh, that works");
+  });
+
   it("leaves words that can carry meaning", () => {
     const text = "Well, like, you know, so hmm, mm, I mean";
     expect(stripHesitations(text)).toBe(text);
@@ -103,6 +133,8 @@ describe("stripHesitations", () => {
     expect(stripHesitations("The UM team and UH campus")).toBe("The UM team and UH campus");
     expect(stripHesitations("Uh, UM, check")).toBe("UM, check");
     expect(stripHesitations("UM, uh, check")).toBe("UM, check");
+    expect(stripHesitations("Update the ERM.")).toBe("Update the ERM.");
+    expect(stripHesitations("Erm, the ERM plan")).toBe("The ERM plan");
   });
 
   it("drops a hesitation that stands beside a protected word", () => {
@@ -147,6 +179,24 @@ describe("stripHesitations", () => {
     const from = text.indexOf("build");
     const [moved] = carrySpansThroughEdits([{ from, to: from + 5 }], edits);
     expect(result).toBe("So check the build");
+    expect(moved).toEqual({ from: result.indexOf("build"), to: result.indexOf("build") + 5 });
+  });
+
+  it("carries spans past a quoted hesitation it keeps and a dash it collapses", () => {
+    const text = 'Um, say "um" — uh — then build';
+    const edits: VoiceTextEdit[] = [];
+    const result = stripHesitations(text, edits);
+    expect(result).toBe('Say "um" — then build');
+    const quoted = text.indexOf('"um"') + 1;
+    const from = text.indexOf("build");
+    const [kept, moved] = carrySpansThroughEdits(
+      [
+        { from: quoted, to: quoted + 2 },
+        { from, to: from + 5 },
+      ],
+      edits
+    );
+    expect(result.slice(kept!.from, kept!.to)).toBe("um");
     expect(moved).toEqual({ from: result.indexOf("build"), to: result.indexOf("build") + 5 });
   });
 });
