@@ -1012,7 +1012,9 @@ describe("VoiceCorrectionService", () => {
       JSON.parse((call as unknown as [string, RequestInit])[1].body as string)
     );
     // The pause after the passage's last word marks nothing.
-    expect(withPauses.input[1].content).toContain("<target>\nfix it, <pause/> then ship it\n</target>");
+    expect(withPauses.input[1].content).toContain(
+      "<target>\nfix it, <pause/> then ship it\n</target>"
+    );
     expect(withPauses.input[0]).toEqual(without.input[0]);
     expect(withPauses.prompt_cache_key).toBe(without.prompt_cache_key);
   });
@@ -1042,7 +1044,8 @@ describe("VoiceCorrectionService", () => {
       vi.fn().mockResolvedValue(
         makeFetchResponse({
           action: "replace",
-          corrected_text: "<pause/> Leave the tests. <pause /> Failing builds can<pause/>wait,<pause/>\nuntil the cut.",
+          corrected_text:
+            "<pause/> Leave the tests. <pause /> Failing builds can<pause/>wait,<pause/>\nuntil the cut.",
           confidence: "high",
         })
       )
@@ -1079,7 +1082,9 @@ describe("VoiceCorrectionService", () => {
     expect(unpaused.correctedText).toBe("Swap <pause/> for a comma, then ship it.");
     expect(literal.correctedText).toBe("Swap <pause/> for a comma, then ship it.");
     const body = JSON.parse((fetchMock.mock.calls[1] as [string, RequestInit])[1].body as string);
-    expect(body.input[1].content).toContain("<target>\nswap <pause/> for a comma then ship it\n</target>");
+    expect(body.input[1].content).toContain(
+      "<target>\nswap <pause/> for a comma then ship it\n</target>"
+    );
   });
 
   it("keeps a pause mark in the screen's output from reading as one", async () => {
@@ -1164,7 +1169,11 @@ describe("VoiceCorrectionService", () => {
 
     it("marks a pause after its word and that word's punctuation, once, and only between words", () => {
       expect(
-        VoiceCorrectionService.annotateTarget("fix it, then ship it", [], [7, 7, 0, 8, 20, 3.5, -1, 99])
+        VoiceCorrectionService.annotateTarget(
+          "fix it, then ship it",
+          [],
+          [7, 7, 0, 8, 20, 3.5, -1, 99]
+        )
       ).toBe("fix it, <pause/> then ship it");
     });
 

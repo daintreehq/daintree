@@ -1759,7 +1759,8 @@ const PAUSES: readonly AuthoredCase[] = [
     style: "openai",
     source: "pauses",
     raw: "Um, two things before you merge. Bump the timeout to 30 seconds. And log every retry.",
-    reference: "Two things before you merge:\n1. Bump the timeout to 30 seconds.\n2. Log every retry.",
+    reference:
+      "Two things before you merge:\n1. Bump the timeout to 30 seconds.\n2. Log every retry.",
     fixes: { "1. Bump": "form", "2. Log": "form" },
     drops: ["um", "and"],
     pauses: ["before you merge", "to 30 seconds"],

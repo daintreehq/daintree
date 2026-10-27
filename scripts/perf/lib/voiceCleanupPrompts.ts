@@ -520,16 +520,13 @@ const PAUSES_1 = revise(AGENT_REPLY, {
       'drop only the counting words ("first", "two", "step three", and an "and" or "then" in front of them)',
       'drop only the counting words ("first", "two", "step three") and an "and" or "then" that opens an item',
     ],
-    [
-      'or a bare "no" between commas)',
-      'or a bare "no" between commas or straight after a pause)',
-    ],
+    ['or a bare "no" between commas)', 'or a bare "no" between commas or straight after a pause)'],
     [
       "its item numbers take the place of the spoken counting words.",
       "its item numbers take the place of the spoken counting words, or of the pauses between its items.",
     ],
     [
-      '(an inline series, not a list)\n',
+      "(an inline series, not a list)\n",
       '(an inline series, not a list)\n- Target: "there are two problems with the export <pause/> it ignores the filter <pause/> and the file name has no date"\n  Corrected: "There are two problems with the export:\\n1. It ignores the filter.\\n2. The file name has no date."\n- Target: "the dialog should close when you <pause/> click outside it <pause/> currently it stays open"\n  Corrected: "The dialog should close when you click outside it. Currently it stays open." (a breath inside the first sentence, a break at the second pause)\n',
     ],
   ],

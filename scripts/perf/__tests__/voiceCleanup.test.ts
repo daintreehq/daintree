@@ -1122,7 +1122,9 @@ describe("prompt variants", () => {
 
 describe("locatePauses", () => {
   it("places each pause after its words and their punctuation, repeated words in order", () => {
-    expect(locatePauses("so, it works. so it works", ["so", "it works", "so"])).toEqual([3, 13, 16]);
+    expect(locatePauses("so, it works. so it works", ["so", "it works", "so"])).toEqual([
+      3, 13, 16,
+    ]);
   });
 
   it("refuses a phrase the transcript doesn't have", () => {
