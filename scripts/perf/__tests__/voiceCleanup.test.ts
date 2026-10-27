@@ -321,6 +321,10 @@ describe("inputHash", () => {
     expect(inputHash({ ...passage, pauses: ["GPT 6.1"] })).not.toBe(early);
   });
 
+  it("changes with the draft after it", () => {
+    expect(inputHash({ ...passage, followingText: "and the cache." })).not.toBe(inputHash(passage));
+  });
+
   it("changes with the recent prompts it carries, and not for none", () => {
     const hashes = [
       inputHash(passage),
@@ -1042,6 +1046,33 @@ describe("run-ons and agent-ready text", () => {
       'twice: "ship it" comes more than once in "Ship it. Then wait. Ship it only after the build passes."',
       "twice: a pause comes after no words",
     ]);
+  });
+
+  // #14899: the words can't see a full stop the draft after the passage rules out.
+  it("is agent-ready on an exact passage only as an accepted reference, character for character", () => {
+    const entry = makeCase({
+      raw: "Make sure the settings page still loads.",
+      reference: "make sure the settings page still loads",
+      fixes: { "make sure": "form" },
+      drops: [],
+      exact: true,
+      followingText: "and that the theme picker opens.",
+    });
+    expect(scoreText(entry, entry.reference).agentReady).toBe(true);
+    expect(scoreText(entry, ` ${entry.reference}\n`).agentReady).toBe(true);
+    const closed = scoreText(entry, "make sure the settings page still loads.");
+    expect(closed.matchesReference).toBe(true);
+    expect(closed.agentReady).toBe(false);
+    expect(
+      scoreText({ ...entry, exact: undefined }, "make sure the settings page still loads.")
+        .agentReady
+    ).toBe(true);
+  });
+
+  it("sends the draft after a passage only when it has one", () => {
+    const entry = makeCase({ followingText: ") before you merge." });
+    expect(requestFor(entry).followingText).toBe(") before you merge.");
+    expect(requestFor(makeCase({})).followingText).toBeUndefined();
   });
 
   it("flags a run-on cap the raw already meets, or a reference breaks", () => {

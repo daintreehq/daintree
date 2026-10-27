@@ -529,7 +529,7 @@ describe("VoiceRecordingService — correction over dictated ranges (#14613)", (
     );
   });
 
-  it("sends the text before the dictation as context and leaves typed text around it alone", async () => {
+  it("sends the text around the dictation as context and leaves it alone", async () => {
     const { service, voiceStore, draft, setDraft } = await setup("Note: the build fails when");
     correct.fn.mockResolvedValue({ action: "replace", correctedText: "it runs on Windows" });
     voiceStore.getState().setCorrectionEnabled(true);
@@ -541,6 +541,7 @@ describe("VoiceRecordingService — correction over dictated ranges (#14613)", (
     expect(correct.fn).toHaveBeenCalledWith({
       rawText: "it runs on windows",
       recentContext: ["Note: the build fails when"],
+      followingText: ". Thanks.",
       startsPrompt: false,
       terminalId: "panel-1",
       sessionId: SESSION_ID,
@@ -768,6 +769,7 @@ describe("VoiceRecordingService — correction over dictated ranges (#14613)", (
     expect(correct.fn).toHaveBeenCalledWith({
       rawText: "hello there",
       recentContext: ["Intro.\n"],
+      followingText: "Thanks.",
       startsPrompt: false,
       terminalId: "panel-1",
       sessionId: SESSION_ID,
@@ -775,6 +777,34 @@ describe("VoiceRecordingService — correction over dictated ranges (#14613)", (
     });
     expect(draft()).toBe(`Intro.\n${expected} Thanks.`);
     expect(voiceStore.getState().panelBuffers[PANEL]!.sessionCorrectedText).toBe(expected);
+  });
+
+  it("bounds the text after the dictation to a couple of hundred characters, on a word boundary", async () => {
+    const { service, voiceStore, draft, setDraft } = await setup();
+    correct.fn.mockResolvedValue({ action: "no_change", correctedText: "" });
+    voiceStore.getState().setCorrectionEnabled(true);
+
+    say("and then some", "item-a");
+    const rest = Array.from({ length: 100 }, (_, i) => `word${i}`).join(" ");
+    setDraft(`${draft()} ${rest}`);
+    await service.stop("Dictation stopped.");
+
+    const { followingText } = correct.fn.mock.calls[0]![0];
+    expect(followingText!.length).toBeLessThanOrEqual(200);
+    expect(followingText!.length).toBeGreaterThan(150);
+    expect(rest.startsWith(followingText!)).toBe(true);
+    expect(rest.charAt(followingText!.length)).toBe(" ");
+  });
+
+  it("keeps a line break after the dictation in the text after it", async () => {
+    const { service, voiceStore, draft, setDraft } = await setup();
+    correct.fn.mockResolvedValue({ action: "no_change", correctedText: "" });
+    voiceStore.getState().setCorrectionEnabled(true);
+
+    say("first part", "item-a");
+    setDraft(`${draft()}\nTyped line.  `);
+    await service.stop("Dictation stopped.");
+    expect(correct.fn.mock.calls[0]![0].followingText).toBe("\nTyped line.");
   });
 
   it("keeps a whole word that starts exactly where the context bound falls", async () => {
@@ -1483,6 +1513,7 @@ describe("VoiceRecordingService — correction and file links at the caret (#146
     expect(correct.fn).toHaveBeenCalledWith({
       rawText: "step two",
       recentContext: ["Step one."],
+      followingText: "Step three.",
       terminalId: "panel-1",
       sessionId: SESSION_ID,
       startsPrompt: false,
