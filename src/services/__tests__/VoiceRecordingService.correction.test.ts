@@ -868,7 +868,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     dictate("panel-1", "hello wrld");
     await service.stop();
     expect(voiceStore.getState().panelBuffers["panel-1"]?.correctionRanges).toEqual([
-      { from: 0, to: 10 },
+      { from: 0, to: 10, session: correct.mock.calls[0]![0].sessionId },
     ]);
 
     service.destroy();
@@ -1424,17 +1424,23 @@ describe("VoiceRecordingService — streamed cleanup (#14779)", () => {
     };
     const ranges = (panelId: string) =>
       harness.voiceStore.getState().panelBuffers[panelId]?.correctionRanges ?? [];
-    return { ...harness, pending, progress, ranges };
+    // The session the passage sent as `rawText` was dictated in.
+    const sessionOf = (rawText: string) =>
+      correct.mock.calls.find(([r]) => r.rawText === rawText)?.[0].sessionId;
+    return { ...harness, pending, progress, ranges, sessionOf };
   }
 
   const DICTATED = "um so fix the bug in the parser";
   const CORRECTED = "So fix the bug in the parser.";
 
   it("draws the cleanup over its passage as it streams, and lands it whole", async () => {
-    const { service, dictate, draft, flush, pending, progress, ranges } = await streamingSetup();
+    const { service, dictate, draft, flush, pending, progress, ranges, sessionOf } =
+      await streamingSetup();
     dictate("panel-1", DICTATED);
     await service.stop();
-    expect(ranges("panel-1")).toEqual([{ from: 0, to: DICTATED.length }]);
+    const session = sessionOf(DICTATED);
+    expect(session).toEqual(expect.any(String));
+    expect(ranges("panel-1")).toEqual([{ from: 0, to: DICTATED.length, session }]);
 
     progress(DICTATED, "So fix the bug in");
     // The newest word waits for the next; the draft keeps what was dictated.
@@ -1442,6 +1448,7 @@ describe("VoiceRecordingService — streamed cleanup (#14779)", () => {
       {
         from: 0,
         to: DICTATED.length,
+        session,
         rewrite: { to: "um so fix the bug".length, text: "So fix the bug" },
       },
     ]);
@@ -1460,8 +1467,18 @@ describe("VoiceRecordingService — streamed cleanup (#14779)", () => {
   });
 
   it("puts a rejected cleanup's passage back exactly as dictated, at once", async () => {
-    const { service, dictate, say, draft, flush, inputStore, pending, progress, ranges } =
-      await streamingSetup();
+    const {
+      service,
+      dictate,
+      say,
+      draft,
+      flush,
+      inputStore,
+      pending,
+      progress,
+      ranges,
+      sessionOf,
+    } = await streamingSetup();
     dictate("panel-1", DICTATED);
     inputStore.getState().setDraftInput("panel-1", draft("panel-1") + "\n");
     say("and the lexr too");
@@ -1474,11 +1491,13 @@ describe("VoiceRecordingService — streamed cleanup (#14779)", () => {
     pending.get(DICTATED)!.resolve({ action: "no_change", correctedText: DICTATED });
     await flush();
     expect(service.hasPendingCorrection("panel-1")).toBe(true);
-    expect(ranges("panel-1")[0]).toEqual({ from: 0, to: DICTATED.length });
+    const session = sessionOf(DICTATED);
+    expect(session).toEqual(expect.any(String));
+    expect(ranges("panel-1")[0]).toEqual({ from: 0, to: DICTATED.length, session });
 
     // Its stream has replied, so anything still in flight for it is ignored.
     progress(DICTATED, "So fix the bug in the parser");
-    expect(ranges("panel-1")[0]).toEqual({ from: 0, to: DICTATED.length });
+    expect(ranges("panel-1")[0]).toEqual({ from: 0, to: DICTATED.length, session });
 
     pending.get("and the lexr too")!.resolve({ action: "no_change", correctedText: "" });
     await flush();
@@ -1487,7 +1506,7 @@ describe("VoiceRecordingService — streamed cleanup (#14779)", () => {
   });
 
   it("shows no command once text typed ahead of the passage means it won't land", async () => {
-    const { service, dictate, say, draft, flush, inputStore, pending, ranges } =
+    const { service, dictate, say, draft, flush, inputStore, pending, ranges, sessionOf } =
       await streamingSetup();
     dictate("panel-1", "run the review skill on auth");
     inputStore.getState().setDraftInput("panel-1", draft("panel-1") + "\n");
@@ -1500,9 +1519,12 @@ describe("VoiceRecordingService — streamed cleanup (#14779)", () => {
       correctedText: "/review on auth",
     });
     await flush();
+    const session = sessionOf("run the review skill on auth");
+    expect(session).toEqual(expect.any(String));
     expect(ranges("panel-1")[0]).toEqual({
       from: 6,
       to: 6 + "run the review skill on auth".length,
+      session,
     });
 
     pending.get("and the lexr too")!.resolve({ action: "no_change", correctedText: "" });
@@ -1547,8 +1569,18 @@ describe("VoiceRecordingService — streamed cleanup (#14779)", () => {
   });
 
   it("shows a passage's whole cleanup once it's back, while another still streams", async () => {
-    const { service, dictate, say, draft, flush, inputStore, pending, progress, ranges } =
-      await streamingSetup();
+    const {
+      service,
+      dictate,
+      say,
+      draft,
+      flush,
+      inputStore,
+      pending,
+      progress,
+      ranges,
+      sessionOf,
+    } = await streamingSetup();
     dictate("panel-1", "the parsr is brokn");
     inputStore.getState().setDraftInput("panel-1", draft("panel-1") + "\n");
     say("um and the lexr too");
@@ -1560,9 +1592,17 @@ describe("VoiceRecordingService — streamed cleanup (#14779)", () => {
     });
     await flush();
     progress("um and the lexr too", "And the lexer");
+    const session = sessionOf("the parsr is brokn");
+    expect(session).toEqual(expect.any(String));
+    expect(sessionOf("um and the lexr too")).toBe(session);
     expect(ranges("panel-1")).toEqual([
-      { from: 0, to: 18, rewrite: { to: 18, text: "The parser is broken." } },
-      { from: 19, to: 38, rewrite: { to: 19 + "um and the".length, text: "And the" } },
+      { from: 0, to: 18, session, rewrite: { to: 18, text: "The parser is broken." } },
+      {
+        from: 19,
+        to: 38,
+        session,
+        rewrite: { to: 19 + "um and the".length, text: "And the" },
+      },
     ]);
     expect(draft("panel-1")).toBe("the parsr is brokn\num and the lexr too");
 
