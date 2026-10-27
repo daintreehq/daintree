@@ -11,6 +11,8 @@ import { HANDBACK_CODE_PATTERN } from "../../shared/types/handback.js";
 import { COPY_TREE_RUN_SOURCES } from "../../shared/types/ipc/copyTreeHistory.js";
 import { MAX_TERMINALS_PER_RECIPE_ADMISSION_BATCH } from "../../shared/utils/recipeSanitizer.js";
 import {
+  VOICE_RECENT_PROMPT_MAX_CHARS,
+  VOICE_RECENT_PROMPTS_MAX,
   VOICE_REWRITE_MAX_INSTRUCTION_CHARS,
   VOICE_REWRITE_MAX_SELECTION_CHARS,
 } from "../../shared/config/voiceCorrection.js";
@@ -799,6 +801,15 @@ export const VoiceInputStartOptionsSchema = z
 export const VoiceInputCorrectPayloadSchema = z.object({
   rawText: z.string(),
   recentContext: z.array(z.string()).optional(),
+  /**
+   * The prompts the view last sent to `terminalId`, oldest first, already
+   * bounded. Ones that don't validate are dropped rather than failing the cleanup.
+   */
+  recentPrompts: z
+    .array(z.string().max(VOICE_RECENT_PROMPT_MAX_CHARS))
+    .max(VOICE_RECENT_PROMPTS_MAX)
+    .optional()
+    .catch(undefined),
   /** The panel the passage was dictated into: it picks the project vocabulary and the agent's commands. */
   terminalId: z.string().min(1).max(256).optional(),
   startsPrompt: z.boolean().optional(),

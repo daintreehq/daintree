@@ -32,6 +32,7 @@ import {
   setPendingComposerSelection,
 } from "@/lib/composerCaret";
 import { makeDraftKey } from "@/lib/draftKey";
+import { recentPromptsFor } from "@/services/voiceRecentPrompts";
 import {
   planVoiceBreak,
   planVoiceWords,
@@ -3654,10 +3655,16 @@ class VoiceRecordingService {
     });
     let text: string | null = null;
     try {
+      // Read as the request goes, so a prompt sent while this dictation ran
+      // counts. A terminal outside the view names none.
+      const recentPrompts = correction.context.terminalId
+        ? recentPromptsFor(correction.context.terminalId)
+        : [];
       const result = await window.electron.voiceInput.correct({
         rawText: passage.text,
         ...correction.context,
         ...(passage.context ? { recentContext: [passage.context] } : {}),
+        ...(recentPrompts.length > 0 ? { recentPrompts } : {}),
         startsPrompt: passage.startsPrompt,
         ...(correction.sessionId ? { sessionId: correction.sessionId } : {}),
         ...(passage.uncertain ? { uncertain: passage.uncertain } : {}),

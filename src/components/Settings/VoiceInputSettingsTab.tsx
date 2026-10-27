@@ -849,7 +849,7 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
       {settings.enabled && (
         <SettingsSection
           title="AI text correction"
-          description="When you stop dictating, the whole passage is corrected once by the cleanup model to fix technical terms, punctuation and filler words, resolve self-corrections, and lay out spoken lists. The text, the terminal's recent output with credential-like lines removed, the repository's package, folder and dependency names, and the worktree's issue or PR title are sent to OpenAI."
+          description="When you stop dictating, the whole passage is corrected once by the cleanup model to fix technical terms, punctuation and filler words, resolve self-corrections, and lay out spoken lists. The text, the prompts you recently sent from the same terminal, the terminal's recent output with credential-like lines removed, the repository's package, folder and dependency names, and the worktree's issue or PR title are sent to OpenAI."
           id="voice-ai-correction"
         >
           {saveError("correction")}

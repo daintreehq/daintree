@@ -16,6 +16,7 @@ vi.mock("@/store/terminalInputStore", () => {
       draftState.onWrite?.();
     }),
     bumpExternalDraftRevision: vi.fn(),
+    getSentPrompts: vi.fn(() => []),
   };
   const getState = () => fns;
   return {

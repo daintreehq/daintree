@@ -404,32 +404,41 @@ export interface ModelPrice {
   /** US dollars per million tokens. */
   input: number;
   cachedInput: number;
+  /** Input written to the prompt cache, for its default 30-minute lifetime. */
+  cacheWrite: number;
   output: number;
 }
 
-/** Standard-tier text prices, as published on each model's page on 2026-10-27. */
+/**
+ * Standard-tier text prices, as published on each model's page on 2026-10-27.
+ * A cache write costs 1.25 times the input rate (OpenAI's prompt caching guide).
+ */
 export const MODEL_PRICES: Readonly<Record<string, ModelPrice>> = {
-  "gpt-6-luna": { input: 0.1, cachedInput: 0.01, output: 0.5 },
-  "gpt-6.1-terra": { input: 1, cachedInput: 0.05, output: 5 },
+  "gpt-6-luna": { input: 0.1, cachedInput: 0.01, cacheWrite: 0.125, output: 0.5 },
+  "gpt-6.1-terra": { input: 1, cachedInput: 0.05, cacheWrite: 1.25, output: 5 },
 };
 
 export interface TokenUsage {
   inputTokens: number;
   cachedTokens: number;
+  /** Uncached input written to the cache; absent from a run that didn't record it. */
+  cacheWriteTokens?: number;
   outputTokens: number;
 }
 
 /**
- * Dollars for one request. Cached tokens are part of `inputTokens` and
- * reasoning tokens part of `outputTokens`, so neither is counted twice.
- * Null when the model has no price or the reply carried no usage.
+ * Dollars for one request. Cached and cache-written tokens are part of
+ * `inputTokens` and reasoning tokens part of `outputTokens`, so none is
+ * counted twice. Null when the model has no price or the reply carried no usage.
  */
 export function requestCost(model: string, usage: TokenUsage | undefined): number | null {
   const price = MODEL_PRICES[model];
   if (!price || !usage) return null;
   const uncached = Math.max(0, usage.inputTokens - usage.cachedTokens);
+  const written = Math.min(uncached, usage.cacheWriteTokens ?? 0);
   return (
-    (uncached * price.input +
+    ((uncached - written) * price.input +
+      written * price.cacheWrite +
       usage.cachedTokens * price.cachedInput +
       usage.outputTokens * price.output) /
     1_000_000

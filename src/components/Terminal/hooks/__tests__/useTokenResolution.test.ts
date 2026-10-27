@@ -542,6 +542,85 @@ describe("useTokenResolution.sendText — targeted submit", () => {
     expect(addToHistory).toHaveBeenCalledWith("t1", "check @diff\n\nAND THIS", undefined);
   });
 
+  describe("recording sends for the terminal's dictation cleanup (#14855)", () => {
+    const sent = () =>
+      useTerminalInputStore
+        .getState()
+        .getSentPrompts("t1")
+        .map((prompt) => prompt.text);
+
+    beforeEach(() => {
+      useTerminalInputStore.setState({ sentPrompts: new Map() });
+    });
+
+    it("records a send as written, composed, as it goes", async () => {
+      let take!: (ok: boolean) => void;
+      const { sendText, onSend } = setup();
+      onSend.mockReturnValue(new Promise<boolean>((resolve) => (take = resolve)));
+
+      await act(async () => {
+        await sendText("review @diff for Terra", { compose: (draft) => `${draft} and log it` });
+      });
+      expect(sent()).toEqual(["review @diff for Terra and log it"]);
+
+      await act(async () => take(true));
+      expect(sent()).toEqual(["review @diff for Terra and log it"]);
+    });
+
+    it("keeps sends in the order they went, whichever the terminal answers first", async () => {
+      const takes: Array<(ok: boolean) => void> = [];
+      const { sendText, onSend } = setup();
+      onSend.mockImplementation(() => new Promise<boolean>((resolve) => takes.push(resolve)));
+
+      await act(async () => {
+        await sendText("first");
+      });
+      await act(async () => {
+        await sendText("second");
+      });
+      await act(async () => takes[1]!(true));
+      await act(async () => takes[0]!(true));
+
+      expect(sent()).toEqual(["first", "second"]);
+      expect(
+        useTerminalInputStore
+          .getState()
+          .getSentPrompts("t1")
+          .map((prompt) => prompt.seq)
+      ).toEqual([0, 1]);
+    });
+
+    it("takes back what the terminal turned down, and never notes a refused submit", async () => {
+      const { sendText, onSend } = setup();
+      onSend
+        .mockResolvedValueOnce(true)
+        .mockResolvedValueOnce(false)
+        .mockRejectedValueOnce(new Error("gone"));
+
+      for (const text of ["landed", "refused by the pane", "lost on the way"]) {
+        await act(async () => {
+          await sendText(text);
+        });
+      }
+      await act(async () => {
+        await sendText("never went", { submit: vi.fn().mockResolvedValue(false) });
+      });
+      await act(async () => {
+        await sendText("submitted", { submit: vi.fn().mockResolvedValue(true) });
+      });
+
+      expect(sent()).toEqual(["landed", "submitted"]);
+    });
+
+    it("records a send whose handler says nothing about taking it", async () => {
+      const { sendText } = setup();
+      await act(async () => {
+        await sendText("fire and forget");
+      });
+      expect(sent()).toEqual(["fire and forget"]);
+    });
+  });
+
   it("sends a composed instruction even when the draft is empty", async () => {
     const submit = vi.fn().mockResolvedValue(true);
     const { sendText } = setup();

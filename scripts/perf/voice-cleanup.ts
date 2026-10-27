@@ -33,6 +33,7 @@ import {
   CLEANUP_CORPUS,
   cleanupSessions,
   FIX_KINDS,
+  recentPromptTwins,
   type CleanupCase,
   type CleanupSession,
   type FixKind,
@@ -300,9 +301,11 @@ function settingsFor(
 
 function requestFor(entry: CleanupCase): VoiceCorrectionRequest {
   const recentContext = entry.recentContext ?? [];
+  const recentPrompts = entry.recentPrompts ?? [];
   return {
     rawText: entry.raw,
     ...(recentContext.length > 0 ? { recentContext } : {}),
+    ...(recentPrompts.length > 0 ? { recentPrompts } : {}),
     ...(entry.terminalOutput ? { terminalOutput: entry.terminalOutput } : {}),
     reason: "stop",
     startsPrompt: entry.startsPrompt ?? recentContext.length === 0,
@@ -732,6 +735,45 @@ export function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): st
     ),
     ""
   );
+
+  const twins = recentPromptTwins(corpus);
+  if (twins.length > 0) {
+    lines.push(
+      "## With and without recent prompts",
+      "",
+      `Each passage sent with the prompts last sent to its terminal (#14855), beside the same passage sent without them, over the repeats both ran, under the \`${firstGuard}\` guard. Clean kept: passages that should come back untouched and did. Risky: trials with a broken, novel or added word. Cached: the share of input read from the prompt cache. Cache writes bill at 1.25 times the input rate.`,
+      "",
+      "| Variant | Recent prompts | Trials | Misreads landed | Clean kept | Risky trials | Mean input | Cached | Cache writes | Per cleanup |",
+      "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    );
+    const withPrompts = twins.map((twin) => twin.withPrompts);
+    const bare = twins.map((twin) => twin.bare);
+    for (const variant of run.variants) {
+      const ran = new Map(
+        run.trials
+          .filter((trial) => trial.variant === variant.id)
+          .map((trial) => [`${trial.caseId}#${trial.repeat}`, trial])
+      );
+      const paired: Array<[Trial, Trial]> = twins.flatMap((twin) =>
+        run.trials.flatMap((trial) => {
+          if (trial.variant !== variant.id || trial.caseId !== twin.withPrompts.id) return [];
+          const other = ran.get(`${twin.bare.id}#${trial.repeat}`);
+          return other ? [[trial, other] as [Trial, Trial]] : [];
+        })
+      );
+      const sides: Array<[string, Trial[], CleanupCase[]]> = [
+        ["with", paired.map(([trial]) => trial), withPrompts],
+        ["without", paired.map(([, trial]) => trial), bare],
+      ];
+      for (const [side, trials, entries] of sides) {
+        const summary = summariseVariant(variant.id, firstGuard, trials, entries);
+        lines.push(
+          `| ${variant.id} | ${side} | ${summary.trials} | ${pct(summary.landed.misreadRate)} | ${summary.cleanUntouched.kept}/${summary.cleanUntouched.of} | ${summary.landed.trialsWithMeaningRisk} | ${Math.round(summary.tokens.meanInput)} | ${pct(summary.tokens.cachedShare)} | ${summary.tokens.cacheWrites} | ${usd(summary.meanCostUsd)} |`
+        );
+      }
+    }
+    lines.push("");
+  }
 
   const groups: Array<[string, (entry: CleanupCase) => string]> = [
     ["source", (entry) => entry.source],

@@ -8,6 +8,7 @@ import {
   buildCorrectionSystemPrompt,
   buildRewriteSystemPrompt,
   correctionInstructionsFor,
+  isVoiceCleanupModel,
   type CorrectionInstructions,
   type CorrectionPromptContext,
   type CorrectionTargetContext,
@@ -52,14 +53,15 @@ const MIN_OUTPUT_TOKENS = 1024;
 const OUTPUT_TOKENS_PER_CHAR = 1.5;
 const OUTPUT_TOKENS_OVERHEAD = 256;
 const FILE_LINK_MAX_OUTPUT_TOKENS = 256;
-const PROMPT_CACHE_PREFIX = "voice-correction-v13";
+const PROMPT_CACHE_PREFIX = "voice-correction-v14";
 // OpenAI rejects a prompt_cache_key longer than 64 characters.
 const PROMPT_CACHE_KEY_MAX_LENGTH = 64;
 const FILE_LINK_DETECTION_TIMEOUT_MS = 4000;
 const REWRITE_CACHE_PREFIX = "voice-rewrite-v1";
 const MIN_REWRITE_TIMEOUT_MS = 10000;
 const FILE_LINK_CACHE_PREFIX = "voice-file-link-v2";
-const PROMPT_TAG_OPEN_RE = /<(?=\/?(?:terminal_output|target|job|confirmed_history|uncertain)\b)/gi;
+const PROMPT_TAG_OPEN_RE =
+  /<(?=\/?(?:recent_prompts|terminal_output|target|job|confirmed_history|uncertain)\b)/gi;
 const OPENAI_ORIGIN = "https://api.openai.com/";
 const RESPONSES_URL = "https://api.openai.com/v1/responses";
 // OpenAI keeps an unused prefix cached for five to ten minutes. Checked once a
@@ -195,6 +197,8 @@ export interface VoiceCorrectionSettings {
 export interface VoiceCorrectionRequest {
   rawText: string;
   recentContext?: string[];
+  /** The prompts last sent from the dictated composer, oldest first, bounded; user content, so never logged. */
+  recentPrompts?: string[];
   /** What the dictated terminal recently printed, redacted and bounded; evidence for what was heard, never text to correct. */
   terminalOutput?: string;
   reason?: string;
@@ -364,6 +368,21 @@ class CorrectionDiscardedError extends Error {
     super(`Correction reply ${code}`);
     this.name = "CorrectionDiscardedError";
   }
+}
+
+// A user message block OpenAI may cache the prompt up to.
+interface UserTextBlock {
+  type: "input_text";
+  text: string;
+  prompt_cache_breakpoint?: typeof EXPLICIT_CACHE_BREAKPOINT;
+}
+
+type UserContent = string | UserTextBlock[];
+
+const EXPLICIT_CACHE_BREAKPOINT = { mode: "explicit" } as const;
+
+function totalLength(texts: readonly string[] | undefined): number {
+  return texts?.reduce((sum, text) => sum + text.length, 0) ?? 0;
 }
 
 export class VoiceCorrectionService {
@@ -538,7 +557,33 @@ export class VoiceCorrectionService {
     return text;
   }
 
-  private buildUserMessage(request: VoiceCorrectionRequest): string {
+  /**
+   * The user message: the passage and its context, after the prompts recently
+   * sent to its terminal when there are any. Those come first and oldest first,
+   * each in a content block of its own, so a send only adds blocks after the
+   * ones the last cleanup sent. OpenAI caches within the user message only up
+   * to a block marked as a breakpoint; it writes the last three marks and looks
+   * up at every one, so with each prompt marked, a cleanup after any number of
+   * sends reads the prompts the last one wrote from the cache, until the window
+   * of prompts moves on.
+   */
+  private buildUserMessage(request: VoiceCorrectionRequest, model: string): UserContent {
+    const message = this.buildPassageMessage(request);
+    const prompts = request.recentPrompts ?? [];
+    if (prompts.length === 0) return message;
+    // Only models known to take the field: another may refuse the request.
+    const marked = isVoiceCleanupModel(model);
+    // Each is one quoted line, and can't close its block or open a <target> of its own.
+    const blocks: UserTextBlock[] = prompts.map((prompt, index) => ({
+      type: "input_text",
+      text: `${index === 0 ? "<recent_prompts>\n" : ""}${JSON.stringify(prompt).replace(PROMPT_TAG_OPEN_RE, "‹")}\n`,
+      ...(marked ? { prompt_cache_breakpoint: EXPLICIT_CACHE_BREAKPOINT } : {}),
+    }));
+    blocks.push({ type: "input_text", text: `</recent_prompts>\n\n${message}` });
+    return blocks;
+  }
+
+  private buildPassageMessage(request: VoiceCorrectionRequest): string {
     const parts: string[] = [];
 
     if (request.recentContext && request.recentContext.length > 0) {
@@ -834,10 +879,13 @@ export class VoiceCorrectionService {
     onText: ((text: string) => void) | undefined
   ): Promise<VoiceCorrectionProposal> {
     const systemPrompt = this.buildSystemPrompt(settings);
-    const userMessage = this.buildUserMessage(request);
+    const userMessage = this.buildUserMessage(request, settings.model);
+    const recentPromptsLen = totalLength(request.recentPrompts);
     logDebug(`${P} Calling Responses API`, {
       model: settings.model,
       contextLen: request.recentContext?.length ?? 0,
+      recentPromptCount: request.recentPrompts?.length ?? 0,
+      recentPromptsLen,
       terminalOutputLen: request.terminalOutput?.length ?? 0,
       uncertainCount: request.uncertain?.length ?? 0,
       reason: request.reason ?? "unspecified",
@@ -905,7 +953,7 @@ export class VoiceCorrectionService {
   private correctionBody(
     settings: VoiceCorrectionSettings,
     systemPrompt: string,
-    userMessage: string,
+    userMessage: UserContent,
     maxOutputTokens: number
   ) {
     return {
@@ -1051,7 +1099,7 @@ export class VoiceCorrectionService {
     request: VoiceCorrectionRequest,
     settings: VoiceCorrectionSettings,
     systemPrompt: string,
-    userMessage: string,
+    userMessage: UserContent,
     signal: AbortSignal,
     trace: RequestTrace,
     onText: ((text: string) => void) | undefined

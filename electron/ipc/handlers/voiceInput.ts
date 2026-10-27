@@ -2236,6 +2236,22 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     };
   };
 
+  // The prompts the view says it last sent to the passage's terminal. They
+  // follow its output's ownership rule: none outside the view, and none for a
+  // terminal here another project owns. A host's pane is the host's project's
+  // view, whose own sends they are.
+  const ownRecentPrompts = (
+    viewProjectId: string | null,
+    request: VoiceInputCorrectPayload
+  ): string[] | undefined => {
+    const prompts = request.recentPrompts;
+    if (!prompts?.length || !request.terminalId || request.outsideView) return undefined;
+    if (hostPaneFor(viewProjectId, false)) return prompts;
+    return resolveKeytermTarget(viewProjectId, request.terminalId, deps.ptyClient).terminalId
+      ? prompts
+      : undefined;
+  };
+
   // Cleanup requests still out, cancelled when the handlers go.
   const openCorrections = new Set<AbortController>();
 
@@ -2329,10 +2345,12 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
               sender.send(CHANNELS.VOICE_INPUT_CORRECTION_PROGRESS, { streamId, text });
             }
           : undefined;
+      const recentPrompts = ownRecentPrompts(ctx.projectId, request);
       const result = await svc.correct(
         {
           rawText: request.rawText,
           recentContext: request.recentContext,
+          ...(recentPrompts ? { recentPrompts } : {}),
           ...(terminalOutput ? { terminalOutput } : {}),
           reason: "stop",
           startsPrompt: request.startsPrompt === true,

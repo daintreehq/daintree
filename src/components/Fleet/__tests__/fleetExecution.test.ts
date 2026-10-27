@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
 import { beforeEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { buildFleetTargetPreviews, executeFleetBroadcast } from "../fleetExecution";
+import { crossHostTargetKey } from "../crossHostFleet";
 import { FLEET_LARGE_PASTE_BATCH_SIZE } from "../fleetBroadcast";
 import { terminalClient } from "@/clients";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
+import { useTerminalInputStore } from "@/store/terminalInputStore";
 import type { PtyPanelData, PanelInstance } from "@shared/types/panel";
 
 import type { RecipeContext } from "@/utils/recipeVariables";
@@ -97,9 +99,17 @@ function reset() {
     armOrder: [],
     armOrderById: {},
     lastArmedId: null,
+    crossHostTargets: [],
   });
   usePanelStore.setState({ panelsById: {}, panelIds: [] });
+  useTerminalInputStore.setState({ sentPrompts: new Map() });
 }
+
+const sentTo = (id: string) =>
+  useTerminalInputStore
+    .getState()
+    .getSentPrompts(id)
+    .map((prompt) => prompt.text);
 
 describe("executeFleetBroadcast", () => {
   beforeEach(() => {
@@ -202,6 +212,83 @@ describe("executeFleetBroadcast", () => {
     await executeFleetBroadcast("default", ["a", "b"], { b: "custom-for-b" });
     expect(submitMock).toHaveBeenCalledWith("a", "default");
     expect(submitMock).toHaveBeenCalledWith("b", "custom-for-b");
+  });
+
+  describe("recording what landed, for each terminal's dictation cleanup (#14855)", () => {
+    const REMOTE = crossHostTargetKey("host-2" as never, "t9");
+    let remoteSubmit: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+      remoteSubmit = vi.fn().mockResolvedValue(undefined);
+      (window as unknown as { electron: unknown }).electron = {
+        hostMetrics: { submitFleet: remoteSubmit },
+      };
+      useFleetArmingStore.setState({
+        crossHostTargets: [
+          {
+            key: REMOTE,
+            hostId: "host-2" as never,
+            hostName: "Studio",
+            terminalId: "t9",
+            title: "t9",
+          },
+        ],
+      });
+    });
+
+    it("records what each local target was sent, as written, and nothing for one that refused", async () => {
+      buildFleetBroadcastRecipeContextMock.mockReturnValue({ branchName: "feature/terra" });
+      submitMock.mockImplementation(async (id: string) => {
+        if (id === "dead") throw new Error("EPIPE");
+      });
+      seedPanels([makeAgent("a"), makeAgent("b"), makeAgent("dead")]);
+
+      const result = await executeFleetBroadcast(
+        "check {{branch_name}}",
+        ["a", "b", "dead", REMOTE],
+        { b: "custom for b" }
+      );
+
+      expect(submitMock).toHaveBeenCalledWith("a", "check feature/terra");
+      expect(remoteSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({ terminalId: "t9", text: "check {{branch_name}}" })
+      );
+      expect(result.perTarget.find((target) => target.terminalId === REMOTE)?.status).toBe(
+        "fulfilled"
+      );
+      expect(sentTo("a")).toEqual(["check {{branch_name}}"]);
+      expect(sentTo("b")).toEqual(["custom for b"]);
+      // Another host's agent keeps its own record, and a refused send is none.
+      expect([...useTerminalInputStore.getState().sentPrompts.keys()]).toEqual(["a", "b"]);
+    });
+
+    it("records a target as it lands, ahead of a send made while a slower one is out", async () => {
+      let land!: () => void;
+      remoteSubmit.mockReturnValue(new Promise<void>((resolve) => (land = resolve)));
+      seedPanels([makeAgent("a")]);
+
+      const broadcast = executeFleetBroadcast("first", ["a", REMOTE]);
+      await vi.waitFor(() => expect(sentTo("a")).toEqual(["first"]));
+      useTerminalInputStore.getState().recordSentPrompt("a", "second");
+      land();
+      await broadcast;
+
+      expect(sentTo("a")).toEqual(["first", "second"]);
+    });
+
+    it("records each target of a batched large paste, cut to its opening", async () => {
+      const ids = Array.from({ length: 12 }, (_, i) => `t${i}`);
+      seedPanels(ids.map((id) => makeAgent(id)));
+      submitMock.mockImplementation(async (id: string) => {
+        if (id === "t11") throw new Error("EPIPE");
+      });
+
+      await executeFleetBroadcast("x".repeat(120_000), ids);
+
+      expect(useTerminalInputStore.getState().sentPrompts.size).toBe(11);
+      expect(sentTo("t0")[0]).toBe(`${"x".repeat(999)}…`);
+      expect(sentTo("t11")).toEqual([]);
+    });
   });
 
   it("does NOT batch when target count is within the batch size (even at threshold)", async () => {

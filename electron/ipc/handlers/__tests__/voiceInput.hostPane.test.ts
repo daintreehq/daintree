@@ -345,6 +345,7 @@ describe("voiceInput — dictating into a host's pane", () => {
     );
     const [{ request, settings }] = shared.correctCalls;
     expect(request.terminalOutput).toBe(CORRECTION.terminalOutput);
+    expect(request.recentPrompts).toBeUndefined();
     // A passage naming no session takes no dictation's names.
     expect(settings).toMatchObject({
       projectName: "Daintree",
@@ -353,6 +354,17 @@ describe("voiceInput — dictating into a host's pane", () => {
       knownNames: [],
     });
     expect(settings.customDictionary).toEqual(expect.arrayContaining(["Zustand", "Wispr"]));
+    expectNoLocalReads();
+  });
+
+  it("cleans up with the prompts the view sent to the host's terminal", async () => {
+    await start(view);
+    const prompts = ["Measure gpt-6.1-terra against Luna"];
+    await getHandler(CHANNELS.VOICE_INPUT_CORRECT)(
+      { sender: view },
+      { rawText: "fix the zoo stand store", terminalId: TERMINAL, recentPrompts: prompts }
+    );
+    expect(shared.correctCalls[0]?.request.recentPrompts).toEqual(prompts);
     expectNoLocalReads();
   });
 
