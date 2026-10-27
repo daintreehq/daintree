@@ -229,6 +229,8 @@ function setupGlobals(options: {
   vi.stubGlobal("cancelAnimationFrame", vi.fn());
   vi.stubGlobal("document", {
     visibilityState: "visible",
+    // A failed start raises a toast, which asks whether the window is focused.
+    hasFocus: vi.fn(() => true),
     addEventListener: vi.fn(),
     removeEventListener: vi.fn(),
   });
@@ -544,13 +546,198 @@ describe("VoiceRecordingService — chosen mic not available (#14606)", () => {
 
     await service.start(TARGET);
 
+    // An alias follows the system input, so it opens as the system default.
     expect(harness.getUserMedia).toHaveBeenCalledWith(
-      chosen
+      chosen === "usb-mic"
         ? { audio: { deviceId: { ideal: chosen } }, video: false }
         : { audio: true, video: false }
     );
     expect(store.getState().micNotice).toBeNull();
     expect(store.getState().micDeviceLabel).toBe("Some Mic");
+  });
+});
+
+describe("VoiceRecordingService — chosen mic that won't open (#14850)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    draftState.draft = "";
+  });
+
+  afterEach(() => {
+    loadedService?.destroy();
+    loadedService = null;
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  const DEFAULT_TRACK = { label: "Default - MacBook Pro Microphone", deviceId: "default" };
+  const notReadable = () => new DOMException("Could not start audio source", "NotReadableError");
+  const notAllowed = () => new DOMException("Permission denied", "NotAllowedError");
+
+  it("records from the chosen mic whatever the system default is", async () => {
+    const harness = setupGlobals({ deviceId: "usb-mic", tracks: [] });
+    // AirPods hold the system input; only a request for the chosen mic opens it.
+    harness.getUserMedia.mockImplementation(async (...args: unknown[]) => {
+      const asked = (args[0] as MediaStreamConstraints).audio as
+        { deviceId?: { ideal?: string } } | boolean;
+      const track =
+        typeof asked === "object" && asked.deviceId?.ideal === "usb-mic"
+          ? createTrack("USB Mic", "usb-mic")
+          : createTrack("Default - Greg's AirPods Pro", "default");
+      harness.tracks.push(track);
+      return createStream(track);
+    });
+    const { store, service } = await load();
+
+    await service.start(TARGET);
+
+    expect(harness.getUserMedia).toHaveBeenCalledTimes(1);
+    expect(harness.getUserMedia).toHaveBeenCalledWith({
+      audio: { deviceId: { ideal: "usb-mic" } },
+      video: false,
+    });
+    expect(store.getState().micDeviceLabel).toBe("USB Mic");
+    expect(store.getState().micNotice).toBeNull();
+  });
+
+  it("falls back to the system default when the chosen mic is connected but won't open", async () => {
+    const harness = setupGlobals({ deviceId: "usb-mic", tracks: [DEFAULT_TRACK] });
+    harness.getUserMedia.mockRejectedValueOnce(notReadable());
+    const { store, service } = await load();
+
+    await service.start(TARGET);
+
+    expect(harness.getUserMedia).toHaveBeenNthCalledWith(1, {
+      audio: { deviceId: { ideal: "usb-mic" } },
+      video: false,
+    });
+    expect(harness.getUserMedia).toHaveBeenNthCalledWith(2, { audio: true, video: false });
+    expect(harness.voiceInput.start).toHaveBeenCalledTimes(1);
+    expect(store.getState().lastError).toBeNull();
+    expect(store.getState().micNotice).toEqual({
+      kind: "fallback",
+      target: expect.objectContaining({ panelId: PANEL_ID }),
+      deviceLabel: "MacBook Pro Microphone",
+    });
+    // A fallback never rewrites the choice.
+    expect(harness.voiceInput.setSettings).not.toHaveBeenCalled();
+    expect(harness.settings.deviceId).toBe("usb-mic");
+  });
+
+  it("tries the chosen mic first again on the next dictation", async () => {
+    const harness = setupGlobals({
+      deviceId: "usb-mic",
+      tracks: [DEFAULT_TRACK, { label: "USB Mic", deviceId: "usb-mic" }],
+    });
+    harness.getUserMedia.mockRejectedValueOnce(notReadable());
+    const { store, service } = await load();
+
+    await service.start(TARGET);
+    await service.stop();
+    await service.start(TARGET);
+
+    expect(harness.getUserMedia).toHaveBeenLastCalledWith({
+      audio: { deviceId: { ideal: "usb-mic" } },
+      video: false,
+    });
+    expect(store.getState().micDeviceLabel).toBe("USB Mic");
+    expect(store.getState().micNotice).toBeNull();
+  });
+
+  it("stops with the permission error when the chosen mic is refused", async () => {
+    const harness = setupGlobals({ deviceId: "usb-mic", tracks: [DEFAULT_TRACK] });
+    harness.getUserMedia.mockRejectedValueOnce(notAllowed());
+    const { store, service } = await load();
+
+    await service.start(TARGET);
+
+    expect(harness.getUserMedia).toHaveBeenCalledTimes(1);
+    expect(harness.voiceInput.start).not.toHaveBeenCalled();
+    expect(store.getState().lastError?.code).toBe("mic_permission_denied");
+  });
+
+  it("stops with the permission error when the system default is refused after the chosen mic failed", async () => {
+    const harness = setupGlobals({ deviceId: "usb-mic", tracks: [DEFAULT_TRACK] });
+    harness.getUserMedia.mockRejectedValueOnce(notReadable()).mockRejectedValueOnce(notAllowed());
+    const { store, service } = await load();
+
+    await service.start(TARGET);
+
+    expect(harness.getUserMedia).toHaveBeenCalledTimes(2);
+    expect(harness.voiceInput.start).not.toHaveBeenCalled();
+    expect(store.getState().lastError?.code).toBe("mic_permission_denied");
+  });
+
+  it("says the microphone is unavailable when the system default won't open either", async () => {
+    const harness = setupGlobals({ deviceId: "usb-mic", tracks: [DEFAULT_TRACK] });
+    harness.getUserMedia.mockRejectedValueOnce(notReadable()).mockRejectedValueOnce(notReadable());
+    const { store, service } = await load();
+
+    await service.start(TARGET);
+
+    expect(harness.getUserMedia).toHaveBeenCalledTimes(2);
+    expect(store.getState().lastError?.code).toBe("mic_access_failed");
+  });
+
+  it("asks only once when the system default is what failed", async () => {
+    const harness = setupGlobals({ deviceId: "", tracks: [DEFAULT_TRACK] });
+    harness.getUserMedia.mockRejectedValueOnce(notReadable());
+    const { store, service } = await load();
+
+    await service.start(TARGET);
+
+    expect(harness.getUserMedia).toHaveBeenCalledTimes(1);
+    expect(store.getState().lastError?.code).toBe("mic_access_failed");
+  });
+
+  it("lets go of a fallback mic that opened after the start was stopped", async () => {
+    const harness = setupGlobals({ deviceId: "usb-mic", tracks: [DEFAULT_TRACK] });
+    harness.getUserMedia.mockRejectedValueOnce(notReadable());
+    let grant: () => void = () => {};
+    harness.getUserMedia.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          grant = () => {
+            const track = createTrack(DEFAULT_TRACK.label, DEFAULT_TRACK.deviceId);
+            harness.tracks.push(track);
+            resolve(createStream(track));
+          };
+        })
+    );
+    const { store, service } = await load();
+
+    const starting = service.start(TARGET);
+    await vi.waitFor(() => expect(harness.getUserMedia).toHaveBeenCalledTimes(2));
+    await service.stop();
+    grant();
+    await starting;
+
+    expect(harness.tracks[0]!.stop).toHaveBeenCalled();
+    expect(harness.voiceInput.start).not.toHaveBeenCalled();
+    expect(store.getState().micNotice).toBeNull();
+    expect(store.getState().lastError).toBeNull();
+  });
+
+  it("opens no second mic when the start was stopped while the chosen one failed", async () => {
+    const harness = setupGlobals({ deviceId: "usb-mic", tracks: [DEFAULT_TRACK] });
+    let fail: () => void = () => {};
+    harness.getUserMedia.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          fail = () => reject(notReadable());
+        })
+    );
+    const { store, service } = await load();
+
+    const starting = service.start(TARGET);
+    await vi.waitFor(() => expect(harness.getUserMedia).toHaveBeenCalledTimes(1));
+    await service.stop();
+    fail();
+    await starting;
+
+    expect(harness.getUserMedia).toHaveBeenCalledTimes(1);
+    expect(harness.voiceInput.start).not.toHaveBeenCalled();
+    expect(store.getState().lastError).toBeNull();
   });
 });
 
@@ -681,7 +868,10 @@ describe("VoiceRecordingService — silent mic (#14606)", () => {
 
     await service.switchToMicFromNotice(notice);
 
-    expect(harness.voiceInput.setSettings).toHaveBeenCalledWith({ deviceId: "builtin" });
+    expect(harness.voiceInput.setSettings).toHaveBeenCalledWith({
+      deviceId: "builtin",
+      deviceLabel: "MacBook Pro Microphone",
+    });
     expect(harness.getUserMedia).toHaveBeenLastCalledWith({
       audio: { deviceId: { ideal: "builtin" } },
       video: false,
@@ -710,7 +900,10 @@ describe("VoiceRecordingService — silent mic (#14606)", () => {
     releaseSave();
     await switching;
 
-    expect(harness.voiceInput.setSettings).toHaveBeenCalledWith({ deviceId: "builtin" });
+    expect(harness.voiceInput.setSettings).toHaveBeenCalledWith({
+      deviceId: "builtin",
+      deviceLabel: "MacBook Pro Microphone",
+    });
     expect(harness.getUserMedia).toHaveBeenCalledTimes(1);
     expect(store.getState().activeTarget).toBeNull();
   });
@@ -756,7 +949,10 @@ describe("VoiceRecordingService — silent mic (#14606)", () => {
 
     await service.switchToMicFromNotice(notice);
 
-    expect(harness.voiceInput.setSettings).toHaveBeenCalledWith({ deviceId: "builtin" });
+    expect(harness.voiceInput.setSettings).toHaveBeenCalledWith({
+      deviceId: "builtin",
+      deviceLabel: "MacBook Pro Microphone",
+    });
     expect(harness.getUserMedia).toHaveBeenCalledTimes(1);
     expect(store.getState().status).toBe("paused");
     expect(store.getState().micNotice).toBeNull();
@@ -778,7 +974,10 @@ describe("VoiceRecordingService — silent mic (#14606)", () => {
 
     await service.switchToMicFromNotice(notice);
 
-    expect(harness.voiceInput.setSettings).toHaveBeenCalledWith({ deviceId: "builtin" });
+    expect(harness.voiceInput.setSettings).toHaveBeenCalledWith({
+      deviceId: "builtin",
+      deviceLabel: "MacBook Pro Microphone",
+    });
     expect(harness.getUserMedia).toHaveBeenCalledTimes(1);
     expect(store.getState().activeTarget?.panelId).toBe(PANEL_ID);
   });

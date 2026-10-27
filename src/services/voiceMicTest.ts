@@ -1,4 +1,9 @@
-import { isBluetoothMicLabel } from "./voiceMicDevices";
+import {
+  isBluetoothMicLabel,
+  isMicPermissionDenial,
+  openChosenMic,
+  type OpenedMic,
+} from "./voiceMicDevices";
 import { MIC_LIVE_PEAK_THRESHOLD } from "./voiceStartDiagnostics";
 
 export type MicTestFailure = "denied" | "unavailable";
@@ -15,7 +20,7 @@ export interface MicTestSample {
 export interface MicTestOpened {
   /** The mic that actually opened, which can differ from the one asked for. */
   label: string;
-  /** Set when a specific mic was requested but the browser opened another. */
+  /** Set when a specific mic was requested but the system default opened instead. */
   substituted: boolean;
   bluetooth: boolean;
 }
@@ -31,6 +36,11 @@ export interface MicTestOptions {
   onSample: (sample: MicTestSample) => void;
   /** Called once if the stream ends or the test hits its time limit, after release. */
   onEnded: () => void;
+  /**
+   * False once the caller has moved on (stopped, hidden, or picked another mic),
+   * so no second mic is opened and a late one is let go before it is measured.
+   */
+  isCurrent?: () => boolean;
 }
 
 export const SILENCE_AFTER_MS = 3000;
@@ -47,36 +57,30 @@ export function levelFromPeak(peak: number): number {
   return Math.min(1, Math.max(0, (db - FLOOR_DB) / -FLOOR_DB));
 }
 
-function isSpecific(deviceId: string): boolean {
-  return deviceId !== "" && deviceId !== "default" && deviceId !== "communications";
-}
-
 /**
- * Opens the chosen mic and reports its level locally. Nothing is recorded or
- * sent anywhere; the stream is released by `stop`, the time limit, or the track
- * ending. Rejects with a `MicTestFailure`.
+ * Opens the chosen mic, by the same rules dictation does, and reports its level
+ * locally. Nothing is recorded or sent anywhere; the stream is released by
+ * `stop`, the time limit, or the track ending. Rejects with a `MicTestFailure`.
  */
 export async function startMicTest(options: MicTestOptions): Promise<MicTestHandle> {
-  const { deviceId, onSample, onEnded } = options;
-  let stream: MediaStream;
+  const { deviceId, onSample, onEnded, isCurrent } = options;
+  let mic: OpenedMic;
   try {
-    // `ideal`, as dictation asks, so the test falls back exactly where it would.
-    stream = await navigator.mediaDevices.getUserMedia({
-      audio: deviceId ? { deviceId: { ideal: deviceId } } : true,
-      video: false,
-    });
+    mic = await openChosenMic(deviceId, { canFallBack: isCurrent });
   } catch (err) {
-    throw (
-      err instanceof DOMException && err.name === "NotAllowedError" ? "denied" : "unavailable"
-    ) satisfies MicTestFailure;
+    throw (isMicPermissionDenial(err) ? "denied" : "unavailable") satisfies MicTestFailure;
+  }
+  const { stream } = mic;
+  if (isCurrent?.() === false) {
+    stream.getTracks().forEach((t) => t.stop());
+    throw "unavailable" satisfies MicTestFailure;
   }
 
   const track = stream.getAudioTracks()[0];
-  const actualId = track?.getSettings?.().deviceId;
-  const label = track?.label ?? "";
+  const label = mic.label ?? "";
   const opened: MicTestOpened = {
     label,
-    substituted: isSpecific(deviceId) && !!actualId && actualId !== deviceId,
+    substituted: mic.substituted,
     bluetooth: isBluetoothMicLabel(label),
   };
 

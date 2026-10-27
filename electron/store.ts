@@ -366,6 +366,7 @@ export interface StoreSchema {
     paragraphingStrategy: string;
     resolveFileLinks: boolean;
     deviceId: string;
+    deviceLabel: string;
     organizationId: string;
     projectId: string;
     recordingMode: string;
@@ -1071,6 +1072,7 @@ const storeOptions = {
       paragraphingStrategy: "spoken-command",
       resolveFileLinks: true,
       deviceId: "",
+      deviceLabel: "",
       organizationId: "",
       projectId: "",
       recordingMode: "tap-or-hold",

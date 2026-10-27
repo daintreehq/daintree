@@ -142,6 +142,7 @@ const BASE_SETTINGS: VoiceInputSettings = {
   paragraphingStrategy: "spoken-command",
   resolveFileLinks: true,
   deviceId: "",
+  deviceLabel: "",
   organizationId: "",
   projectId: "",
   recordingMode: "toggle",

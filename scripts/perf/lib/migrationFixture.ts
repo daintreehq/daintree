@@ -145,7 +145,8 @@ type LegacyStoreV0 = Omit<
   forgeAudit: Omit<StoreSchema["forgeAudit"], "auditLog"> & { auditLog: RingRecord[] };
   runHistory: { records: RingRecord[] };
   pluginMcpAudit: Omit<StoreSchema["pluginMcpAudit"], "auditLog"> & { auditLog: RingRecord[] };
-  voiceInput: Omit<StoreSchema["voiceInput"], "dictionary"> & {
+  // `deviceLabel` came later with no migration; reads fill it from defaults.
+  voiceInput: Omit<StoreSchema["voiceInput"], "dictionary" | "deviceLabel"> & {
     /** Turned into `dictionary` entries by migration 036. */
     customDictionary: string[];
   };

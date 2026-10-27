@@ -124,7 +124,9 @@ import { normalizeVoiceLanguage } from "@shared/config/voiceLanguages";
 import {
   findBuiltInMic,
   isBluetoothMicLabel,
-  stripPseudoDevicePrefix,
+  isMicPermissionDenial,
+  openChosenMic,
+  type OpenedMic,
   type VoiceMicDevice,
 } from "@/services/voiceMicDevices";
 import { isScratchCommand, recordScratchLanded } from "@/services/voiceScratchCommand";
@@ -316,12 +318,6 @@ function writeVoiceWords(
       })
   );
   return plan;
-}
-
-// A chosen device of "" (system default) or one of Chromium's alias entries
-// names no particular mic, so whichever one opens is the one asked for.
-function isSpecificDeviceId(deviceId: string): boolean {
-  return deviceId !== "" && deviceId !== "default" && deviceId !== "communications";
 }
 
 // ~15s of 100ms PCM chunks, held only until the backend start is requested
@@ -2280,29 +2276,26 @@ class VoiceRecordingService {
     // permission; on Windows/Linux this call IS the permission gate, so a denial
     // arrives here as NotAllowedError rather than from the preflight.
     logDebug(`${LOG_PREFIX} Requesting microphone access`);
-    let stream: MediaStream;
+    let opened: OpenedMic;
     // Snapshot: a settings change while the mic opens mustn't read as a fallback.
     const requestedDeviceId = this.selectedDeviceId;
     try {
-      const constraints: MediaStreamConstraints = requestedDeviceId
-        ? { audio: { deviceId: { ideal: requestedDeviceId } }, video: false }
-        : { audio: true, video: false };
-      stream = await navigator.mediaDevices.getUserMedia(constraints);
+      opened = await openChosenMic(requestedDeviceId, {
+        canFallBack: () => !this.isStartRequestStale(startRequestId),
+      });
     } catch (error) {
       abandonCapture();
-      const message =
-        error instanceof DOMException && error.name === "NotAllowedError"
-          ? "Microphone permission denied. Enable it in System Settings and try again."
-          : "Could not access the microphone.";
+      const message = isMicPermissionDenial(error)
+        ? "Microphone permission denied. Enable it in System Settings and try again."
+        : "Could not access the microphone.";
       logError(`${LOG_PREFIX} getUserMedia failed`, undefined, {
         ...voiceErrorLogFields(error),
         elapsedMs: Math.round(performance.now() - startedAt),
       });
       if (!this.isStartRequestStale(startRequestId)) {
-        const micCode =
-          error instanceof DOMException && error.name === "NotAllowedError"
-            ? "mic_permission_denied"
-            : "mic_access_failed";
+        const micCode = isMicPermissionDenial(error)
+          ? "mic_permission_denied"
+          : "mic_access_failed";
         useVoiceRecordingStore
           .getState()
           .setLastError({ severity: "fatal", code: micCode, message });
@@ -2320,7 +2313,14 @@ class VoiceRecordingService {
       }
       return;
     }
+    const stream = opened.stream;
     if (this.pendingCapture === capture) capture.stream = stream;
+    if (opened.chosenFailure !== null) {
+      logWarn(
+        `${LOG_PREFIX} Chosen microphone failed to open; used the system default`,
+        voiceErrorLogFields(opened.chosenFailure)
+      );
+    }
 
     // Log which mic and capture settings the OS handed us — a wrong/dead device
     // or unexpected sample rate is a real failure mode. Kept out of the
@@ -2351,23 +2351,16 @@ class VoiceRecordingService {
     } catch (err) {
       logDebug(`${LOG_PREFIX} Could not read microphone track settings`, voiceErrorLogFields(err));
     }
-    // Which mic opened, for the pane: Chromium falls back silently when the
-    // chosen one is gone, because it is requested as `ideal`.
-    let usingFallbackMic = false;
-    try {
-      const track = stream.getAudioTracks()[0];
-      capture.deviceLabel = track?.label ? stripPseudoDevicePrefix(track.label) || null : null;
-      const actualId = track?.getSettings?.().deviceId;
-      capture.deviceId = actualId || null;
-      if (isSpecificDeviceId(requestedDeviceId) && actualId && actualId !== requestedDeviceId) {
-        usingFallbackMic = true;
-        logWarn(`${LOG_PREFIX} Microphone device mismatch`, {
-          requested: requestedDeviceId,
-          actual: actualId,
-        });
-      }
-    } catch (err) {
-      logDebug(`${LOG_PREFIX} Could not read microphone device`, voiceErrorLogFields(err));
+    // Which mic opened, for the pane: the system default stands in whenever
+    // the chosen one is gone or won't open.
+    capture.deviceLabel = opened.label;
+    capture.deviceId = opened.deviceId;
+    const usingFallbackMic = opened.substituted;
+    if (usingFallbackMic) {
+      logWarn(`${LOG_PREFIX} Microphone device mismatch`, {
+        requested: requestedDeviceId,
+        actual: opened.deviceId,
+      });
     }
     logStep("get_user_media");
     this.observeTrackState(stream, logStep, () => this.handleTrackEnded(capture));
@@ -5061,7 +5054,10 @@ class VoiceRecordingService {
     this.isSwitchingMic = true;
     try {
       try {
-        await window.electron.voiceInput.setSettings({ deviceId: builtIn.deviceId });
+        await window.electron.voiceInput.setSettings({
+          deviceId: builtIn.deviceId,
+          deviceLabel: builtIn.label,
+        });
       } catch (err) {
         logWarn(`${LOG_PREFIX} Could not save the microphone choice`, voiceErrorLogFields(err));
         useVoiceRecordingStore.getState().announce("Couldn't switch the microphone.");

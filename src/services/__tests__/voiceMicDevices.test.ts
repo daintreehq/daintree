@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
-import { findBuiltInMic, isBluetoothMicLabel, stripPseudoDevicePrefix } from "../voiceMicDevices";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  findBuiltInMic,
+  isBluetoothMicLabel,
+  openChosenMic,
+  stripPseudoDevicePrefix,
+} from "../voiceMicDevices";
 
 describe("isBluetoothMicLabel", () => {
   it.each([
@@ -100,5 +105,144 @@ describe("findBuiltInMic", () => {
         { deviceId: "", label: "" },
       ])
     ).toBeNull();
+  });
+});
+
+describe("openChosenMic (#14850)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function micStream(label: string, deviceId: string | undefined) {
+    const track = { label, stop: vi.fn(), getSettings: () => ({ deviceId }) };
+    return { getAudioTracks: () => [track], getTracks: () => [track] };
+  }
+
+  function stubGetUserMedia(...outcomes: Array<ReturnType<typeof micStream> | Error>) {
+    const getUserMedia = vi.fn();
+    for (const outcome of outcomes) {
+      if (outcome instanceof Error) getUserMedia.mockRejectedValueOnce(outcome);
+      else getUserMedia.mockResolvedValueOnce(outcome);
+    }
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+    return getUserMedia;
+  }
+
+  const CHOSEN = { audio: { deviceId: { ideal: "usb-mic" } }, video: false };
+  const SYSTEM_DEFAULT = { audio: true, video: false };
+  const DEFAULT_MIC = micStream("Default - MacBook Pro Microphone", "default");
+  const error = (name: string) => new DOMException(name, name);
+
+  it("opens the chosen mic when it is there", async () => {
+    const getUserMedia = stubGetUserMedia(micStream("USB Mic", "usb-mic"));
+
+    const mic = await openChosenMic("usb-mic");
+
+    expect(getUserMedia.mock.calls).toEqual([[CHOSEN]]);
+    expect(mic).toMatchObject({
+      deviceId: "usb-mic",
+      label: "USB Mic",
+      substituted: false,
+      chosenFailure: null,
+    });
+  });
+
+  it("names the system default that opened in place of a missing mic", async () => {
+    stubGetUserMedia(DEFAULT_MIC);
+
+    const mic = await openChosenMic("usb-mic");
+
+    expect(mic).toMatchObject({
+      deviceId: "default",
+      label: "MacBook Pro Microphone",
+      substituted: true,
+      chosenFailure: null,
+    });
+  });
+
+  it.each(["NotReadableError", "NotFoundError", "OverconstrainedError", "AbortError"])(
+    "opens the system default when the chosen mic fails with %s",
+    async (name) => {
+      const failure = error(name);
+      const getUserMedia = stubGetUserMedia(failure, DEFAULT_MIC);
+
+      const mic = await openChosenMic("usb-mic");
+
+      expect(getUserMedia.mock.calls).toEqual([[CHOSEN], [SYSTEM_DEFAULT]]);
+      expect(mic).toMatchObject({ substituted: true, chosenFailure: failure });
+    }
+  );
+
+  it("doesn't call it a substitution when the default turns out to be the chosen mic", async () => {
+    stubGetUserMedia(error("NotReadableError"), micStream("USB Mic", "usb-mic"));
+
+    expect((await openChosenMic("usb-mic")).substituted).toBe(false);
+  });
+
+  it("calls it a substitution after a fallback when the track won't say which mic opened", async () => {
+    stubGetUserMedia(error("NotReadableError"), micStream("", undefined));
+
+    const mic = await openChosenMic("usb-mic");
+
+    expect(mic).toMatchObject({ deviceId: null, label: null, substituted: true });
+  });
+
+  it.each([
+    ["a permission denial", () => error("NotAllowedError")],
+    ["a document-state error", () => error("InvalidStateError")],
+    ["a programming error", () => new TypeError("bad constraints")],
+  ])("doesn't fall back from %s", async (_case, make) => {
+    const failure = make();
+    const getUserMedia = stubGetUserMedia(failure);
+
+    await expect(openChosenMic("usb-mic")).rejects.toBe(failure);
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects with the fallback's own error when the system default fails too", async () => {
+    const denial = error("NotAllowedError");
+    stubGetUserMedia(error("NotReadableError"), denial);
+
+    await expect(openChosenMic("usb-mic")).rejects.toBe(denial);
+  });
+
+  it("opens nothing more once the caller has moved on", async () => {
+    const failure = error("NotReadableError");
+    const getUserMedia = stubGetUserMedia(failure, DEFAULT_MIC);
+
+    await expect(openChosenMic("usb-mic", { canFallBack: () => false })).rejects.toBe(failure);
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["", "default", "communications"])(
+    "asks for the system default once when %j is chosen",
+    async (deviceId) => {
+      const getUserMedia = stubGetUserMedia(error("NotReadableError"));
+
+      await expect(openChosenMic(deviceId)).rejects.toThrow();
+      expect(getUserMedia.mock.calls).toEqual([[SYSTEM_DEFAULT]]);
+    }
+  );
+
+  it("never calls the system default a substitution when that is the choice", async () => {
+    stubGetUserMedia(micStream("MacBook Pro Microphone", "builtin"));
+
+    expect((await openChosenMic("default")).substituted).toBe(false);
+  });
+
+  it("still hands over a stream whose track can't describe itself", async () => {
+    const track = {
+      label: "USB Mic",
+      getSettings: () => {
+        throw new Error("gone");
+      },
+    };
+    const stream = { getAudioTracks: () => [track], getTracks: () => [track] };
+    stubGetUserMedia(stream as unknown as ReturnType<typeof micStream>);
+
+    const mic = await openChosenMic("usb-mic");
+
+    expect(mic.stream).toBe(stream);
+    expect(mic.deviceId).toBeNull();
   });
 });
