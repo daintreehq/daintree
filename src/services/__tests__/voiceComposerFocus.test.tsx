@@ -22,7 +22,7 @@ import { createWorktreeStore, setCurrentViewStore } from "@/store/createWorktree
 import { usePanelStore } from "@/store/panelStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { initBuiltInPanelKinds } from "@/panels/registry";
-import { focusDictationComposer } from "../voiceComposerFocus";
+import { focusDictationComposer, revealDictationComposer } from "../voiceComposerFocus";
 
 const WT_ID = "/repo/wt";
 
@@ -315,5 +315,41 @@ describe("focusDictationComposer", () => {
 
       expect(document.activeElement).toBe(dialog.querySelector("button"));
     });
+  });
+});
+
+describe("revealDictationComposer (#14773)", () => {
+  it("takes the keyboard from another pane's field this view last left it in", async () => {
+    const { editor } = await mountPane();
+    const other = elsewhere('<div data-panel-id="term-2"><textarea></textarea></div>');
+    other.querySelector("textarea")!.focus();
+
+    revealDictationComposer("term-1");
+    flushFrames();
+
+    expect(document.activeElement).toBe(editor);
+    expect(requestedForDictation("term-1")).toBe(true);
+  });
+
+  it("leaves an open modal alone", async () => {
+    await mountPane();
+    const dialog = elsewhere('<div role="dialog" aria-modal="true"><button>OK</button></div>');
+    dialog.querySelector("button")!.focus();
+
+    revealDictationComposer("term-1");
+    flushFrames();
+
+    expect(document.activeElement).toBe(dialog.querySelector("button"));
+  });
+
+  it("does nothing for a pane that isn't the selected one", async () => {
+    const { terminal } = await mountPane();
+    terminal.focus();
+
+    revealDictationComposer("term-2");
+    flushFrames();
+
+    expect(document.activeElement).toBe(terminal);
+    expect(requestedPaneSurface("term-2")).toBeNull();
   });
 });

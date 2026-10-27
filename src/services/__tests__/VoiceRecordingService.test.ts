@@ -7,7 +7,27 @@ const suspendCallbacks = vi.hoisted(() => [] as Array<() => void>);
 const focusDictationComposer = vi.hoisted(() => vi.fn());
 // The real one reads the DOM, which these suites stub in part; its own suite
 // is voiceComposerFocus.test.tsx.
-vi.mock("@/services/voiceComposerFocus", () => ({ focusDictationComposer }));
+const revealDictationComposer = vi.hoisted(() => vi.fn());
+vi.mock("@/services/voiceComposerFocus", () => ({
+  focusDictationComposer,
+  revealDictationComposer,
+}));
+
+// Whether main has this view cached, and its lifecycle edges, as a test drives them.
+const viewLifecycle = vi.hoisted(() => ({
+  cached: false,
+  listeners: new Set<(phase: "cached" | "active" | "revealed") => void>(),
+}));
+vi.mock("@/lib/viewCacheState", () => ({
+  isProjectViewCached: () => viewLifecycle.cached,
+  subscribeProjectViewLifecycle: (listener: (phase: "cached" | "active" | "revealed") => void) => {
+    viewLifecycle.listeners.add(listener);
+    return () => viewLifecycle.listeners.delete(listener);
+  },
+}));
+
+const switchToHost = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock("@/components/Hosts/hostSwitching", () => ({ switchToHost }));
 
 vi.mock("@/store/voiceRecordingStore", () => {
   const state = {
@@ -2954,7 +2974,12 @@ describe("VoiceRecordingService — a session another view owns (#14601)", () =>
     vi.restoreAllMocks();
   });
 
-  const elsewhere = { sessionId: "remote", projectId: "project-a", projectName: "Alpha" };
+  const elsewhere = {
+    sessionId: "remote",
+    hostId: "local",
+    projectId: "project-a",
+    projectName: "Alpha",
+  };
 
   function hasMockState<T>(mod: object): mod is { __state: T } {
     return "__state" in mod;
@@ -3146,15 +3171,160 @@ describe("VoiceRecordingService — a session another view owns (#14601)", () =>
     const revealRequested = electron.voiceInput.onRevealRequested.mock.calls[0]![0];
 
     const projectId = "a".repeat(64);
-    revealRequested({ sessionId: "remote", workspaceId: projectId });
+    revealRequested({ sessionId: "remote", hostId: "local", workspaceId: projectId });
     const scratchId = "3f2b8a1c-4d5e-4f60-8a7b-9c0d1e2f3a4b";
-    revealRequested({ sessionId: "remote", workspaceId: scratchId });
+    revealRequested({ sessionId: "remote", hostId: "local", workspaceId: scratchId });
 
     await vi.waitFor(() => {
       expect(switchProject).toHaveBeenCalledWith(projectId);
       expect(switchScratch).toHaveBeenCalledWith(scratchId);
     });
     expect(switchProject).toHaveBeenCalledTimes(1);
+    expect(switchToHost).not.toHaveBeenCalled();
+  });
+
+  describe("across hosts (#14773)", () => {
+    beforeEach(() => {
+      switchToHost.mockClear();
+      viewLifecycle.cached = false;
+      viewLifecycle.listeners.clear();
+      revealDictationComposer.mockClear();
+    });
+
+    // The store mock's state outlives resetModules, and later suites press the key.
+    afterEach(async () => {
+      const voiceModule = await import("@/store/voiceRecordingStore");
+      if (hasMockState<VoiceState>(voiceModule)) voiceModule.__state.sessionElsewhere = null;
+    });
+
+    const reveal = (
+      electron: ReturnType<typeof buildElectronStub>,
+      request: { sessionId: string; hostId: string; workspaceId: string | null }
+    ) => electron.voiceInput.onRevealRequested.mock.calls[0]![0](request);
+
+    async function projectSwitch() {
+      const projectStore = await import("@/store/projectStore");
+      if (!hasSwitchMock(projectStore)) throw new Error("projectStore mock lacks __switchProject");
+      projectStore.__switchProject.mockClear();
+      return projectStore.__switchProject;
+    }
+
+    it("takes this Mac's window to the host a session runs on", async () => {
+      const { electron } = await arrange({ sessionElsewhere: null });
+      const switchProject = await projectSwitch();
+
+      reveal(electron, { sessionId: "remote", hostId: "studio-01", workspaceId: "proj-r" });
+
+      await vi.waitFor(() => {
+        expect(switchToHost).toHaveBeenCalledWith("studio-01", false, "proj-r");
+      });
+      expect(switchProject).not.toHaveBeenCalled();
+    });
+
+    it("brings a host's window back to this Mac for a session started here", async () => {
+      const { electron } = await arrange({ sessionElsewhere: null });
+      Reflect.set(window, "__DAINTREE_HOST_ID__", { id: "studio-01" });
+      const switchProject = await projectSwitch();
+
+      reveal(electron, { sessionId: "remote", hostId: "local", workspaceId: "project-a" });
+
+      await vi.waitFor(() => {
+        expect(switchToHost).toHaveBeenCalledWith("local", false, "project-a");
+      });
+      expect(switchProject).not.toHaveBeenCalled();
+    });
+
+    it("opens a project on this view's own host by the id that host knows it by", async () => {
+      const { electron } = await arrange({ sessionElsewhere: null });
+      Reflect.set(window, "__DAINTREE_HOST_ID__", { id: "studio-01" });
+      const switchProject = await projectSwitch();
+
+      reveal(electron, { sessionId: "remote", hostId: "studio-01", workspaceId: "proj-r" });
+
+      await vi.waitFor(() => {
+        expect(switchProject).toHaveBeenCalledWith("proj-r");
+      });
+      expect(switchToHost).not.toHaveBeenCalled();
+    });
+
+    it("goes to the other host's copy of a project that shares this host's id", async () => {
+      const { electron } = await arrange({ sessionElsewhere: null });
+      Reflect.set(window, "__DAINTREE_HOST_ID__", { id: "studio-02" });
+      const switchProject = await projectSwitch();
+
+      reveal(electron, { sessionId: "remote", hostId: "studio-01", workspaceId: "proj-r" });
+
+      await vi.waitFor(() => {
+        expect(switchToHost).toHaveBeenCalledWith("studio-01", false, "proj-r");
+      });
+      expect(switchProject).not.toHaveBeenCalled();
+    });
+
+    it("waits for the owner's cached view to come on screen before taking the keyboard there", async () => {
+      const { electron, voiceRecordingService, voiceState } = await arrange({ status: "recording" });
+      Reflect.set(voiceRecordingService, "sessionId", "own");
+      const focusTarget = vi
+        .spyOn(voiceRecordingService, "focusActiveTarget")
+        .mockResolvedValue(true);
+      viewLifecycle.cached = true;
+
+      reveal(electron, { sessionId: "own", hostId: "local", workspaceId: "project-a" });
+      for (const listener of viewLifecycle.listeners) listener("active");
+      await Promise.resolve();
+      expect(focusTarget).not.toHaveBeenCalled();
+
+      for (const listener of [...viewLifecycle.listeners]) listener("revealed");
+
+      await vi.waitFor(() => {
+        expect(revealDictationComposer).toHaveBeenCalledWith(voiceState.activeTarget!.panelId);
+      });
+      expect(focusTarget).toHaveBeenCalledTimes(1);
+      expect(viewLifecycle.listeners.size).toBe(0);
+    });
+
+    it("takes the keyboard to its pane at once when the owner is already on screen", async () => {
+      const { electron, voiceRecordingService, voiceState } = await arrange({ status: "recording" });
+      Reflect.set(voiceRecordingService, "sessionId", "own");
+      vi.spyOn(voiceRecordingService, "focusActiveTarget").mockResolvedValue(true);
+
+      reveal(electron, { sessionId: "own", hostId: "studio-01", workspaceId: "proj-r" });
+
+      await vi.waitFor(() => {
+        expect(revealDictationComposer).toHaveBeenCalledWith(voiceState.activeTarget!.panelId);
+      });
+      expect(switchToHost).not.toHaveBeenCalled();
+    });
+
+    it("gives up on a cached owner that never comes on screen, and on a newer reveal", async () => {
+      const { electron, voiceRecordingService } = await arrange({ status: "recording" });
+      Reflect.set(voiceRecordingService, "sessionId", "own");
+      const focusTarget = vi
+        .spyOn(voiceRecordingService, "focusActiveTarget")
+        .mockResolvedValue(true);
+      viewLifecycle.cached = true;
+      vi.useFakeTimers();
+      try {
+        reveal(electron, { sessionId: "own", hostId: "local", workspaceId: "project-a" });
+        reveal(electron, { sessionId: "own", hostId: "local", workspaceId: "project-a" });
+        expect(viewLifecycle.listeners.size).toBe(1);
+
+        vi.advanceTimersByTime(15_000);
+        expect(viewLifecycle.listeners.size).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(focusTarget).not.toHaveBeenCalled();
+    });
+
+    it("names the host when stopping a session that runs on one", async () => {
+      const { voiceRecordingService, announce } = await arrange({
+        sessionElsewhere: { ...elsewhere, hostId: "studio-01", projectName: "Remote R" },
+      });
+
+      await voiceRecordingService.toggleFocusedPanel();
+
+      expect(announce).toHaveBeenCalledWith("Stopping dictation in Remote R on studio-01.");
+    });
   });
 });
 

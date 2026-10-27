@@ -3,6 +3,14 @@ import type { VoiceRecordingTarget } from "@/store/voiceRecordingStore";
 import { VOICE_STOP_AUDIO_LOST_CODE, type VoiceInputError } from "@shared/types";
 import { TRANSCRIPTION_ITEM_FAILED_CODE } from "@shared/types/voice";
 
+// Its DOM reads need a real document, which this suite stubs in part; the
+// suite that runs it for real is voiceComposerFocus.test.tsx.
+const revealDictationComposer = vi.hoisted(() => vi.fn());
+vi.mock("@/services/voiceComposerFocus", () => ({
+  focusDictationComposer: vi.fn(),
+  revealDictationComposer,
+}));
+
 type VoiceStatusCallback = (payload: { sessionId: string; status: string }) => void;
 type VoiceSessionEndedCallback = (payload: { sessionId: string; reason: string }) => void;
 type VoiceErrorCallback = (payload: { sessionId: string; error: VoiceInputError }) => void;
@@ -1763,10 +1771,18 @@ describe("VoiceRecordingService adversarial", () => {
       await voiceRecordingService.start(panelOne);
       const focusSpy = vi.spyOn(voiceRecordingService, "focusActiveTarget").mockResolvedValue(true);
 
-      requestHandlers().revealRequested({ sessionId: "someone-else", workspaceId: null });
+      requestHandlers().revealRequested({
+        sessionId: "someone-else",
+        hostId: "local",
+        workspaceId: null,
+      });
       expect(focusSpy).not.toHaveBeenCalled();
 
-      requestHandlers().revealRequested({ sessionId: liveSessionId(), workspaceId: "p" });
+      requestHandlers().revealRequested({
+        sessionId: liveSessionId(),
+        hostId: "local",
+        workspaceId: "p",
+      });
       expect(focusSpy).toHaveBeenCalledTimes(1);
     });
   });
