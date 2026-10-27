@@ -61,7 +61,7 @@ const RECOGNITION_HINTS_PRIVACY =
 
 const PROVIDER_PRIVACY: Record<VoiceTranscriptionProvider, string> = {
   openai: `OpenAI receives your audio over an encrypted connection, keeps it for up to 30 days for abuse monitoring, and doesn't train on it. ${RECOGNITION_HINTS_PRIVACY}`,
-  deepgram: `Deepgram receives your audio over an encrypted connection and doesn't retain streaming audio or transcripts by default. ${RECOGNITION_HINTS_PRIVACY}`,
+  deepgram: `Deepgram receives your audio over an encrypted connection and, by default, may keep audio and transcripts to improve its models. ${RECOGNITION_HINTS_PRIVACY}`,
 };
 
 const DEFAULT_SETTINGS: VoiceInputSettings = {

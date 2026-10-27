@@ -320,7 +320,7 @@ describe("VoiceInputSettingsTab", () => {
 
     await waitFor(() => {
       const disclosure = screen.getByText(/Deepgram receives your audio/).textContent ?? "";
-      expect(disclosure).toMatch(/doesn't retain streaming audio/);
+      expect(disclosure).toMatch(/may keep audio and transcripts to improve its models/);
       expect(disclosure).toMatch(/dictionary/);
       expect(disclosure).toMatch(/project, host and worktree names/);
       expect(disclosure).toMatch(/branch/);

@@ -366,22 +366,30 @@ describe("VoiceInputSettingsTab provider switch", () => {
 });
 
 describe("VoiceInputSettingsTab provider select", () => {
-  it("puts a logo on the trigger and on every option", async () => {
+  it("puts each provider's own logo on the trigger and on its option", async () => {
     install({});
     render(<VoiceInputSettingsTab />);
+
+    const mark = (el: Element) => el.querySelector('svg[width="14"]')?.getAttribute("viewBox");
+    // OpenAI's mark is drawn on a 320 grid, Deepgram's on a 24 grid.
+    const OPENAI_MARK = "0 0 320 320";
+    const DEEPGRAM_MARK = "0 0 24 24";
 
     const trigger = await screen.findByRole("combobox", { name: "Transcription provider" });
     // The row keeps the anchor the `voice-provider` search deep link scrolls to.
     expect(document.getElementById("voice-provider")?.contains(trigger)).toBe(true);
     expect(trigger.textContent).toContain("OpenAI");
-    expect(trigger.querySelector('svg[width="14"]')).not.toBeNull();
+    expect(mark(trigger)).toBe(OPENAI_MARK);
 
     trigger.focus();
     fireEvent.keyDown(trigger, { key: "Enter" });
-    for (const name of ["OpenAI", "Deepgram"]) {
-      const option = await screen.findByRole("option", { name });
-      expect(option.querySelector('svg[width="14"]')).not.toBeNull();
-    }
+    expect(mark(await screen.findByRole("option", { name: "OpenAI" }))).toBe(OPENAI_MARK);
+    const deepgramOption = await screen.findByRole("option", { name: "Deepgram" });
+    expect(mark(deepgramOption)).toBe(DEEPGRAM_MARK);
+
+    fireEvent.keyDown(deepgramOption, { key: "Enter" });
+    await waitFor(() => expect(mark(trigger)).toBe(DEEPGRAM_MARK));
+    expect(trigger.textContent).toContain("Deepgram");
   });
 
   it("swaps the privacy note with the selection, naming recipient, retention and hints", async () => {
@@ -399,7 +407,7 @@ describe("VoiceInputSettingsTab provider select", () => {
     await pickProvider("Deepgram");
 
     const deepgram = await screen.findByText(/Deepgram receives your audio/);
-    expect(deepgram.textContent).toMatch(/doesn't retain streaming audio/);
+    expect(deepgram.textContent).toMatch(/may keep audio and transcripts to improve its models/);
     expect(deepgram.textContent).toMatch(/Recognition hints go with the audio/);
     expect(container.textContent).not.toContain("OpenAI receives your audio");
   });
