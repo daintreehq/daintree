@@ -1058,6 +1058,27 @@ describe("draft writes that touch several places (#14781)", () => {
     expect(anchorOf(third)).toEqual({ from: 14, to: 14, edited: false });
   });
 
+  it("keeps the unsure words of an utterance between two declared changes", () => {
+    setDraft("aa bb cc dd");
+    useDictationRangeStore.getState().recordUtterance(other, {
+      insertion: { from: 3, to: 5 },
+      words: { from: 3, to: 5 },
+      uncertain: [{ from: 0, to: 2 }],
+    });
+
+    useDictationRangeStore
+      .getState()
+      .expectDraftChange(PANEL, PROJECT, "aa bb cc dd", "AAAAAA bb C dd", [
+        { from: 0, to: 2, insert: "AAAAAA" },
+        { from: 6, to: 8, insert: "C" },
+      ]);
+    setDraft("AAAAAA bb C dd");
+
+    const [utterance] = only().utterances;
+    expect(utterance!.range).toEqual({ from: 7, to: 9, edited: false });
+    expect(utterance!.uncertain).toEqual([{ from: 0, to: 2 }]);
+  });
+
   it("takes a replacement ahead of an insertion at its start", () => {
     setDraft("helloworld");
     const store = useDictationRangeStore.getState();
@@ -1072,15 +1093,17 @@ describe("draft writes that touch several places (#14781)", () => {
     expect(anchorOf(other)).toEqual({ from: 12, to: 12, edited: false });
   });
 
-  it("still flags the words the diff of an undeclared write runs across", () => {
+  it("still flags the words the diff of an undeclared write runs across, and drops their unsure words", () => {
     setDraft("aa bb cc");
     useDictationRangeStore.getState().recordUtterance(other, {
       insertion: { from: 3, to: 5 },
       words: { from: 3, to: 5 },
+      uncertain: [{ from: 0, to: 2 }],
     });
     setDraft("AAA bb C");
 
     expect(only().utterances[0]!.range.edited).toBe(true);
+    expect(only().utterances[0]!.uncertain).toBeUndefined();
   });
 
   it("never shows a subscriber anchors that moved with ranges that haven't", () => {
