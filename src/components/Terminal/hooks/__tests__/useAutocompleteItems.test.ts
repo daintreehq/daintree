@@ -5,6 +5,7 @@ import { useAutocompleteItems } from "../useAutocompleteItems";
 import type { ActiveCompletionContext } from "../../hybridInputParsing";
 import type { AutocompleteItem } from "../../AutocompleteMenu";
 import type { CompletionTrigger } from "@shared/types";
+import type { ForgeReference } from "../../forgeReferences";
 
 function atContext(query: string): ActiveCompletionContext {
   return { triggerChar: "@", start: 0, tokenEnd: query.length + 1, query };
@@ -158,4 +159,110 @@ describe("useAutocompleteItems", () => {
       expect(result.current.isLoading).toBe(true);
     }
   );
+
+  describe("`#` references", () => {
+    function hashContext(query: string): ActiveCompletionContext {
+      return { triggerChar: "#", start: 0, tokenEnd: query.length + 1, query };
+    }
+    const refs: ForgeReference[] = [
+      {
+        kind: "issue",
+        number: 14848,
+        reference: "#14848",
+        title: "Suggest issues when typing #",
+        isDraft: false,
+        updatedAt: 3,
+      },
+      {
+        kind: "pr",
+        number: 14843,
+        reference: "!14843",
+        title: "Clean up long dictations",
+        isDraft: true,
+        updatedAt: 2,
+      },
+      {
+        kind: "pr",
+        number: 9001,
+        reference: "!9001",
+        title: "Toolbar counts",
+        isDraft: false,
+        updatedAt: 1,
+      },
+    ];
+
+    it("shows each row's reference, kind and state, and title, inserting the reference", () => {
+      const { result } = renderHook(() =>
+        useAutocompleteItems({
+          ...baseParams,
+          activeCompletionContext: hashContext(""),
+          forgeReferences: refs,
+        })
+      );
+      expect(
+        result.current.autocompleteItems.map((row) => [
+          row.label,
+          row.badge,
+          row.description,
+          row.insertText,
+        ])
+      ).toEqual([
+        ["#14848", "Open issue", "Suggest issues when typing #", "#14848"],
+        ["!14843", "Draft PR", "Clean up long dictations", "!14843"],
+        ["!9001", "Open PR", "Toolbar counts", "!9001"],
+      ]);
+      expect(new Set(result.current.autocompleteItems.map((row) => row.insert))).toEqual(
+        new Set(["literal"])
+      );
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    it("narrows by the typed query", () => {
+      const byNumber = renderHook(() =>
+        useAutocompleteItems({
+          ...baseParams,
+          activeCompletionContext: hashContext("148"),
+          forgeReferences: refs,
+        })
+      );
+      expect(byNumber.result.current.autocompleteItems.map((row) => row.label)).toEqual([
+        "#14848",
+        "!14843",
+      ]);
+      const byTitle = renderHook(() =>
+        useAutocompleteItems({
+          ...baseParams,
+          activeCompletionContext: hashContext("tool"),
+          forgeReferences: refs,
+        })
+      );
+      expect(byTitle.result.current.autocompleteItems.map((row) => row.label)).toEqual(["!9001"]);
+    });
+
+    it("gives an issue and a pull request with the same number their own rows", () => {
+      const { result } = renderHook(() =>
+        useAutocompleteItems({
+          ...baseParams,
+          activeCompletionContext: hashContext("5"),
+          forgeReferences: [
+            { ...refs[0]!, number: 5, reference: "#5" },
+            { ...refs[1]!, number: 5, reference: "!5" },
+          ],
+        })
+      );
+      const keys = result.current.autocompleteItems.map((row) => row.key);
+      expect(new Set(keys).size).toBe(2);
+    });
+
+    it("offers no rows to other triggers", () => {
+      const { result } = renderHook(() =>
+        useAutocompleteItems({
+          ...baseParams,
+          activeCompletionContext: atContext("src"),
+          forgeReferences: refs,
+        })
+      );
+      expect(result.current.autocompleteItems).toEqual([]);
+    });
+  });
 });
