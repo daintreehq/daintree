@@ -49,18 +49,27 @@ import { screenDictationNames } from "../voiceContextKeyterms.js";
 const ASSISTANT = "assistant-1";
 const GRID = "grid-1";
 const ELSEWHERE = "grid-other";
+const SHELL = "shell-1";
+const EXITED_AGENT = "exited-agent-1";
 
 function makePtyClient() {
   const owners: Record<string, string> = {
     [ASSISTANT]: "proj-a",
     [GRID]: "proj-a",
     [ELSEWHERE]: "proj-b",
+    [SHELL]: "proj-a",
+    [EXITED_AGENT]: "proj-a",
+  };
+  const records: Record<string, object> = {
+    [GRID]: { detectedAgentId: "claude" },
+    [ELSEWHERE]: { detectedAgentId: "claude" },
+    [EXITED_AGENT]: { launchAgentId: "claude", agentState: "exited" },
   };
   return {
     hasTerminal: vi.fn((id: string) => id in owners),
     getTerminalProjectId: vi.fn((id: string) => owners[id] ?? null),
     getTerminalAsync: vi.fn(async (id: string) =>
-      id in owners ? { id, isAssistantTerminal: id === ASSISTANT } : null
+      id in owners ? { id, isAssistantTerminal: id === ASSISTANT, ...records[id] } : null
     ),
   };
 }
@@ -117,19 +126,42 @@ describe("gatherDictationNames", () => {
     );
   });
 
-  it("keeps the projects in the order the store ranks them", async () => {
-    const store = (await import("../ProjectStore.js")).projectStore;
-    vi.mocked(store.getProjectSummaries).mockReturnValueOnce([
-      { id: "proj-c", name: "CandidCue", path: "/repo/cue", emoji: "" },
-      { id: "proj-a", name: "Daintree", path: "/repo/daintree", emoji: "" },
-      { id: "proj-b", name: "Plugin SDK", path: "/repo/sdk", emoji: "" },
-    ]);
-    const names = await gather(GRID);
-    expect(names.projects).toEqual(["CandidCue", "Plugin SDK"]);
+  it("gives a plain shell or an exited agent only its worktrees", async () => {
+    for (const id of [SHELL, EXITED_AGENT]) {
+      await expect(gather(id)).resolves.toEqual({
+        hosts: [],
+        projects: [],
+        worktrees: ["billing", "payments"],
+      });
+    }
   });
 
-  it("leaves an agent pane its worktrees when the hosts or projects can't be read", async () => {
+  it("keeps the projects in the order the store ranks them, not alphabetically", async () => {
+    const store = (await import("../ProjectStore.js")).projectStore;
+    vi.mocked(store.getProjectSummaries).mockReturnValueOnce([
+      { id: "proj-c", name: "Zephyr", path: "/repo/z", emoji: "" },
+      { id: "proj-a", name: "Daintree", path: "/repo/daintree", emoji: "" },
+      { id: "proj-b", name: "Plugin SDK", path: "/repo/sdk", emoji: "" },
+      { id: "proj-d", name: "CandidCue", path: "/repo/cue", emoji: "" },
+    ]);
+    const names = await gather(GRID);
+    expect(names.projects).toEqual(["Zephyr", "Plugin SDK", "CandidCue"]);
+  });
+
+  it("leaves an agent pane its worktrees when the hosts can't be read", async () => {
     shared.hostsError = new Error("registry gone");
+    await expect(gather(GRID)).resolves.toEqual({
+      hosts: [],
+      projects: [],
+      worktrees: ["billing", "payments"],
+    });
+  });
+
+  it("leaves an agent pane its worktrees when the projects can't be read", async () => {
+    const store = (await import("../ProjectStore.js")).projectStore;
+    vi.mocked(store.getProjectSummaries).mockImplementationOnce(() => {
+      throw new Error("db gone");
+    });
     await expect(gather(GRID)).resolves.toEqual({
       hosts: [],
       projects: [],
@@ -209,8 +241,8 @@ describe("gatherDictationNames", () => {
     const ptyClient = makePtyClient();
     ptyClient.getTerminalAsync.mockRejectedValue(new Error("pty host gone"));
     await expect(gather(ASSISTANT, { ptyClient })).resolves.toEqual({
-      hosts: ["Studio 1", "Studio 2"],
-      projects: ["Plugin SDK"],
+      hosts: [],
+      projects: [],
       worktrees: ["billing", "payments"],
     });
   });

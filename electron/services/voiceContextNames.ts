@@ -1,5 +1,6 @@
 import { projectStore } from "./ProjectStore.js";
 import { isAssistantTerminalRecord } from "./assistantTerminal.js";
+import { subagentTerminalAgentId } from "./subagentTerminalAgent.js";
 import type { PtyClient } from "./PtyClient.js";
 import type { WorkspaceClient } from "./WorkspaceClient.js";
 import { getRemoteService } from "../remote/runtime.js";
@@ -24,12 +25,17 @@ export interface DictationNamesOpts {
   worktreeService?: WorkspaceClient;
 }
 
-async function isAssistantTarget(ptyClient: PtyClient, terminalId: string): Promise<boolean> {
+type TerminalKind = "assistant" | "agent" | "other";
+
+// Hosts and projects are spoken to the Assistant and to agents; a plain shell
+// only ever needs its own project's worktrees. An unreadable record is a shell.
+async function readTerminalKind(ptyClient: PtyClient, terminalId: string): Promise<TerminalKind> {
   try {
     const terminal = await ptyClient.getTerminalAsync(terminalId);
-    return isAssistantTerminalRecord(terminal ?? { id: terminalId });
+    if (isAssistantTerminalRecord(terminal ?? { id: terminalId })) return "assistant";
+    return terminal && subagentTerminalAgentId(terminal) ? "agent" : "other";
   } catch {
-    return false;
+    return "other";
   }
 }
 
@@ -65,16 +71,17 @@ export async function gatherDictationNames(opts: DictationNamesOpts): Promise<Di
     const ownerId = ptyClient.getTerminalProjectId(terminalId) ?? opts.projectId;
     if (ownerId && opts.projectId && ownerId !== opts.projectId) return NO_DICTATION_NAMES;
 
-    const assistant = await isAssistantTarget(ptyClient, terminalId);
+    const kind = await readTerminalKind(ptyClient, terminalId);
     const worktrees = await readWorktreeNames(ownerId ?? null, worktreeService).catch(() => []);
+    if (kind === "other") return { hosts: [], projects: [], worktrees };
 
     // A failed read costs an agent pane its hosts and projects, not the
     // worktrees it had before; the Assistant keeps giving up on all of them.
     let spoken: Pick<DictationNames, "hosts" | "projects"> = { hosts: [], projects: [] };
     try {
-      spoken = readHostsAndProjects(assistant ? null : (ownerId ?? null));
+      spoken = readHostsAndProjects(kind === "assistant" ? null : (ownerId ?? null));
     } catch (error) {
-      if (assistant) throw error;
+      if (kind === "assistant") throw error;
       logDebug(`${P} Failed to read hosts and projects`);
     }
     return { ...spoken, worktrees };
