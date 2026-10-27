@@ -49,6 +49,22 @@
   will-change: opacity, transform;
 }
 
+/* The toolbar dictation waveform while it waits on the mic or the backend: a
+ * fade that travels across the bars, staggered per bar, never a spin. */
+@keyframes voice-wave-wait {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.animate-voice-wave-wait {
+  animation: voice-wave-wait 1.2s ease-in-out infinite;
+}
+
 @keyframes checkbox-check-in {
   from {
     opacity: 0;
