@@ -982,9 +982,7 @@ describe("useReEntrySummary across a screen lock (#14885)", () => {
     now += 60_000;
     setScreenLocked(false);
 
-    expect(result.current.entries.map((e) => e.message)).toEqual([
-      "Between the blur and the lock",
-    ]);
+    expect(result.current.entries.map((e) => e.message)).toEqual(["Between the blur and the lock"]);
   });
 
   it("reads focus a frame after the focus event, where it is current", () => {
