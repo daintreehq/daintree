@@ -1163,6 +1163,22 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     ) {
       setAnnouncedVoiceAttempt(voiceSubmitAttempt);
     }
+    // The wait's progress and its receipt own the shell's top border while on
+    // screen, so the focus ring, which would run through the caption, waits.
+    const [isVoiceSubmitPresenting, setIsVoiceSubmitPresenting] = useState(false);
+
+    const voiceSlotRef = useRef<HTMLSpanElement>(null);
+    const voiceSlotFocusedRef = useRef(false);
+    useLayoutEffect(() => {
+      const slot = voiceSlotRef.current;
+      if (!slot || !voiceSlotFocusedRef.current) return;
+      const active = document.activeElement;
+      if (active && active !== document.body) {
+        voiceSlotFocusedRef.current = slot.contains(active);
+        return;
+      }
+      slot.querySelector("button")?.focus({ preventScroll: true });
+    }, [isVoiceSubmitting]);
     const voiceSubmitStatus = voiceSubmitWait
       ? showVoiceSubmitStatus
         ? `${voiceSubmitWait.phase === "polishing" ? "Polishing dictation" : "Finishing dictation"}. Press Escape to cancel the send.`
@@ -1691,7 +1707,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 // edge, the border left as it was. Keyed to the editor, not
                 // `focus-within` — a Tab onto attach or the mic is that
                 // control's own ring, not the composer taking the keyboard.
-                "has-[.cm-content:focus-visible]:outline-2 has-[.cm-content:focus-visible]:outline-offset-2 has-[.cm-content:focus-visible]:outline-[var(--ib-focus-ring)]",
+                !isVoiceSubmitPresenting &&
+                  "has-[.cm-content:focus-visible]:outline-2 has-[.cm-content:focus-visible]:outline-offset-2 has-[.cm-content:focus-visible]:outline-[var(--ib-focus-ring)]",
               ],
               // The one dim for an unavailable composer. Its controls take
               // `disabled` and add no opacity of their own: a second dim inside
@@ -1706,6 +1723,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             data-composer-state={
               isSpecialState ? undefined : showSelectedChrome ? "selected" : "rest"
             }
+            data-voice-receipt={isVoiceSubmitPresenting ? "" : undefined}
             style={specialStyle}
             onDragEnter={handleDragEnter}
             onDragOver={handleDragOver}
@@ -1725,6 +1743,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               key={voiceSubmitAttempt}
               wait={voiceSubmitWait}
               outcome={voiceSubmitOutcome}
+              onPresentChange={setIsVoiceSubmitPresenting}
             />
             <AutocompleteMenu
               ref={menuRef}
@@ -1955,61 +1974,75 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               {/* Dictation writes to the pane's own draft, in the current
                   project. An isolated composer's draft is its own, so it
                   offers dictation only when it has its own to take, rather
-                  than filling the pane's behind it. A wait on a dictated send
-                  shows its Cancel send in the mic's place. */}
-              {isVoiceSubmitting && (voiceTarget || !isolated) ? (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        cancelVoiceWaitSubmit();
-                        focusEditor();
-                      }}
-                      className={cn(
-                        "flex items-center justify-center h-6 w-6 rounded-full transition-colors cursor-pointer",
-                        COMPOSER_CONTROL_TEXT_CLASS,
-                        COMPOSER_CONTROL_HOVER_BG_CLASS,
-                        COMPOSER_CONTROL_FOCUS_CLASS
-                      )}
-                      aria-label="Cancel send"
-                      aria-keyshortcuts="Escape"
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="top">
-                    {createTooltipContent("Cancel send", "Escape")}
-                  </TooltipContent>
-                </Tooltip>
-              ) : voiceTarget ? (
-                <VoiceInputButton
-                  panelId={voiceTarget.panelId}
-                  panelTitle={voiceTarget.panelTitle}
-                  projectId={voiceTarget.projectId}
-                  projectName={voiceTarget.projectName}
-                  worktreeId={voiceTarget.worktreeId}
-                  worktreeLabel={voiceTarget.worktreeLabel}
-                  surface={voiceTarget.surface}
-                  terminalId={voiceTarget.terminalId}
-                  otherHostId={voiceTarget.otherHostId}
-                  disabled={disabled}
-                />
-              ) : (
-                !isolated && (
+                  than filling the pane's behind it. */}
+              {/* The mic and the wait's Cancel send take turns in one slot.
+                  Swapping one for the other removes the focused button, so
+                  the keyboard is handed to whichever takes its place. */}
+              <span
+                ref={voiceSlotRef}
+                className="contents"
+                onFocusCapture={() => {
+                  voiceSlotFocusedRef.current = true;
+                }}
+                onBlurCapture={(event) => {
+                  if (event.relatedTarget) voiceSlotFocusedRef.current = false;
+                }}
+              >
+                {isVoiceSubmitting && (voiceTarget || !isolated) ? (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          cancelVoiceWaitSubmit();
+                          focusEditor();
+                        }}
+                        className={cn(
+                          "flex items-center justify-center h-6 w-6 rounded-full transition-colors cursor-pointer",
+                          COMPOSER_CONTROL_TEXT_CLASS,
+                          COMPOSER_CONTROL_HOVER_BG_CLASS,
+                          COMPOSER_CONTROL_FOCUS_CLASS
+                        )}
+                        aria-label="Cancel send"
+                        aria-keyshortcuts="Escape"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="top">
+                      {createTooltipContent("Cancel send", "Escape")}
+                    </TooltipContent>
+                  </Tooltip>
+                ) : voiceTarget ? (
                   <VoiceInputButton
-                    panelId={terminalId}
-                    panelTitle={
-                      panelOwnTitle?.trim() || (agentId ? getAgentConfig(agentId)?.name : undefined)
-                    }
-                    projectId={currentProject?.id}
-                    projectName={currentProject?.name}
-                    worktreeId={panelWorktreeId}
-                    worktreeLabel={panelWorktreeLabel}
+                    panelId={voiceTarget.panelId}
+                    panelTitle={voiceTarget.panelTitle}
+                    projectId={voiceTarget.projectId}
+                    projectName={voiceTarget.projectName}
+                    worktreeId={voiceTarget.worktreeId}
+                    worktreeLabel={voiceTarget.worktreeLabel}
+                    surface={voiceTarget.surface}
+                    terminalId={voiceTarget.terminalId}
+                    otherHostId={voiceTarget.otherHostId}
                     disabled={disabled}
                   />
-                )
-              )}
+                ) : (
+                  !isolated && (
+                    <VoiceInputButton
+                      panelId={terminalId}
+                      panelTitle={
+                        panelOwnTitle?.trim() ||
+                        (agentId ? getAgentConfig(agentId)?.name : undefined)
+                      }
+                      projectId={currentProject?.id}
+                      projectName={currentProject?.name}
+                      worktreeId={panelWorktreeId}
+                      worktreeLabel={panelWorktreeLabel}
+                      disabled={disabled}
+                    />
+                  )
+                )}
+              </span>
             </div>
           </div>
         </div>

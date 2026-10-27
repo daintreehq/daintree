@@ -205,7 +205,9 @@
     outline-offset: 0;
   }
 
-  [data-composer-state]:has(.cm-content:focus-visible) {
+  /* Held back while a voice send's progress or receipt owns the top border,
+     as the normal ring is (`data-voice-receipt`). */
+  [data-composer-state]:not([data-voice-receipt]):has(.cm-content:focus-visible) {
     outline: 2px solid Highlight;
     outline-offset: 2px;
   }

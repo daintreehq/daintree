@@ -49,6 +49,11 @@ function waitCaption(wait: VoiceSubmitWait): string {
 interface VoiceSubmitProgressProps {
   wait: VoiceSubmitWait | null;
   outcome: VoiceSubmitOutcome | null;
+  /**
+   * Whether anything is on screen, exit included: the shell holds back its
+   * focus ring meanwhile, which would otherwise strike through the caption.
+   */
+  onPresentChange: (presenting: boolean) => void;
 }
 
 /**
@@ -69,7 +74,7 @@ interface VoiceSubmitProgressProps {
  * outlasts it still shows. Mount one per attempt (keyed), so each attempt
  * gets its own gate and no fill carries over from the last.
  */
-export function VoiceSubmitProgress({ wait, outcome }: VoiceSubmitProgressProps) {
+export function VoiceSubmitProgress({ wait, outcome, onPresentChange }: VoiceSubmitProgressProps) {
   const fillRef = useRef<HTMLDivElement>(null);
   const captionRef = useRef<HTMLDivElement>(null);
   const [exiting, setExiting] = useState(false);
@@ -172,7 +177,13 @@ export function VoiceSubmitProgress({ wait, outcome }: VoiceSubmitProgressProps)
     };
   }, [exiting, settledOutcome]);
 
-  if (!visible && !exiting) return null;
+  const presenting = visible || exiting;
+  useLayoutEffect(() => {
+    onPresentChange(presenting);
+  }, [presenting, onPresentChange]);
+  useLayoutEffect(() => () => onPresentChange(false), [onPresentChange]);
+
+  if (!presenting) return null;
 
   return (
     <>
