@@ -210,6 +210,14 @@ function referenceCard(reference: ForgeNumberReference): Node[] {
   return [header, title];
 }
 
+/** The marked reference that starts at `from`, if one still does. */
+function drawnAt(state: EditorState, from: number): DrawnReference | undefined {
+  return state.field(forgeReferenceField, false)?.drawn.find((d) => d.from === from);
+}
+
+const toldReferences = (tr: Transaction) =>
+  tr.effects.some((effect) => effect.is(setForgeReferences));
+
 /** The card for the marked reference at `pos`, if there is one; `side` as `hoverTooltip` gives it. */
 export function forgeReferenceTooltipAt(
   view: EditorView,
@@ -223,20 +231,31 @@ export function forgeReferenceTooltipAt(
   );
   if (!hit) return null;
   // Reading a card is when its state matters: a stale answer is asked again,
-  // outside this update, for the next look.
+  // outside this update, and an open card takes the new one as it lands.
   setTimeout(() => rescanForgeReferences(view), 0);
-  return chipTooltip({ from: hit.from, to: hit.to }, ".cm-forge-ref", () =>
-    referenceCard(hit.reference)
+  let shown = hit.reference;
+  return chipTooltip(
+    { from: hit.from, to: hit.to },
+    ".cm-forge-ref",
+    () => referenceCard(shown),
+    (update) => {
+      if (!update.transactions.some(toldReferences)) return null;
+      const current = drawnAt(update.state, hit.from)?.reference;
+      if (!current || sameReference(current, shown)) return null;
+      shown = current;
+      return referenceCard(current);
+    }
   );
 }
 
 /**
- * Whether `tr` leaves an open card describing something stale. The card shows
- * the reference it opened on, so it closes once the draft's text or what its
- * numbers name changes; the next hover reads anew.
+ * Whether `tr` closes an open card: the draft's text changed under it, or its
+ * number no longer names anything. A changed answer for the same number
+ * updates the card in place instead.
  */
-export function closesReferenceCard(tr: Transaction): boolean {
-  return tr.docChanged || tr.effects.some((effect) => effect.is(setForgeReferences));
+export function closesReferenceCard(tr: Transaction, tooltip: Tooltip): boolean {
+  if (tr.docChanged) return true;
+  return toldReferences(tr) && !drawnAt(tr.state, tooltip.pos);
 }
 
 export function createForgeReferenceTooltip() {

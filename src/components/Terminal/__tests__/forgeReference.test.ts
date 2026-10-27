@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/trustedTypesPolicy", () => ({
   createTrustedHTML: (s: string) => s,
@@ -11,7 +11,7 @@ vi.mock("@/lib/trustedTypesPolicy", () => ({
 }));
 
 import { EditorSelection, EditorState } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import { EditorView, type ViewUpdate } from "@codemirror/view";
 import { cursorCharLeft, cursorCharRight } from "@codemirror/commands";
 import type { ForgeNumberReference } from "@shared/types/forge";
 import {
@@ -49,9 +49,22 @@ const REFERENCES: ForgeReferenceMap = new Map<number, ForgeNumberReference>([
   [7, OPEN_ISSUE],
 ]);
 
+// jsdom has no layout: a card measures its text through Range rects it lacks.
+const originalRangeRects = Object.getOwnPropertyDescriptor(Range.prototype, "getClientRects");
+beforeAll(() => {
+  Object.defineProperty(Range.prototype, "getClientRects", { configurable: true, value: () => [] });
+});
+afterAll(() => {
+  if (originalRangeRects)
+    Object.defineProperty(Range.prototype, "getClientRects", originalRangeRects);
+  else delete (Range.prototype as Partial<Range>).getClientRects;
+});
+
 const views: EditorView[] = [];
+let updates: ViewUpdate[] = [];
 
 function mount(doc: string, caret = doc.length): EditorView {
+  updates = [];
   const view = new EditorView({
     parent: document.body.appendChild(document.createElement("div")),
     state: EditorState.create({
@@ -63,6 +76,9 @@ function mount(doc: string, caret = doc.length): EditorView {
         createFileChipField(),
         fileDropChipField,
         imageChipField,
+        EditorView.updateListener.of((update) => {
+          updates.push(update);
+        }),
       ],
     }),
   });
@@ -146,12 +162,13 @@ describe("issue and pull request references (#14849)", () => {
     ["draft flag", { isDraft: true }],
   ] as const)("redraws when a reference's %s changes", (_, change) => {
     const view = mount("see #14843");
-    applyForgeReferences(view, REFERENCES);
-    const changed = { ...MERGED_PR, ...change } as ForgeNumberReference;
-    applyForgeReferences(view, new Map([...REFERENCES, [14843, changed]]));
-    expect(view.dom.querySelector(".cm-forge-ref")?.getAttribute("aria-description")).toBe(
-      `${describeForgeReference(changed)}: ${changed.title}`
-    );
+    const openPr: ForgeNumberReference = { ...MERGED_PR, state: "open" };
+    applyForgeReferences(view, new Map([[14843, openPr]]));
+    const changed = { ...openPr, ...change } as ForgeNumberReference;
+    applyForgeReferences(view, new Map([[14843, changed]]));
+    const description = view.dom.querySelector(".cm-forge-ref")?.getAttribute("aria-description");
+    expect(description).toBe(`${describeForgeReference(changed)}: ${changed.title}`);
+    expect(description).not.toBe(`${describeForgeReference(openPr)}: ${openPr.title}`);
   });
 
   it("redraws when a number turns out to name the other kind", () => {
@@ -233,14 +250,43 @@ describe("the reference card", () => {
     expect(cardText(view, 5)).toBeNull();
   });
 
-  it("closes once the draft or what its numbers name changes", () => {
+  it("closes once the text changes or its number stops naming anything", () => {
     const view = mount("see #7");
+    applyForgeReferences(view, REFERENCES);
+    const card = forgeReferenceTooltipAt(view, 5, 1)!;
     const typed = view.state.update({ changes: { from: 6, insert: "1" } });
-    const told = view.state.update({ effects: setForgeReferences.of(REFERENCES) });
+    const gone = view.state.update({ effects: setForgeReferences.of(new Map()) });
+    const renamed = view.state.update({
+      effects: setForgeReferences.of(new Map([[7, { ...OPEN_ISSUE, title: "Renamed" }]])),
+    });
     const moved = view.state.update({ selection: EditorSelection.cursor(0) });
-    expect(closesReferenceCard(typed)).toBe(true);
-    expect(closesReferenceCard(told)).toBe(true);
-    expect(closesReferenceCard(moved)).toBe(false);
+    expect(closesReferenceCard(typed, card)).toBe(true);
+    expect(closesReferenceCard(gone, card)).toBe(true);
+    expect(closesReferenceCard(renamed, card)).toBe(false);
+    expect(closesReferenceCard(moved, card)).toBe(false);
+  });
+
+  it("takes a newer answer for its number while it is open", () => {
+    const view = mount("see #7");
+    applyForgeReferences(view, REFERENCES);
+    const card = forgeReferenceTooltipAt(view, 5, 1)!.create(view);
+    const lastUpdate = () => updates.at(-1)!;
+
+    applyForgeReferences(view, new Map([[7, { ...OPEN_ISSUE, state: "closed" }]]));
+    card.update!(lastUpdate());
+    expect(card.dom.textContent).toBe("Closed#7Crash on start");
+
+    // Another number's answer leaves this card as it is.
+    applyForgeReferences(
+      view,
+      new Map<number, ForgeNumberReference>([
+        [7, { ...OPEN_ISSUE, state: "closed" }],
+        [14843, MERGED_PR],
+      ])
+    );
+    const before = card.dom.firstChild;
+    card.update!(lastUpdate());
+    expect(card.dom.firstChild).toBe(before);
   });
 
   it("asks the composer to re-read references once a card is shown", () => {
