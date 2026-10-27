@@ -8,7 +8,7 @@ import { FIX_KINDS, type CleanupCase, type FixKind } from "./voiceCleanupCorpus"
  *
  * Word scores run over `normaliseWords`, which ignores case, punctuation and
  * spacing, so they say whether the right words came through in the right
- * order. Whether they were written right (`--watch`, `useShallow`, a numbered
+ * order; a spelling's hyphens count as spacing too. Whether they were written right (`--watch`, `useShallow`, a numbered
  * list) is what `fixes` checks, character for character, and whether the code,
  * references, flags, paths and numbers the speaker gave came through untouched
  * is what the keep checks see, since the word scores can't. Fixes are scored
@@ -21,7 +21,7 @@ import { FIX_KINDS, type CleanupCase, type FixKind } from "./voiceCleanupCorpus"
 // reply landed under each guard since #14786.
 export const VOICE_CLEANUP_SCHEMA_VERSION = 3;
 // Bump when a definition below changes, so runs scored differently aren't compared.
-export const VOICE_CLEANUP_SCORING_VERSION = 4;
+export const VOICE_CLEANUP_SCORING_VERSION = 5;
 
 /** Today's send yardstick (#14793): the wait a send used to give cleanup. */
 export const SEND_WAIT_TARGET_MS = 2000;
@@ -192,10 +192,26 @@ export function longestSentence(text: string): number {
   );
 }
 
+// Three or more capitals joined by hyphens, as cleanup types a spelling
+// ("T-E-R-R-A"), and not part of a longer hyphened word. Two letters or
+// lowercase ones are more often an expression or an identifier ("x-y", "a-b-c").
+const SPELLING_RE = /(?<![\p{L}\p{N}-])\p{Lu}(?:-\p{Lu}){2,}(?![\p{L}\p{N}-])/gu;
+
+/**
+ * `normaliseWords`, with a spelling typed as hyphened capitals read as the
+ * word its letters make, which is what it makes of them spoken: "T-E-R-R-A",
+ * "T E R R A" and "Terra" are one word, and only the fixes see how the
+ * letters were written. Joined first, so a one-letter word beside it ("a")
+ * stays its own word.
+ */
+function cleanupWords(text: string): string[] {
+  return normaliseWords(text.replace(SPELLING_RE, (run) => run.replaceAll("-", "")));
+}
+
 function lineWords(text: string): string[] {
   return text
     .split("\n")
-    .map((line) => normaliseWords(line).join(" "))
+    .map((line) => cleanupWords(line).join(" "))
     .filter((line) => line.length > 0);
 }
 
@@ -228,13 +244,13 @@ export function acceptedReferences(entry: CleanupCase): string[] {
  * closest to, with the raw transcript aligned to that same reference.
  */
 export function scoreText(entry: CleanupCase, text: string): TextScore {
-  const textWords = normaliseWords(text);
-  const rawWords = normaliseWords(entry.raw);
+  const textWords = cleanupWords(text);
+  const rawWords = cleanupWords(entry.raw);
   const references = acceptedReferences(entry);
 
   let best: { words: string[]; text: ReturnType<typeof alignWords> } | null = null;
   for (const reference of references) {
-    const words = normaliseWords(reference);
+    const words = cleanupWords(reference);
     const alignment = alignWords(words, textWords);
     if (!best || edits(alignment) < edits(best.text)) best = { words, text: alignment };
   }

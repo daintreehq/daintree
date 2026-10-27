@@ -36,6 +36,7 @@ export type CaseSource =
   | "context"
   | "workspace"
   | "prompts"
+  | "names"
   | "ramble"
   | "tics"
   | "lookalike"
@@ -790,6 +791,16 @@ const IN_SESSION: readonly AuthoredCase[] = [
     keep: ["there's nothing here"],
     session: TERRA_WORKTREE_SESSION,
   },
+  // Sounds like smol-toml, which the repository names, and means a small file.
+  {
+    id: "workspace-small-toml:openai",
+    style: "openai",
+    source: "workspace",
+    raw: "Keep the config a small TOML file and move the long lists into JSON.",
+    reference: "Keep the config a small TOML file and move the long lists into JSON.",
+    keep: ["small TOML file"],
+    session: TERRA_WORKTREE_SESSION,
+  },
 ];
 
 // Each passage the session should settle, dictated with none: what the session
@@ -951,6 +962,164 @@ const RECENT_PROMPTS: readonly AuthoredCase[] = [
     id: entry.id.replace(":", "-bare:"),
   })),
 ];
+
+// What the terminal showed while "GPT 6.1 Terra" kept coming out as "Tera" (#14873).
+const TERRA_ON_SCREEN =
+  "The cleanup that ran on that dictation was gpt-6.1-terra (VOICE_CLEANUP_AI_MODEL in shared/config/voiceCorrection.ts).\nTerra returned the passage with every word kept, so nothing was dropped at the cleanup step.";
+
+// Names the terminal spells or the speaker spells out letter by letter, and
+// words that only sound like them (#14873). The first three are dictations as
+// they reached the agent through the v12 rules, so no unsure words are known.
+const NAMES: readonly AuthoredCase[] = [
+  {
+    id: "names-lost-text:openai",
+    style: "openai",
+    source: "names",
+    raw: "So using transcription, I just had an issue where a whole bunch of my text was actually lost. so yeah, catastrophic loss unacceptable. yeah, we need to figure out how to fix this. So, the thing that I know I did do was I said that it needed to use the github create issue/command. And then, for some reason, something got lost. yeah, so investigate this really deeply. this would have been the, I don't know if you can check my logs, the previous thing I, I transcribed, but I, I really don't know how much is actually being logged. And yeah, if you can figure it out, please go ahead and, and create an issue on GitHub. ask Codex for its ideas on what might have happened to.",
+    // The speaker would have typed "/github-create-issue command", but the
+    // guard reads "issue/command" as a path and refuses any cleanup that
+    // changes it, so the best cleanup that can land keeps it.
+    reference:
+      "Using transcription, I just had an issue where a whole bunch of my text was actually lost. Catastrophic loss is unacceptable. We need to figure out how to fix this. The thing I know I did was say that it needed to use the github create issue/command, and then, for some reason, something got lost. Investigate this really deeply. It would have been the previous thing I transcribed. I don't know if you can check my logs, but I really don't know how much is actually being logged. If you can figure it out, please go ahead and create an issue on GitHub. Ask Codex for its ideas on what might have happened.",
+    alsoAccept: [
+      "Using transcription, I just had an issue where a whole bunch of my text was actually lost. Catastrophic loss is unacceptable. We need to figure out how to fix this. The thing I know I did was say that it needed to use the github create issue/command. Then, for some reason, something got lost. Investigate this really deeply. It would have been the previous thing I transcribed. I don't know if you can check my logs, but I really don't know how much is actually being logged. If you can figure it out, please go ahead and create an issue on GitHub. Ask Codex for its ideas on what might have happened.",
+      "Using transcription, I just had an issue where a whole bunch of my text was actually lost. Catastrophic loss is unacceptable. We need to figure out how to fix this. The thing I know I did was say that it needed to use the github create issue/command, and then, for some reason, something got lost. Investigate this really deeply. This would have been the previous thing I transcribed. I don't know if you can check my logs, but I really don't know how much is actually being logged. If you can figure it out, please go ahead and create an issue on GitHub. Ask Codex for its ideas on what might have happened.",
+      "Using transcription, I just had an issue where a whole bunch of my text was actually lost. Catastrophic loss is unacceptable. We need to figure out how to fix this. The thing I know I did was say that it needed to use the github create issue/command. Then, for some reason, something got lost. Investigate this really deeply. This would have been the previous thing I transcribed. I don't know if you can check my logs, but I really don't know how much is actually being logged. If you can figure it out, please go ahead and create an issue on GitHub. Ask Codex for its ideas on what might have happened.",
+    ],
+    drops: ["yeah", "I, I", "and, and", "happened to"],
+    keep: [
+      "really deeply",
+      "I don't know if you can check my logs",
+      "I really don't know how much is actually being logged",
+      "create an issue on GitHub",
+    ],
+  },
+  {
+    id: "names-spelled-terra:openai",
+    style: "openai",
+    source: "names",
+    raw: "So even there, I can see in the transcription, it got GPT-6.1 Tera incorrect. So that should be T E R R A. So in that case, the model should know that it can correct these types of things.",
+    reference:
+      "Even there, I can see in the transcription it got GPT-6.1 Terra incorrect. That should be T-E-R-R-A. In that case, the model should know that it can correct these types of things.",
+    fixes: { "GPT-6.1 Terra": "misread", "T-E-R-R-A": "form" },
+    drops: ["so"],
+    // "there" is the word, not the name.
+    keep: ["even there"],
+    terminalOutput: TERRA_ON_SCREEN,
+  },
+  {
+    id: "names-meant-terra:openai",
+    style: "openai",
+    source: "names",
+    raw: "Sorry, there, obviously, I meant GPT 6.1 Tera.",
+    reference: "Sorry, I obviously meant GPT 6.1 Terra.",
+    fixes: { "GPT 6.1 Terra": "misread" },
+    drops: ["there"],
+    keep: ["Sorry", "obviously"],
+    terminalOutput:
+      'I can\'t find a model called "GPT 6.1 there". The cleanup models in VOICE_CLEANUP_MODELS are gpt-6.1-terra and gpt-6-luna. Which one did you mean?',
+  },
+  // The spelling alone, after the name and before it.
+  {
+    id: "names-spelled-wispr:openai",
+    style: "openai",
+    source: "names",
+    raw: "Look at how Whisper Flow handles a long pause, that's W I S P R, and do the same in ours.",
+    reference:
+      "Look at how Wispr Flow handles a long pause, that's W-I-S-P-R, and do the same in ours.",
+    fixes: { "Wispr Flow": "misread", "W-I-S-P-R": "form" },
+  },
+  {
+    id: "names-spelled-zod:grok",
+    style: "grok",
+    source: "names",
+    raw: "Use the validation library spelled Z O D. Validate the payload with squad before it reaches the handler.",
+    reference:
+      "Use the validation library spelled Z-O-D. Validate the payload with Zod before it reaches the handler.",
+    fixes: { "Z-O-D": "form", "with Zod": "misread" },
+    keep: ["before it reaches the handler"],
+    uncertain: ["squad"],
+  },
+  // Every mention takes the spelling, either side of it, and only those.
+  {
+    id: "names-spelled-wren:openai",
+    style: "openai",
+    source: "names",
+    raw: "Tell Ren the build is green, she's waiting on it. It's W R E N, and put Ren on the release notes too. Is there anything else she needs?",
+    reference:
+      "Tell Wren the build is green, she's waiting on it. It's W-R-E-N, and put Wren on the release notes too. Is there anything else she needs?",
+    fixes: { "Tell Wren": "misread", "put Wren": "misread", "W-R-E-N": "form" },
+    keep: ["Is there anything else"],
+  },
+  // Words that sound like something on screen and mean what was transcribed.
+  {
+    id: "names-promise-rejects:deepgram",
+    style: "deepgram",
+    source: "names",
+    raw: "The promise rejects when the key is missing, so catch it and log the reason.",
+    reference: "The promise rejects when the key is missing, so catch it and log the reason.",
+    keep: ["The promise rejects"],
+    terminalOutput:
+      "Unhandled rejection in VoiceCorrectionService.correct: Promise rejected with AppError(VOICE_KEY_MISSING)\n    at electron/services/VoiceCorrectionService.ts:612",
+  },
+  {
+    id: "names-there:openai",
+    style: "openai",
+    source: "names",
+    raw: "Is there a way to rerun that cleanup without the network?",
+    reference: "Is there a way to rerun that cleanup without the network?",
+    keep: ["Is there a way"],
+    terminalOutput: TERRA_ON_SCREEN,
+  },
+  {
+    id: "names-person-tara:openai",
+    style: "openai",
+    source: "names",
+    raw: "Tara reviewed the PR yesterday, so ask her before you merge it.",
+    reference: "Tara reviewed the PR yesterday, so ask her before you merge it.",
+    keep: ["Tara"],
+    terminalOutput: TERRA_ON_SCREEN,
+  },
+  {
+    id: "names-terabyte:deepgram",
+    style: "deepgram",
+    source: "names",
+    raw: "The log folder is over a terabyte on the build machine, cap it at 50 gigabytes.",
+    reference: "The log folder is over a terabyte on the build machine, cap it at 50 gigabytes.",
+    keep: ["terabyte"],
+    terminalOutput: TERRA_ON_SCREEN,
+  },
+  {
+    id: "names-pain:deepgram",
+    style: "deepgram",
+    source: "names",
+    raw: "It's a pain to reproduce, so add logging before you change anything.",
+    reference: "It's a pain to reproduce, so add logging before you change anything.",
+    keep: ["a pain to reproduce"],
+    terminalOutput:
+      "pty-host: pane 3 resized 120x40 -> 121x40\npty-host: pane 3 SIGWINCH x12 in 0.4s",
+  },
+  // A spelling the speaker is talking about as a spelling: the letters stay
+  // the letters they said, however close the name on screen is.
+  {
+    id: "names-letters-tera:openai",
+    style: "openai",
+    source: "names",
+    raw: "Search the logs for the letters T E R A, that's how it got written.",
+    reference: "Search the logs for the letters T-E-R-A, that's how it got written.",
+    fixes: { "T-E-R-A": "form" },
+    keep: ["that's how it got written"],
+    terminalOutput: TERRA_ON_SCREEN,
+  },
+];
+
+// The spelling alone settles it, with nothing on screen.
+const SPELLED_BARE: readonly AuthoredCase[] = NAMES.filter(
+  (entry) => entry.id === "names-spelled-terra:openai"
+).map(({ terminalOutput: _output, ...entry }) => ({
+  ...entry,
+  id: entry.id.replace(":", "-bare:"),
+}));
 
 // Prompt-length passages, dictated the way people talk: filler, false starts,
 // a self-correction, a counted-out list.
@@ -1261,6 +1430,23 @@ const LOOKALIKE: readonly AuthoredCase[] = [
     keep: ["Okay, push it", "don't open the PR"],
     terminalOutput: "All checks pass locally. Ready to push the branch and open the PR?",
   },
+  // An aside that qualifies the words it broke into stays with them.
+  {
+    id: "lookalike-condition-aside:openai",
+    style: "openai",
+    source: "lookalike",
+    raw: "Check the, if there are any, the crash logs and then rerun the tests.",
+    reference: "Check the crash logs, if there are any, and then rerun the tests.",
+    keep: ["if there are any"],
+  },
+  {
+    id: "lookalike-bound-to:openai",
+    style: "openai",
+    source: "lookalike",
+    raw: "Find out which port the dev server is bound to.",
+    reference: "Find out which port the dev server is bound to.",
+    keep: ["bound to"],
+  },
   {
     id: "lookalike-right:openai",
     style: "openai",
@@ -1346,6 +1532,8 @@ export const CLEANUP_CORPUS: readonly CleanupCase[] = [
     ...CONTEXT,
     ...WORKSPACE,
     ...RECENT_PROMPTS,
+    ...NAMES,
+    ...SPELLED_BARE,
     ...RAMBLE,
     ...TICS,
     ...LOOKALIKE,

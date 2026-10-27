@@ -5,7 +5,10 @@ import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { REPLAY_CLIPS } from "../../../e2e/helpers/voiceReplayFixtures";
 import { validateCorrection } from "../../../electron/services/voiceCorrectionGuard";
-import type { CorrectionInstructions } from "../../../shared/config/voiceCorrection";
+import {
+  buildCorrectionSystemPrompt,
+  type CorrectionInstructions,
+} from "../../../shared/config/voiceCorrection";
 import {
   CLEANUP_CORPUS,
   cleanupSessions,
@@ -542,6 +545,61 @@ describe("scoreText", () => {
     // Scored against the alternative it matches, not the list it doesn't.
     expect(alternative).toMatchObject({ matchesReference: true, edits: 0, broken: 0 });
   });
+
+  // #14873: how the letters are written is the fix's to see, not the words'.
+  it("reads a spelling's letters the same with hyphens, spaces or none, and leaves the rest to its fix", () => {
+    const entry = makeCase({
+      raw: "it got Tera wrong, that should be T E R R A",
+      reference: "It got Terra wrong, that should be T-E-R-R-A.",
+      fixes: { "got Terra": "misread", "T-E-R-R-A": "form" },
+      drops: [],
+    });
+    const score = (text: string) => {
+      const { matchesReference, novelWords, addedWords, missedFixes } = scoreText(entry, text);
+      return { matchesReference, novelWords, addedWords, missedFixes };
+    };
+    expect(score(entry.reference)).toEqual({
+      matchesReference: true,
+      novelWords: 0,
+      addedWords: 0,
+      missedFixes: [],
+    });
+    for (const letters of ["T E R R A", "Terra"]) {
+      expect(score(`It got Terra wrong, that should be ${letters}.`), letters).toEqual({
+        matchesReference: true,
+        novelWords: 0,
+        addedWords: 0,
+        missedFixes: ["T-E-R-R-A"],
+      });
+    }
+    // Other letters are other words, however close the name they spell.
+    expect(score("It got Terra wrong, that should be T-E-R-A.")).toMatchObject({
+      matchesReference: false,
+      missedFixes: ["T-E-R-R-A"],
+    });
+    // A one-letter word beside the spelling stays a word of its own.
+    const label = makeCase({
+      raw: "give it a Tera label",
+      reference: "Give it a T-E-R-R-A label.",
+      fixes: {},
+      drops: [],
+    });
+    expect(scoreText(label, "Give it a Terra label.")).toMatchObject({
+      matchesReference: true,
+      edits: 0,
+    });
+  });
+
+  it("keeps hyphened letters apart where they're an expression or an identifier", () => {
+    for (const [reference, merged] of [
+      ["Use x-y as the offset.", "Use xy as the offset."],
+      ["Rename a-b-c to a-c.", "Rename abc to ac."],
+      ["Ship the pre-A-B-C build.", "Ship the pre-ABC build."],
+    ]) {
+      const entry = makeCase({ raw: reference, reference, fixes: {}, drops: [] });
+      expect(scoreText(entry, merged).matchesReference, reference).toBe(false);
+    }
+  });
 });
 
 describe("run-ons and agent-ready text", () => {
@@ -625,13 +683,32 @@ describe("prompt and guard variants", () => {
   });
 
   it("gives every prompt variant its own rules", () => {
-    const cores = Object.entries(PROMPT_VARIANTS)
+    // Rendered with the blocks `contextNames` rewrites, so two variants that
+    // differ only there count as different, and only if they read differently.
+    const context = {
+      projectName: "daintree",
+      customDictionary: ["Terra"],
+      repositoryNames: ["smol-toml"],
+    };
+    const prompts = Object.entries(PROMPT_VARIANTS)
       .filter(([name]) => name !== "production")
-      .map(([, variant]) => variant.instructionsFor("gpt-6.1-terra").core);
-    expect(new Set(cores).size).toBe(cores.length);
+      .map(([, variant]) =>
+        buildCorrectionSystemPrompt(context, variant.instructionsFor("gpt-6.1-terra"))
+      );
+    expect(new Set(prompts).size).toBe(prompts.length);
   });
 
-  it("sends Luna the frozen v11 rules and Terra the final ones as production, each told about recent prompts", () => {
+  it("keeps how the context blocks read through every revision", () => {
+    const spelling: CorrectionInstructions = {
+      ...PROMPT_VARIANTS.v11!.instructionsFor("gpt-6.1-terra"),
+      contextNames: "spelling",
+    };
+    expect(revise(spelling, { core: [["MEANING IS FIXED", "MEANING IS FIXED!"]] })).toMatchObject({
+      contextNames: "spelling",
+    });
+  });
+
+  it("sends Luna the frozen v11 rules told about recent prompts, and Terra the names6 ones", () => {
     // #14855 named <recent_prompts> in both models' rules, after the rounds that chose them.
     const withRecentPrompts = (instructions: CorrectionInstructions) =>
       revise(instructions, {
@@ -650,8 +727,12 @@ describe("prompt and guard variants", () => {
     expect(production.instructionsFor("gpt-6-luna")).toEqual(
       withRecentPrompts(PROMPT_VARIANTS.v11!.instructionsFor("gpt-6-luna"))
     );
-    expect(production.instructionsFor("gpt-6.1-terra")).toEqual(
+    // What Terra cleaned up with from #14855 until #14873 chose names6 over it.
+    expect(PROMPT_VARIANTS.v13!.instructionsFor("gpt-6.1-terra")).toEqual(
       withRecentPrompts(PROMPT_VARIANTS.final!.instructionsFor("gpt-6.1-terra"))
+    );
+    expect(production.instructionsFor("gpt-6.1-terra")).toEqual(
+      PROMPT_VARIANTS.names6!.instructionsFor("gpt-6.1-terra")
     );
   });
 
