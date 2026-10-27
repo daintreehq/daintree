@@ -789,6 +789,46 @@ describe("DeepgramTranscriptionProvider", () => {
     provider.stop();
   });
 
+  // The words already landed; a "send it" among them waits on this.
+  it("reports an empty speech_final with no preview as a bare end of speech", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    provider.onEvent((e) => {
+      if (e.type === "complete") events.push(e);
+    });
+
+    const { socket } = await bringSessionReady(provider);
+    socket.simulateMessage(resultsMessage("Fix it, send it.", { is_final: true }));
+    socket.simulateMessage(resultsMessage("", { is_final: true }));
+    socket.simulateMessage(resultsMessage(" ", { is_final: true, speech_final: true }));
+
+    expect(events).toEqual([
+      expect.objectContaining({ text: "Fix it, send it.", itemId: expect.any(String) }),
+      { type: "complete", text: "", endOfSpeech: true },
+    ]);
+    expect(events[0]).not.toHaveProperty("endOfSpeech");
+    provider.stop();
+  });
+
+  it("ends speech on the span an empty speech_final retires", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    provider.onEvent((e) => {
+      if (e.type === "delta" || e.type === "complete") events.push(e);
+    });
+
+    const { socket } = await bringSessionReady(provider);
+    socket.simulateMessage(resultsMessage("um", { is_final: false }));
+    socket.simulateMessage(resultsMessage("", { is_final: true, speech_final: true }));
+
+    expect(events).toHaveLength(2);
+    const [delta, complete] = events;
+    const itemId = delta && "itemId" in delta ? delta.itemId : undefined;
+    expect(itemId).toEqual(expect.any(String));
+    expect(complete).toEqual({ type: "complete", text: "", itemId, endOfSpeech: true });
+    provider.stop();
+  });
+
   it("reports speech starting, and nothing for other VAD signals", async () => {
     const provider = new DeepgramTranscriptionProvider();
     const events: VoiceTranscriptionEvent[] = [];

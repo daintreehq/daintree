@@ -14,7 +14,13 @@ export type VoiceTranscriptionEvent =
   // an addition: Deepgram revises its interim hypothesis in place.
   | { type: "delta"; text: string; itemId?: string; replace?: boolean }
   // `endOfSpeech` marks a completion the speaker paused after, rather than one
-  // the provider cut mid-speech; only those may carry a spoken "send it".
+  // the provider cut mid-speech; only those may carry a spoken "send it". One
+  // with no text and no item only marks that the utterance ended.
+  // `endsAtPause` marks a segment the provider closed at a pause though the
+  // speaker may have gone on since: it ends what was said for break commands
+  // ("new line"), but never carries a send. `incomplete` marks one whose
+  // transcript never came (it failed, or was settled with its interim text),
+  // so words around it may be missing.
   // `uncertain` spans the words in `text` the provider scored below its own
   // cut-off; absent from a provider that reports no word confidence.
   | {
@@ -23,6 +29,8 @@ export type VoiceTranscriptionEvent =
       uncertain?: VoiceTextSpan[];
       itemId?: string;
       endOfSpeech?: boolean;
+      endsAtPause?: boolean;
+      incomplete?: boolean;
     }
   | { type: "paragraph_boundary" }
   // The provider's own VAD heard speech begin, before any transcript of it.

@@ -3,8 +3,10 @@ import { getAgentConfig } from "../../config/agentRegistry.js";
 import { getBuiltinSlashCommands, type SlashCommand } from "../../types/slashCommands.js";
 import type { CompletionSourceConfig } from "../../types/completionSources.js";
 import {
+  EMPTY_VOICE_COMMAND_VOCABULARY,
   buildVoiceCommandVocabulary,
   checkVoiceCommandEdit,
+  classifySpokenCommandOpening,
   introducesVoiceCommand,
   opensWithVoiceCommand,
   planSpokenCommand,
@@ -193,6 +195,55 @@ describe("rewriteSpokenCommand", () => {
     // `$` is Codex's; Claude Code has no prefix for it.
     expect(rewriteSpokenCommand("dollar plugin creator", claude)).toBeNull();
     expect(rewriteSpokenCommand("slash pr comments", codex)).toBeNull();
+  });
+});
+
+describe("classifySpokenCommandOpening", () => {
+  it.each([
+    ["Slash.", "pending"],
+    ["slash", "pending"],
+    ["Um, slash", "pending"],
+    ["/", "pending"],
+    ["Forward", "pending"],
+    ["Slash PR", "pending"],
+    ["Slash compact.", "complete"],
+    ["Slash review the last commit", "complete"],
+    ["Slash the budget", "none"],
+    ["Fix the bug", "none"],
+    ["Um,", "none"],
+    ["slash review --force", "complete"],
+  ])("Claude Code: %j is %s", (spoken, opening) => {
+    expect(classifySpokenCommandOpening(spoken, claude)).toBe(opening);
+  });
+
+  it("waits on a name a longer one still starts with, until words follow it", () => {
+    const withLonger = buildVoiceCommandVocabulary(
+      [...getBuiltinSlashCommands("claude"), custom("claude", "/compact-all")],
+      sourcesOf("claude")
+    );
+    expect(classifySpokenCommandOpening("Slash compact", withLonger)).toBe("extendable");
+    expect(classifySpokenCommandOpening("Slash compact the logs", withLonger)).toBe("complete");
+    expect(classifySpokenCommandOpening("Slash compact", claude)).toBe("complete");
+  });
+
+  it("waits while the words after a name still spell out a longer one", () => {
+    const withLonger = buildVoiceCommandVocabulary(
+      [...getBuiltinSlashCommands("claude"), custom("claude", "/review-pr-comments")],
+      sourcesOf("claude")
+    );
+    expect(classifySpokenCommandOpening("slash review PR", withLonger)).toBe("extendable");
+    expect(classifySpokenCommandOpening("slash review PR comments", withLonger)).toBe("complete");
+    expect(classifySpokenCommandOpening("slash review PR 123", withLonger)).toBe("complete");
+  });
+
+  it("waits on a prefix said in words for a codex skill", () => {
+    expect(classifySpokenCommandOpening("Dollar plugin", codex)).toBe("pending");
+    expect(classifySpokenCommandOpening("slash prompts colon", codex)).toBe("pending");
+    expect(classifySpokenCommandOpening("Dollar plugin creator", codex)).toBe("complete");
+  });
+
+  it("finds nothing to wait for without commands", () => {
+    expect(classifySpokenCommandOpening("Slash", EMPTY_VOICE_COMMAND_VOCABULARY)).toBe("none");
   });
 });
 

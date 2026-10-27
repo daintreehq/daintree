@@ -864,6 +864,10 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
             itemId: previewId ?? nextSpanItemId(),
             ...(speechFinal ? { endOfSpeech: true } : {}),
           });
+        } else if (speechFinal) {
+          // The utterance's words landed in earlier finals; this one only says
+          // it ended, which a "send it" among them waits on.
+          this.emit({ type: "complete", text: "", endOfSpeech: true });
         }
         return;
       }

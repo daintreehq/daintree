@@ -332,6 +332,57 @@ export function rewriteSpokenCommand(
 }
 
 /**
+ * How far `text`, the opening of an utterance, has got toward a spoken
+ * command: `pending` while a prefix waits for its name ("slash", "slash
+ * plugin"), `extendable` once it names one a longer name still starts with
+ * ("slash review" while `/review-pr` exists), `complete` once it names one
+ * past that, and `none` when it can't become one.
+ */
+export function classifySpokenCommandOpening(
+  text: string,
+  vocabulary: VoiceCommandVocabulary
+): "none" | "pending" | "extendable" | "complete" {
+  if (vocabulary.entries.length === 0) return "none";
+  const trimmed = text.trim();
+  const growing = couldStillName(trimmed, vocabulary);
+  if (matchExplicit(trimmed, vocabulary)) return growing ? "extendable" : "complete";
+  return growing ? "pending" : "none";
+}
+
+/**
+ * Whether more words could still make `text` name a command: a prefix said in
+ * part ("forward" of "forward slash"), or one followed by every word so far of
+ * a longer name ("slash review PR" while `/review-pr-comments` exists).
+ */
+function couldStillName(text: string, vocabulary: VoiceCommandVocabulary): boolean {
+  const from = afterHesitations(text);
+  const words = wordSpans(text, from);
+  if (words.length === 0) return false;
+  return vocabulary.prefixes.some((prefix) => {
+    const partial = prefix.spoken.some(
+      (form) =>
+        words.length < form.length && words.every((span, index) => span.word === form[index])
+    );
+    if (partial) return true;
+    return matchPrefix(text, from, prefix).some((nameStart) => {
+      const spans = wordSpans(text, nameStart);
+      if (spans.some((span) => span.symbolic) || spans.length > MAX_NAME_WORDS) return false;
+      const skip = spans.length > 0 && SPOKEN_JOINERS.has(spans[0]!.word) ? 1 : 0;
+      const said = spans
+        .slice(skip)
+        .map((span) => span.word)
+        .join("");
+      return vocabulary.entries.some(
+        (entry) =>
+          entry.prefix === prefix.prefix &&
+          entry.key.length > said.length &&
+          entry.key.startsWith(said)
+      );
+    });
+  });
+}
+
+/**
  * Up to `limit` command names to bias recognition toward, most likely first,
  * as they're said ("plugin creator"), since the transcriber matches speech.
  */
