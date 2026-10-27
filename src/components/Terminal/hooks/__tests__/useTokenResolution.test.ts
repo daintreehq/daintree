@@ -324,12 +324,13 @@ describe("useTokenResolution.sendText", () => {
   });
 
   it("holds nothing back over a draft that changed while the send was out", async () => {
-    const { sendText, clearDraftInput } = setup();
+    const { sendText, onSend, clearDraftInput } = setup();
     const keepDraft = vi.fn();
     await act(async () => {
       await sendText("Hello world.", { keepDraft, isDraftUnchanged: () => false });
     });
 
+    expect(onSend).toHaveBeenCalledTimes(1);
     expect(keepDraft).not.toHaveBeenCalled();
     expect(clearDraftInput).not.toHaveBeenCalled();
   });
@@ -680,6 +681,41 @@ describe("useTokenResolution dictionary learning", () => {
     expect(onSend).toHaveBeenCalledTimes(1);
     expect(setSessionCorrectedText).not.toHaveBeenCalled();
     expect(recordSuggestions).not.toHaveBeenCalled();
+  });
+
+  it("still learns from a session the send takes", async () => {
+    const recordSuggestions = vi
+      .fn()
+      .mockResolvedValue({ dictionary: [], suggestedDictionary: [] });
+    installElectron({
+      git: { getWorkingDiff: vi.fn() },
+      voiceDictionary: { recordSuggestions },
+    });
+    const setSessionCorrectedText = vi.fn();
+    voiceState.value = {
+      learnFromCorrections: true,
+      panelBuffers: {
+        t1: {
+          sessionCorrectedText: "use zoo stand for state",
+          sessionDraftStart: 0,
+          dictationSessionId: "s1",
+        },
+      },
+      setSessionCorrectedText,
+    };
+    dictated("use Zustand for state", "use Zustand for state");
+
+    const { sendText } = setup();
+    await act(async () => {
+      await sendText("use Zustand for state", { dictationSessions: new Set(["s1"]) });
+    });
+
+    expect(setSessionCorrectedText).toHaveBeenCalledWith("t1", null);
+    await vi.waitFor(() =>
+      expect(recordSuggestions).toHaveBeenCalledWith({
+        candidates: [{ word: "Zustand", original: "zoo stand" }],
+      })
+    );
   });
 
   it("still sends when main can't be reached", async () => {

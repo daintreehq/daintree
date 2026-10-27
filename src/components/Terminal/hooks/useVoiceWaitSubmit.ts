@@ -15,7 +15,11 @@ import { takePendingComposerSelection } from "@/lib/composerCaret";
 import { makeDraftKey } from "@/lib/draftKey";
 import { replayLandedCorrection } from "../inputEditorExtensions/correctionReview";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
-import { planVoiceDraftSend, type VoiceDraftSend } from "@/services/voiceDraftSend";
+import {
+  claimWaitingSend,
+  planVoiceDraftSend,
+  type VoiceDraftSend,
+} from "@/services/voiceDraftSend";
 import { useDictationRangeStore } from "@/store/dictationRangeStore";
 import { isSpokenSendable } from "@/services/voiceSpokenSend";
 import { claimVoiceWaitKeys } from "@/lib/voiceWaitKeys";
@@ -242,6 +246,7 @@ export function useVoiceWaitSubmit({
       // one (#14804).
       const target = voiceDraftNow();
       const sessions = voiceRecordingService.sendSessions(target.panelId, target.projectId);
+      const releaseSend = claimWaitingSend(voiceId, sessions);
       store.setVoiceSubmitting(voiceId, true);
       setVoiceSubmitWait({ attempt, phase: "finishing", startedAt: performance.now() });
 
@@ -372,6 +377,7 @@ export function useVoiceWaitSubmit({
           sent = sendFromEditorRef.current(handBack, voiceSend) ?? true;
         } finally {
           releaseKeys();
+          releaseSend();
           if (activeWaitRef.current?.controller === controller) activeWaitRef.current = null;
           if (activeAttemptRef.current === attempt) {
             activeAttemptRef.current = null;

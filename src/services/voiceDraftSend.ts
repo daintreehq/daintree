@@ -24,6 +24,23 @@ export interface VoiceDraftSend {
   leadingSpace: { dictationId: string; span: DictationTextSpan } | null;
 }
 
+// The sessions each dictated send still waiting takes, by voice panel.
+const waitingSends = new Map<string, ReadonlySet<string>>();
+
+/** Marks a dictated send from `panelId` as waiting on its cleanup; returns its release. */
+export function claimWaitingSend(panelId: string, sessions: ReadonlySet<string>): () => void {
+  waitingSends.set(panelId, sessions);
+  return () => {
+    if (waitingSends.get(panelId) === sessions) waitingSends.delete(panelId);
+  };
+}
+
+/** Whether a send from `panelId` is waiting, and `sessionId` isn't one it takes. */
+export function isHeldBackSession(panelId: string, sessionId: string): boolean {
+  const sessions = waitingSends.get(panelId);
+  return sessions !== undefined && !sessions.has(sessionId);
+}
+
 /**
  * Where a dictation sits in the draft. Its envelope can lose words a cleanup
  * rewrote (`mapTextRange` trims to what survives), while its learning span
@@ -38,9 +55,9 @@ function dictationSpan(record: DictationRecord, draft: string): DictationTextSpa
 
 /**
  * Splits the draft between a send and the sessions it doesn't take. The
- * composer is locked while the send waits, so nothing but dictation writes
- * the draft meanwhile, and a newer session's text is only what its records
- * cover.
+ * composer is locked while the send waits and a session it doesn't take
+ * writes after its text (`isHeldBackSession`), so a newer session's text is
+ * only what its records cover.
  */
 export function planVoiceDraftSend(
   target: { panelId: string; projectId: string | undefined },

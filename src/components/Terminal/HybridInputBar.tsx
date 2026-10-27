@@ -1118,13 +1118,22 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       const text = split?.text ?? doc;
       const keepDraft = split
         ? () => {
-            if (!voiceRecordingService.keepHeldBackDictation(split)) return;
-            applyEditorValue(split.kept, {
-              selection: EditorSelection.create([EditorSelection.cursor(split.kept.length)]),
+            const kept = voiceRecordingService.keepHeldBackDictation(split);
+            if (kept === null) return;
+            applyEditorValue(kept, {
+              selection: EditorSelection.create([EditorSelection.cursor(kept.length)]),
               resetHistory: true,
             });
           }
         : undefined;
+      // A `@diff` fetch is awaited, and a handoff or the user's own typing can
+      // land in the draft meanwhile; only the text that went out is cleared.
+      // The session a split held back may write meanwhile too: that much
+      // change still leaves the sent text to take out.
+      const unchanged = guardSentDraft(latest?.projectId);
+      const isDraftUnchanged = split
+        ? () => unchanged() || voiceRecordingService.holdsBackFrom(split)
+        : unchanged;
 
       const intercepted = tryComposerFleetBroadcast(isFocusedTerminal, terminalId, text, () => {
         if (keepDraft) {
@@ -1138,9 +1147,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
       return sendText(text, {
         imagePaths: readImageChipPaths(view),
-        // A `@diff` fetch is awaited, and a handoff or the user's own typing can
-        // land in the draft meanwhile; only the text that went out is cleared.
-        isDraftUnchanged: guardSentDraft(latest?.projectId),
+        isDraftUnchanged,
         onHandedOff: handBack,
         keepDraft,
         dictationSessions: voiceSend?.sessions,

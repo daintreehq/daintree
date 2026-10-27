@@ -86,7 +86,11 @@ import {
   type PcmChunkStats,
 } from "@/services/voiceStartDiagnostics";
 import { recordCorrectionLanded, type LandedCorrection } from "@/services/voiceCorrectionLanding";
-import type { VoiceDraftSend } from "@/services/voiceDraftSend";
+import {
+  isHeldBackSession,
+  planVoiceDraftSend,
+  type VoiceDraftSend,
+} from "@/services/voiceDraftSend";
 import {
   collectCorrectionPassages,
   joinPassageTexts,
@@ -152,6 +156,9 @@ function formatTargetLabel(target: VoiceRecordingTarget): string {
  * Where the session's next words go in this draft: its anchor, or else the
  * caret (or the selection) the composer last showed in this exact draft, or
  * else the end. Without a session nothing is tracked and the words append.
+ * While a send from the draft waits on its cleanup, the caret sits in text
+ * that is about to go, so a session that send doesn't take writes after it
+ * (#14804).
  */
 function resolveVoiceAnchor(
   panelId: string,
@@ -164,13 +171,10 @@ function resolveVoiceAnchor(
   const store = useDictationRangeStore.getState();
   const existing = store.getAnchor(target);
   if (existing) return existing;
-  store.setAnchor(
-    target,
-    readComposerSelection(makeDraftKey(panelId, projectId), draft) ?? {
-      from: draft.length,
-      to: draft.length,
-    }
-  );
+  const caret = isHeldBackSession(panelId, sessionId)
+    ? null
+    : readComposerSelection(makeDraftKey(panelId, projectId), draft);
+  store.setAnchor(target, caret ?? { from: draft.length, to: draft.length });
   return useDictationRangeStore.getState().getAnchor(target);
 }
 
@@ -3362,28 +3366,47 @@ class VoiceRecordingService {
   }
 
   /**
+   * The send's split of the draft as it reads now: a session it held back can
+   * keep writing, or have its cleanup land, while the send is out. Null once
+   * the text outside those sessions is no longer what the send took.
+   */
+  private replanHeldBack(send: VoiceDraftSend): VoiceDraftSend | null {
+    const { panelId, projectId } = send;
+    const draft = useTerminalInputStore.getState().getDraftInput(panelId, projectId);
+    if (draft === send.draft) return send;
+    const records = useDictationRangeStore.getState().listDictations(panelId, projectId);
+    const now = planVoiceDraftSend({ panelId, projectId }, draft, records, send.sessions);
+    return now.text === send.text ? now : null;
+  }
+
+  /** Whether the draft still holds what the send took, ahead of whatever was held back. */
+  holdsBackFrom(send: VoiceDraftSend): boolean {
+    return this.replanHeldBack(send) !== null;
+  }
+
+  /**
    * Leaves the draft with what a dictated send held back, once the rest has
    * gone: the words of the sessions started after it, still theirs, so one
    * still dictating carries on after them and a cleanup on its way still
-   * lands. False, writing nothing, when the draft is no longer the one the
-   * split was planned against.
+   * lands. Returns the draft it leaves, or null, writing nothing, once the
+   * text the send took has changed.
    */
-  keepHeldBackDictation(send: VoiceDraftSend): boolean {
-    const { panelId, projectId } = send;
-    const draft = useTerminalInputStore.getState().getDraftInput(panelId, projectId);
-    if (draft !== send.draft) return false;
+  keepHeldBackDictation(send: VoiceDraftSend): string | null {
+    const now = this.replanHeldBack(send);
+    if (!now) return null;
+    const { panelId, projectId } = now;
     const ranges = useDictationRangeStore.getState();
-    if (send.leadingSpace) {
-      ranges.yieldLeadingSpace(send.leadingSpace.dictationId, send.leadingSpace.span);
+    if (now.leadingSpace) {
+      ranges.yieldLeadingSpace(now.leadingSpace.dictationId, now.leadingSpace.span);
     }
     // A session still dictating counts its offsets from the start of the draft.
     const voiceStore = useVoiceRecordingStore.getState();
-    for (const change of [...send.changes].reverse()) {
+    for (const change of [...now.changes].reverse()) {
       voiceStore.shiftDraftOffsets(panelId, change.to, change.from - change.to);
     }
-    ranges.expectDraftChange(panelId, projectId, draft, send.kept, send.changes);
-    this.writeShiftedDraft(panelId, send.kept, projectId);
-    return true;
+    ranges.expectDraftChange(panelId, projectId, now.draft, now.kept, now.changes);
+    this.writeShiftedDraft(panelId, now.kept, projectId);
+    return now.kept;
   }
 
   private releaseBaseline(correction: PendingCorrection): void {

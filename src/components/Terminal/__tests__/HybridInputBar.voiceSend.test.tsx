@@ -197,4 +197,63 @@ describe("HybridInputBar dictated send with the next dictation already started (
     expect(draft()).toBe("these are the next prompt and the rest");
     expect(view.state.doc.toString()).toBe("these are the next prompt and the rest");
   });
+
+  it("doesn't wait for, or drop, the cleanup of a next dictation already stopped", async () => {
+    const pending = deferred<CorrectResult>();
+    const later = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise).mockReturnValueOnce(later.promise);
+    const onSend = vi.fn();
+    act(() => {
+      dictate("hello wrld");
+    });
+    const view = await mount(onSend);
+
+    await act(async () => {
+      runScopeHandlers(view, new KeyboardEvent("keydown", { key: "Enter" }), "editor");
+    });
+    await act(async () => {
+      dictate("the nxt prompt");
+      await voiceRecordingService.stop();
+    });
+    await act(async () => {
+      pending.resolve({ action: "replace", correctedText: "Hello world." });
+    });
+
+    expect(onSend.mock.calls.map(([payload]) => payload.text)).toEqual(["Hello world."]);
+    expect(view.state.doc.toString()).toBe("the nxt prompt");
+    expect(voiceRecordingService.hasPendingCorrection(PANEL_ID)).toBe(true);
+
+    await act(async () => {
+      later.resolve({ action: "replace", correctedText: "The next prompt." });
+    });
+    expect(draft()).toBe("The next prompt.");
+    expect(view.state.doc.toString()).toBe("The next prompt.");
+  });
+
+  it("starts the next dictation after the prompt, not over text selected in it", async () => {
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+    const onSend = vi.fn();
+    act(() => {
+      dictate("hello wrld");
+    });
+    const view = await mount(onSend);
+    act(() => {
+      view.focus();
+      view.dispatch({ selection: { anchor: 0, head: "hello".length } });
+    });
+
+    await act(async () => {
+      runScopeHandlers(view, new KeyboardEvent("keydown", { key: "Enter" }), "editor");
+    });
+    await act(async () => {
+      dictate("next");
+    });
+    await act(async () => {
+      pending.resolve({ action: "replace", correctedText: "Hello world." });
+    });
+
+    expect(onSend.mock.calls.map(([payload]) => payload.text)).toEqual(["Hello world."]);
+    expect(draft()).toBe("next");
+  });
 });

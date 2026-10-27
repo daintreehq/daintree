@@ -109,6 +109,7 @@ describe("planVoiceDraftSend (#14804)", () => {
 
     expect(plan.text).toBe("Hello world.");
     expect(plan.kept).toBe("The next prompt.");
+    expect(applyChanges(draft, plan)).toBe(plan.kept);
   });
 
   it("leaves a paragraph break the newer words open with in what's kept", () => {
@@ -122,6 +123,7 @@ describe("planVoiceDraftSend (#14804)", () => {
 
     expect(plan.text).toBe("Hello world.");
     expect(plan.kept).toBe("\nnext words");
+    expect(applyChanges(draft, plan)).toBe(plan.kept);
     expect(plan.leadingSpace).toBeNull();
   });
 });
