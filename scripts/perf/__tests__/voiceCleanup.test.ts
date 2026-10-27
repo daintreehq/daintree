@@ -686,7 +686,12 @@ describe("requestCost", () => {
   });
 
   it("bills tokens written to the cache at the write rate, out of the uncached input", () => {
-    const usage = { inputTokens: 4_229, cachedTokens: 2_965, cacheWriteTokens: 1_261, outputTokens: 43 };
+    const usage = {
+      inputTokens: 4_229,
+      cachedTokens: 2_965,
+      cacheWriteTokens: 1_261,
+      outputTokens: 43,
+    };
     // 3 uncached at $1, 1,261 written at $1.25, 2,965 cached at $0.05, 43 output at $5.
     expect(requestCost("gpt-6.1-terra", usage)).toBeCloseTo(
       (3 + 1_576.25 + 148.25 + 215) / 1e6,

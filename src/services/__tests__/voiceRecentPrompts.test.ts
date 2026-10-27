@@ -42,7 +42,12 @@ describe("selectRecentPrompts", () => {
     const now = 10 * HOUR;
     const older = sends(4, (seq) => (seq < 2 ? now - HOUR - 1 : now - HOUR));
     expect(selectRecentPrompts(older, now)).toEqual(["prompt 2", "prompt 3"]);
-    expect(selectRecentPrompts(sends(3, () => 0), now)).toEqual([]);
+    expect(
+      selectRecentPrompts(
+        sends(3, () => 0),
+        now
+      )
+    ).toEqual([]);
   });
 });
 
