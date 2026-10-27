@@ -3873,7 +3873,7 @@ describe("OpenAITranscriptionProvider — reconnect replay (#14605)", () => {
     service.stop();
   });
 
-  it("does not replay a segment the server acknowledged, so its text lands once", async () => {
+  it("does not replay a segment whose transcript landed, so its text lands once", async () => {
     const service = new OpenAITranscriptionProvider();
     const events: VoiceTranscriptionEvent[] = [];
     service.onEvent((e) => events.push(e));
@@ -3887,6 +3887,7 @@ describe("OpenAITranscriptionProvider — reconnect replay (#14605)", () => {
       item_id: "item-A",
       delta: "hello",
     });
+    socket.simulateMessage("conversation.item.done", done("item-A", "hello"));
     vad.emitSpeechStart();
     service.sendAudioChunk(chunk(2));
 
@@ -3908,6 +3909,7 @@ describe("OpenAITranscriptionProvider — reconnect replay (#14605)", () => {
     service.sendAudioChunk(chunk(1));
     vad.emitSpeechEnd();
     socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    socket.simulateMessage("conversation.item.done", done("item-A", "hello"));
     // Ten seconds of silence after the speech-end commit.
     for (let i = 0; i < 100; i++) service.sendAudioChunk(chunk(10 + (i % 200)));
 
@@ -4146,7 +4148,7 @@ describe("OpenAITranscriptionProvider — reconnect replay (#14605)", () => {
     service.stop();
   });
 
-  it("releases one segment per acknowledged commit, ignoring a repeated ack", async () => {
+  it("releases one segment per transcribed commit, ignoring a repeated ack", async () => {
     const service = new OpenAITranscriptionProvider();
     const { socket } = await bringSessionReady(service);
     const vad = latestVadWorker();
@@ -4158,13 +4160,37 @@ describe("OpenAITranscriptionProvider — reconnect replay (#14605)", () => {
     vad.emitSpeechEnd();
     socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
     socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-B" });
+    socket.simulateMessage("conversation.item.done", done("item-A", "one"));
+    socket.simulateMessage("conversation.item.done", done("item-B", "two"));
     vad.emitSpeechStart();
     service.sendAudioChunk(chunk(3));
 
     socket.simulateClose(1006);
     const socket2 = await reconnect();
 
-    expect(wire(socket2)).toEqual([2, "commit", 3]);
+    expect(wire(socket2)).toEqual([3]);
+    service.stop();
+  });
+
+  it("releases a segment whose transcript beat its ack, keeping later acks aligned", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const { socket } = await bringSessionReady(service);
+    const vad = latestVadWorker();
+    vad.emitSpeechStart();
+    service.sendAudioChunk(chunk(1));
+    vad.emitSpeechEnd();
+    vad.emitSpeechStart();
+    service.sendAudioChunk(chunk(2));
+    vad.emitSpeechEnd();
+    socket.simulateMessage("conversation.item.done", done("item-A", "one"));
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-B" });
+
+    socket.simulateClose(1006);
+    const socket2 = await reconnect();
+
+    expect(wire(socket2)).toEqual([2, "commit"]);
     service.stop();
   });
 
@@ -4245,6 +4271,7 @@ describe("OpenAITranscriptionProvider — reconnect replay (#14605)", () => {
     service.sendAudioChunk(chunk(1));
     vad.emitSpeechEnd();
     socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    socket.simulateMessage("conversation.item.done", done("item-A", "hello"));
     service.sendAudioChunk(chunk(10));
     service.sendAudioChunk(chunk(11));
     service.sendAudioChunk(chunk(12));
@@ -4546,6 +4573,52 @@ describe("OpenAITranscriptionProvider — reconnect replay (#14605)", () => {
         { text: "two", itemId: "item-B" },
       ]);
       expect(draftAtStop(events)).toBe("one two");
+    });
+
+    it("lands a retired preview's text when the stop ends before the replay is transcribed", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const events: VoiceTranscriptionEvent[] = [];
+      service.onEvent((e) => events.push(e));
+      const { socket } = await bringSessionReady(service);
+      const vad = latestVadWorker();
+      vad.emitSpeechStart();
+      service.sendAudioChunk(chunk(1));
+      delta(socket, "item-A", "one");
+      vad.emitSpeechEnd();
+      socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+
+      socket.simulateClose(1006);
+      const socket2 = await reconnect();
+      expect(completions(events)).toEqual([{ text: "", itemId: "item-A" }]);
+      socket2.simulateMessage("input_audio_buffer.committed", { item_id: "item-B" });
+      const stopPromise = service.stopGracefully();
+      vi.advanceTimersByTime(3_000);
+      await stopPromise;
+
+      expect(draftAtStop(events)).toBe("one");
+    });
+
+    it("drops a retired preview's text once the new connection transcribes the replay", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const events: VoiceTranscriptionEvent[] = [];
+      service.onEvent((e) => events.push(e));
+      const { socket } = await bringSessionReady(service);
+      const vad = latestVadWorker();
+      vad.emitSpeechStart();
+      service.sendAudioChunk(chunk(1));
+      delta(socket, "item-A", "the quick");
+      vad.emitSpeechEnd();
+      socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+
+      socket.simulateClose(1006);
+      const socket2 = await reconnect();
+      socket2.simulateMessage("input_audio_buffer.committed", { item_id: "item-B" });
+      delta(socket2, "item-B", "the quick brown");
+      const stopPromise = service.stopGracefully();
+      vi.advanceTimersByTime(3_000);
+      await stopPromise;
+
+      expect(draftAtStop(events)).toBe("the quick brown");
     });
 
     it("settles an acknowledged segment the cap evicted with its interim text", async () => {

@@ -390,17 +390,23 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   private preRollChunks: ArrayBuffer[] = [];
   private preRollBytes = 0;
   private bytesSinceCommit = 0;
-  // Replay ledger: every chunk handed to the socket since the server last
-  // acknowledged a commit, kept even when the send threw, since `ws` drops
-  // sends on a closing socket without one. `replaySegments` are commits sent
-  // but not yet acknowledged, oldest first; `replayTail` is audio since the
-  // last commit. It survives a drop and is resent, segment boundaries and all,
-  // when the next connection is ready. An acknowledged commit is the server's,
-  // so its audio is released and never resent: that is what keeps a replayed
-  // transcript from landing twice. `replayEvictedSegments` counts unacknowledged
-  // segments the byte cap dropped whole, so their acks don't release the wrong
-  // segment.
-  private replaySegments: Array<{ chunks: ArrayBuffer[]; bytes: number; atPause: boolean }> = [];
+  // Replay ledger: every chunk handed to the socket whose transcript hasn't
+  // landed, kept even when the send threw, since `ws` drops sends on a closing
+  // socket without one. `replaySegments` are commits sent, oldest first, each
+  // tagged with its item once the server acknowledges it; `replayTail` is
+  // audio since the last commit. It survives a drop and is resent, segment
+  // boundaries and all, when the next connection is ready. A segment is
+  // released when its item's transcript is emitted, so an acknowledged commit
+  // the drop cut off before its transcript is transcribed again rather than
+  // settled with a preview that lags the speech. `replayEvictedSegments` counts
+  // unacknowledged segments the byte cap dropped whole, so their acks don't
+  // tag the wrong segment.
+  private replaySegments: Array<{
+    chunks: ArrayBuffer[];
+    bytes: number;
+    atPause: boolean;
+    itemId?: string;
+  }> = [];
   // Whether each commit awaiting its ack on this connection closed a segment
   // at a pause the VAD heard, oldest first, and the acknowledged items that
   // did. A pause ends what was said even when the speaker goes on before its
@@ -439,6 +445,15 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   // The item the hold timer is waiting on. The deadline belongs to that item,
   // so later completions queuing behind it don't keep pushing it back.
   private heldCompletionTimerItemId: string | null = null;
+  // Items that finished before their commit was acknowledged. Their text has
+  // landed, so the ack, when it comes, releases their audio.
+  private completedBeforeAck = new Set<string>();
+  // A dropped connection's items whose audio the replay resends, oldest first,
+  // each with the text it would settle with. Their previews stay up until the
+  // replay goes out and retires them; from then the text is only a fallback,
+  // dropped once the new connection transcribes anything, for a session that
+  // ends before it does.
+  private replayItems: Array<{ itemId: string; text: string; retired: boolean }> = [];
 
   /** Cumulative delta text since the last complete event — used for incremental diffs. */
   private liveText = "";
@@ -1095,6 +1110,8 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     // connection open otherwise. Captured before cleanupConnection() nulls it.
     const conn = this.connection;
     this.cleanupConnection();
+    // Ahead of the error status, which ends the dictation before anything after it lands.
+    this.releaseHeldCompletions(true);
     this.clearReplay();
     if (conn) {
       try {
@@ -1136,10 +1153,13 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
           logWarn(`${P} Ignoring a repeated session.updated on a ready connection`);
           return;
         }
-        // Audio the dropped connection never got committed goes first, then
+        // Audio the dropped connection never transcribed goes first, then
         // whatever was captured while reconnecting.
         const recovering = this.isReconnecting;
-        if (this.connection) this.replayUnacknowledgedAudio();
+        if (this.connection) {
+          this.retireReplayedPreviews();
+          this.replayUntranscribedAudio();
+        }
         if ((this.preConnectBuffer.length > 0 || this.heldCommits.length > 0) && this.connection) {
           logInfo(`${P} Flushing ${this.preConnectBuffer.length} buffered audio chunks`, {
             heldCommits: this.heldCommits.length,
@@ -1211,11 +1231,16 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
           this.releaseAcknowledgedSegment();
           return;
         }
-        // A repeated ack must not release a second segment's audio.
+        if (this.completedBeforeAck.delete(itemId)) {
+          this.commitPauses.shift();
+          this.releaseAcknowledgedSegment();
+          return;
+        }
+        // A repeated ack must not tag a second segment.
         if (!this.completedItemIds.has(itemId) && !this.commitOrder.includes(itemId)) {
           this.commitOrder.push(itemId);
           if (this.commitPauses.shift()) this.pauseItemIds.add(itemId);
-          this.releaseAcknowledgedSegment();
+          this.tagAcknowledgedSegment(itemId);
         }
         return;
       }
@@ -1239,6 +1264,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
           if (this.completedItemIds.has(itemId)) return;
           this.itemDeltaText.set(itemId, (this.itemDeltaText.get(itemId) ?? "") + delta);
         }
+        this.forgetRetiredReplayItems();
         this.emit({ type: "delta", text: delta, ...(itemId ? { itemId } : {}) });
         this.liveText += delta;
         return;
@@ -1394,11 +1420,13 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     if (this.pendingCommits > 0) {
       this.pendingCommits--;
     }
+    this.forgetRetiredReplayItems();
     if (itemId) this.itemDeltaText.delete(itemId);
     if (itemId && this.commitOrder.includes(itemId)) {
       this.heldCompletions.set(itemId, transcript);
       this.releaseHeldCompletions(false);
     } else {
+      if (itemId) this.completedBeforeAck.add(itemId);
       this.emitCompletion(transcript, itemId);
     }
     // Each commit yields exactly one completion. Once every committed segment
@@ -1412,12 +1440,21 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
 
   /**
    * Emits held completions in commit order, stopping at the first item still in
-   * flight. `force` settles every unresolved item with its interim text instead
-   * (drain end, connection loss, stop); `settleHead` settles only the first one
-   * (the hold timeout). Settling in place keeps the draft in commit order even
-   * when a predecessor never reports back.
+   * flight. `force` settles every unresolved item with its interim text instead,
+   * a dropped connection's items held for a replay first (the session is ending:
+   * drain end, fatal error, stop); `settleHead` settles only the first one (the
+   * hold timeout). Settling in place keeps the draft in commit order even when a
+   * predecessor never reports back.
    */
   private releaseHeldCompletions(force: boolean, settleHead = false): void {
+    if (force && this.replayItems.length > 0) {
+      const items = this.replayItems;
+      this.replayItems = [];
+      logWarn(`${P} Settling items the replay never transcribed with their interim text`, {
+        items: items.length,
+      });
+      for (const { itemId, text } of items) this.emitCompletion(text, itemId);
+    }
     for (let itemId = this.commitOrder[0]; itemId !== undefined; itemId = this.commitOrder[0]) {
       let transcript = this.heldCompletions.get(itemId);
       const settled = transcript === undefined || this.failedItemIds.has(itemId);
@@ -1436,6 +1473,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       this.commitOrder.shift();
       this.heldCompletions.delete(itemId);
       this.failedItemIds.delete(itemId);
+      this.releaseTranscribedSegment(itemId);
       // Only a reported transcript of the last commit, with no later commit
       // in flight and the VAD hearing silence it has seen speech end into,
       // ends an utterance; a backstop or replayed commit can land mid-speech.
@@ -1563,18 +1601,27 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     this.replayBytes += chunk.byteLength;
     while (this.replayBytes > REPLAY_MAX_BYTES) {
       const head = this.replaySegments[0];
-      const evicted = head ? head.chunks.shift() : this.replayTail.shift();
-      if (!evicted) break;
-      this.droppedReplayChunks++;
-      this.replayBytes -= evicted.byteLength;
-      if (head) {
-        head.bytes -= evicted.byteLength;
-        if (head.chunks.length === 0) {
-          this.replaySegments.shift();
-          this.replayEvictedSegments++;
-        }
+      if (head?.itemId !== undefined) {
+        // Acknowledged audio goes whole: replayed without its start, it would
+        // replace a preview that has the words. Its item settles with that
+        // preview on a drop instead.
+        this.replaySegments.shift();
+        this.droppedReplayChunks += head.chunks.length;
+        this.replayBytes -= head.bytes;
       } else {
-        this.replayTailBytes -= evicted.byteLength;
+        const evicted = head ? head.chunks.shift() : this.replayTail.shift();
+        if (!evicted) break;
+        this.droppedReplayChunks++;
+        this.replayBytes -= evicted.byteLength;
+        if (head) {
+          head.bytes -= evicted.byteLength;
+          if (head.chunks.length === 0) {
+            this.replaySegments.shift();
+            this.replayEvictedSegments++;
+          }
+        } else {
+          this.replayTailBytes -= evicted.byteLength;
+        }
       }
       if (!this.replayOverflowWarned) {
         this.replayOverflowWarned = true;
@@ -1586,14 +1633,37 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     }
   }
 
-  /** The server acknowledged the oldest outstanding commit: its audio is safe. */
+  /**
+   * The server acknowledged the oldest outstanding commit with nothing left to
+   * wait for: no item id to follow, or a transcript that already landed.
+   */
   private releaseAcknowledgedSegment(): void {
     if (this.replayEvictedSegments > 0) {
       this.replayEvictedSegments--;
       return;
     }
-    const segment = this.replaySegments.shift();
-    if (segment) this.replayBytes -= segment.bytes;
+    const index = this.replaySegments.findIndex((segment) => segment.itemId === undefined);
+    if (index < 0) return;
+    this.replayBytes -= this.replaySegments[index]!.bytes;
+    this.replaySegments.splice(index, 1);
+  }
+
+  /** The oldest outstanding commit is `itemId`: its audio waits on that transcript. */
+  private tagAcknowledgedSegment(itemId: string): void {
+    if (this.replayEvictedSegments > 0) {
+      this.replayEvictedSegments--;
+      return;
+    }
+    const segment = this.replaySegments.find((s) => s.itemId === undefined);
+    if (segment) segment.itemId = itemId;
+  }
+
+  /** An item's transcript reached the renderer: its audio is never needed again. */
+  private releaseTranscribedSegment(itemId: string): void {
+    const index = this.replaySegments.findIndex((segment) => segment.itemId === itemId);
+    if (index < 0) return;
+    this.replayBytes -= this.replaySegments[index]!.bytes;
+    this.replaySegments.splice(index, 1);
   }
 
   /** The server buffer was cleared: audio since the last commit is gone there too. */
@@ -1625,17 +1695,18 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   }
 
   /**
-   * Resends the replay ledger onto a newly ready connection: each
-   * unacknowledged segment followed by its commit, then the uncommitted tail.
-   * The ledger is rebuilt by the sends themselves, so a send that fails here
-   * leaves the audio retained for the next attempt.
+   * Resends the replay ledger onto a newly ready connection: each segment
+   * still awaiting its transcript followed by its commit, then the uncommitted
+   * tail. The ledger is rebuilt by the sends themselves, so a send that fails
+   * here leaves the audio retained for the next attempt.
    */
-  private replayUnacknowledgedAudio(): void {
+  private replayUntranscribedAudio(): void {
     if (this.replayBytes === 0) return;
     const segments = this.replaySegments;
     const tail = this.replayTail;
-    logInfo(`${P} Replaying audio the dropped connection never committed`, {
+    logInfo(`${P} Replaying audio the dropped connection never transcribed`, {
       segments: segments.length,
+      acknowledgedSegments: segments.filter((segment) => segment.itemId !== undefined).length,
       evictedSegments: this.replayEvictedSegments,
       bytes: this.replayBytes,
     });
@@ -1653,6 +1724,53 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       }
     }
     for (const chunk of tail) this.sendAudioJson(chunk);
+  }
+
+  /**
+   * On a drop, settles in commit order what a replay can't redo, and holds the
+   * rest for it: everything from the first unreported item whose audio is
+   * still retained, a finished transcript behind it included, since emitting
+   * that now would put it ahead of the speech the replay brings back. Then the
+   * previews of audio never acknowledged, a lost commit's or the open tail's,
+   * which the replay transcribes again under new items.
+   */
+  private holdItemsForReplay(): void {
+    const replayFrom = this.commitOrder.findIndex(
+      (itemId) =>
+        !this.heldCompletions.has(itemId) &&
+        this.replaySegments.some((segment) => segment.itemId === itemId)
+    );
+    const replayed = replayFrom < 0 ? [] : this.commitOrder.splice(replayFrom);
+    while (this.commitOrder.length > 0) this.releaseHeldCompletions(false, true);
+    for (const itemId of replayed) {
+      const text = this.heldCompletions.get(itemId) ?? this.itemDeltaText.get(itemId) ?? "";
+      this.replayItems.push({ itemId, text: text.trim(), retired: false });
+      this.heldCompletions.delete(itemId);
+      this.failedItemIds.delete(itemId);
+      this.itemDeltaText.delete(itemId);
+    }
+    for (const [itemId, text] of this.itemDeltaText) {
+      this.replayItems.push({ itemId, text: text.trim(), retired: false });
+    }
+    this.itemDeltaText.clear();
+    this.clearHeldCompletionTimer();
+  }
+
+  /** The replay is going out: its items' old previews give way to the new ones. */
+  private retireReplayedPreviews(): void {
+    const pending = this.replayItems.filter((item) => !item.retired);
+    if (pending.length === 0) return;
+    logInfo(`${P} Retiring previews the replay transcribes again`, { items: pending.length });
+    for (const item of pending) {
+      item.retired = true;
+      this.emit({ type: "complete", text: "", itemId: item.itemId });
+    }
+  }
+
+  /** The new connection is transcribing: the replay's fallback text is no longer needed. */
+  private forgetRetiredReplayItems(): void {
+    if (this.replayItems.length === 0) return;
+    this.replayItems = this.replayItems.filter((item) => !item.retired);
   }
 
   sendAudioChunk(chunk: ArrayBuffer): void {
@@ -1784,10 +1902,11 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     this.bytesSinceCommit = 0;
     this.pendingCommits = 0;
     this.commitPauses = [];
-    // Item ids are per connection; release what arrived so a reconnect starts a
-    // fresh ordering chain without dropping finished transcripts.
-    this.releaseHeldCompletions(true);
+    // Item ids are per connection, so a reconnect starts a fresh ordering
+    // chain: what arrived is released, and what the replay redoes waits for it.
+    this.holdItemsForReplay();
     this.completedItemIds.clear();
+    this.completedBeforeAck.clear();
     this.pauseItemIds.clear();
   }
 
@@ -1813,6 +1932,8 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     this.itemDeltaText.clear();
     this.failedItemIds.clear();
     this.clearHeldCompletionTimer();
+    this.completedBeforeAck.clear();
+    this.replayItems = [];
     this.preConnectBuffer = [];
     this.preConnectBufferBytes = 0;
     this.heldCommits = [];
