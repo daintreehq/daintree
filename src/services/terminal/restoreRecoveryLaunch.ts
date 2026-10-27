@@ -118,6 +118,9 @@ export function buildRestoreRecoveryLaunchOptions(
       disposition: resuming ? "resume" : "fresh",
     },
     lastAgentObservation: panel.lastAgentObservation,
+    // Resuming carries on the run its first prompt belongs to; a fresh start
+    // runs the held command, which carries none (#14592).
+    firstPrompt: resuming ? panel.firstPrompt : undefined,
     launchedByPluginId: panel.launchedByPluginId,
     // The user's choice to start the pane outranks the plugin's standing request
     // to hold it; the plugin can ask again (#14017).

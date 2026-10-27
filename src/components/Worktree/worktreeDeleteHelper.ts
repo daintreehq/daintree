@@ -47,6 +47,8 @@ export interface WorktreeTerminalRestoreSnapshot {
   restoreRecovery?: PtyPanelData["restoreRecovery"];
   /** The pane's own notes (#12835): a rollback brings the terminal back whole. */
   scratchpad?: PtyPanelData["scratchpad"];
+  /** What the run was first asked (#14592), for the same reason. */
+  firstPrompt?: PtyPanelData["firstPrompt"];
 }
 
 function sleep(ms: number): Promise<void> {
@@ -108,6 +110,7 @@ function snapshotTerminal(panel: PtyPanelData): WorktreeTerminalRestoreSnapshot 
     conversationCwd: panel.conversationCwd,
     restoreRecovery: panel.restoreRecovery,
     ...(panel.scratchpad && { scratchpad: panel.scratchpad }),
+    ...(panel.firstPrompt && { firstPrompt: panel.firstPrompt }),
   };
 }
 
@@ -235,6 +238,7 @@ export async function restoreClosedTerminals(
         conversationCwd: snap.conversationCwd,
         restoreRecovery: snap.restoreRecovery,
         ...(snap.scratchpad && { scratchpad: snap.scratchpad }),
+        ...(snap.firstPrompt && { firstPrompt: snap.firstPrompt }),
         bypassLimits: true,
         focusPolicy: "preserve",
       });

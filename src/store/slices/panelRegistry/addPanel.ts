@@ -408,6 +408,7 @@ export const createAddPanelActions = (
       ...(options.launchedByPluginId && { launchedByPluginId: options.launchedByPluginId }),
       ...(options.holdOnRestart === true && { holdOnRestart: true as const }),
       ...(options.scratchpad && { scratchpad: options.scratchpad }),
+      ...(options.firstPrompt && { firstPrompt: options.firstPrompt }),
       extensionState: options.extensionState,
       extensionStateVersion: ptyExtensionStateVersion,
       pluginId: ptyPluginId,

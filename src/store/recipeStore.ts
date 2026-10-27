@@ -45,6 +45,7 @@ import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import type { RecipeContext } from "@/utils/recipeVariables";
 import { sanitizeTerminalName } from "@/utils/agentLaunchValidation";
 import { extractSystemPromptArgs } from "@shared/utils/agentSystemPrompt";
+import { buildFirstPrompt } from "@shared/utils/firstPrompt";
 import { resolveRecipeAgentStep } from "@/utils/recipeAgentStep";
 import { getPanelKindConfig, panelKindIsProjectScoped } from "@shared/config/panelKindRegistry";
 import { pluginAgentToolsProblem, recipeRunNeedsAgentTools } from "@/utils/pluginRecipeAgentTools";
@@ -1437,6 +1438,10 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
               // Last, where the launch command puts it, so restart replays it.
               ...step.systemPromptArgs,
             ];
+            // Only a first turn the command actually sends is recorded (#14592).
+            const firstPrompt = initialPrompt
+              ? buildFirstPrompt(step.promptAsWritten, "launch", Date.now())
+              : undefined;
             return terminalStore.addPanel({
               kind: "terminal",
               launchAgentId: agentId,
@@ -1451,6 +1456,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
               agentPresetColor: preset?.color,
               env: finalEnv,
               exitBehavior: terminal.exitBehavior,
+              ...(firstPrompt && { firstPrompt }),
               spawnedBy,
               focusPolicy,
               bypassLimits: true,

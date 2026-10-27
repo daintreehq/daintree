@@ -50,6 +50,7 @@ import {
   resolveHostTmpDir,
 } from "@/hooks/useHostPlatform";
 import { agentClipboardDirectory } from "@shared/types/agentSettings";
+import { buildFirstPrompt } from "@shared/utils/firstPrompt";
 
 export { resolveAgentLaunchBaseCommand } from "@/utils/agentLaunchCommand";
 export { buildLaunchIdentity, type LaunchAgentIdentity };
@@ -153,6 +154,12 @@ export interface LaunchAgentOptions {
   cwd?: string;
   worktreeId?: string;
   prompt?: string;
+  /**
+   * `prompt` as the caller wrote it, before `agent.launch` appended a handback
+   * instruction (#14592). Recorded on the pane as its first prompt; absent
+   * means `prompt` is already as written.
+   */
+  promptAsWritten?: string;
   /**
    * Handback code already appended to `prompt` by `agent.launch` (#12488).
    * Handed to the spawn so the pty-host looks for its marker.
@@ -515,6 +522,14 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
         }
 
         const customTitle = plan.titleMode ? { titleMode: plan.titleMode } : {};
+        // Only an agent is handed the prompt as its launch argument.
+        const firstPrompt = isAgent
+          ? buildFirstPrompt(
+              launchOptions?.promptAsWritten ?? launchOptions?.prompt,
+              "launch",
+              Date.now()
+            )
+          : undefined;
         const spawnedBy = launchOptions?.spawnedBy;
         const focusPolicy =
           launchOptions?.focusPolicy ?? (isMcpSpawnFocusSuppressed() ? "preserve" : undefined);
@@ -534,6 +549,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               agentModelId: launchOptions?.modelId,
               agentSessionId: assignedSessionId,
               handbackCode: launchOptions?.handbackCode,
+              ...(firstPrompt && { firstPrompt }),
               agentPresetId: preset?.id,
               agentPresetColor: preset?.color,
               env: plan.env,
@@ -591,6 +607,9 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               agentPresetId: preset?.id,
               agentPresetColor: preset?.color,
               spawnStatus: "missing-cli",
+              // "Run anyway" replays the gate's command, prompt included, so
+              // the gate holds the launch's record until then.
+              ...(firstPrompt && { firstPrompt }),
               startedAt: Date.now(),
               isVisible: true,
               extensionState: plan.env ? { presetEnv: plan.env } : undefined,

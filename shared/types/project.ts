@@ -17,6 +17,7 @@ import type {
   TerminalAgentObservation,
   TerminalRestoreProvenance,
   TerminalScratchpad,
+  TerminalFirstPrompt,
 } from "./panel.js";
 import type { PersistedPanelKindRef } from "../config/panelKindRegistry.js";
 import type { CommandOverride } from "./commands.js";
@@ -395,6 +396,8 @@ export interface PanelSnapshot {
   holdOnRestart?: true;
   /** The terminal's Scratchpad notes (#12835). Untrusted on read — sanitized at restore. */
   scratchpad?: TerminalScratchpad;
+  /** The first prompt Daintree delivered to the run (#14592). Untrusted on read — sanitized at restore. */
+  firstPrompt?: TerminalFirstPrompt;
   /** Last known agent state for crash recovery display */
   agentState?: AgentState;
   /** Timestamp of last agent state change */

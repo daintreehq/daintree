@@ -14,6 +14,7 @@ import type {
   TerminalAgentObservation,
   TerminalRestoreProvenance,
   TerminalScratchpad,
+  TerminalFirstPrompt,
 } from "./panel.js";
 import type { GitStatus, DiffChangeSetEntry } from "./git.js";
 import type { BrowserHistory } from "./browser.js";
@@ -258,6 +259,12 @@ export interface AddPanelOptionsBase {
    * panel's own notes outrank this when the call lands on an existing record.
    */
   scratchpad?: TerminalScratchpad;
+  /**
+   * PTY-only. The first prompt Daintree delivered to the run (#14592), from a
+   * launch that carried one or carried by restore. A live panel's own record
+   * outranks this when the call lands on an existing record.
+   */
+  firstPrompt?: TerminalFirstPrompt;
   /**
    * User-initiated focus timestamp from the saved snapshot, propagated
    * from the hydration boundary (`statePatcher.ts:buildArgsFor*` →

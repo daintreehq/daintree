@@ -72,6 +72,7 @@ import {
   sanitizeLiveRestoreProvenance,
 } from "@shared/utils/restoreProvenance";
 import { sanitizeScratchpad } from "@/lib/terminalScratchpad";
+import { sanitizeFirstPrompt } from "@shared/utils/firstPrompt";
 
 /**
  * Args for building addPanel options from hydration data.
@@ -218,6 +219,8 @@ export interface SavedTerminalData {
   restoreRecovery?: unknown;
   /** Untrusted on-disk value (#12835) — sanitized via `sanitizeScratchpad`. */
   scratchpad?: unknown;
+  /** Untrusted on-disk value (#14592) — sanitized via `sanitizeFirstPrompt`. */
+  firstPrompt?: unknown;
   /**
    * Untrusted on-disk values (#14017), sanitized in `restoreProvenance.ts` and
    * {@link readLaunchedByPluginId}. The saved `agentState` pair is never read as
@@ -493,6 +496,7 @@ export function buildArgsForBackendTerminal(
     ...pluginHoldArgs(saved),
     lastActiveAt: sanitizeLastActiveAt(saved.lastActiveAt),
     scratchpad: sanitizeScratchpad(saved.scratchpad),
+    firstPrompt: sanitizeFirstPrompt(saved.firstPrompt),
   };
 }
 
@@ -584,6 +588,7 @@ export function buildArgsForReconnectedFallback(
     ...pluginHoldArgs(saved),
     lastActiveAt: sanitizeLastActiveAt(saved.lastActiveAt),
     scratchpad: sanitizeScratchpad(saved.scratchpad),
+    firstPrompt: sanitizeFirstPrompt(saved.firstPrompt),
   };
 }
 
@@ -1118,6 +1123,9 @@ export function buildArgsForRespawn(
     restore: true,
     lastActiveAt: sanitizeLastActiveAt(saved.lastActiveAt),
     scratchpad: sanitizeScratchpad(saved.scratchpad),
+    // A pane that resumes or is held carries on its run; one that starts over
+    // is a fresh launch and was never handed its first prompt (#14592).
+    firstPrompt: restoreRecovery || resumed ? sanitizeFirstPrompt(saved.firstPrompt) : undefined,
   };
 }
 
