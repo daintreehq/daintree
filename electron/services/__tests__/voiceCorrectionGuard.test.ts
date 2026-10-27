@@ -3,7 +3,11 @@ import {
   extractProtectedSpans,
   findProtectedRanges,
 } from "../../../shared/utils/voiceProtectedSpans.js";
-import { validateCorrection, validateRewrite } from "../voiceCorrectionGuard.js";
+import {
+  CORRECTION_GUARD_LIMITS,
+  validateCorrection,
+  validateRewrite,
+} from "../voiceCorrectionGuard.js";
 import { CORE_CORRECTION_PROMPT } from "../../../shared/config/voiceCorrection.js";
 import { DICTATED_PROMPTS } from "./fixtures/dictatedPrompts.js";
 
@@ -219,6 +223,31 @@ describe("validateCorrection", () => {
     ],
   ])("rejects %s", (_label, raw, corrected, reason) => {
     expect(validateCorrection(raw, corrected)).toEqual({ ok: false, reason });
+  });
+
+  it("holds removals and additions to their own budgets", () => {
+    // 20 words, 7 dropped: over the floor of 4, inside 40%.
+    const raw =
+      "please check the logs and the traces and the metrics on the staging box then tell me what you see";
+    const dropped = "Check the logs on the staging box, then tell me what you see.";
+    expect(validateCorrection(raw, dropped)).toEqual({ ok: false, reason: "edit_size" });
+    expect(
+      validateCorrection(raw, dropped, { ...CORRECTION_GUARD_LIMITS, removedRatio: 0.4 })
+    ).toEqual({ ok: true });
+    // A looser removal budget doesn't let more words in.
+    const added = `${raw} and also restart the box and page the on call engineer`;
+    expect(
+      validateCorrection(raw, added, { ...CORRECTION_GUARD_LIMITS, removedRatio: 0.5 })
+    ).toEqual({ ok: false, reason: "edit_size" });
+  });
+
+  it("gives a resolved self-correction its own floor for the rest", () => {
+    const raw = "um so use the old api, no wait, the new one, and log the calls";
+    const corrected = "Use the new one.";
+    expect(validateCorrection(raw, corrected)).toEqual({ ok: false, reason: "edit_size" });
+    expect(
+      validateCorrection(raw, corrected, { ...CORRECTION_GUARD_LIMITS, minAllowanceRemoved: 4 })
+    ).toEqual({ ok: true });
   });
 });
 

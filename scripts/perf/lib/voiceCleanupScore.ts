@@ -14,9 +14,9 @@ import type { CleanupCase } from "./voiceCleanupCorpus";
  * is what the keep checks see, since the word scores can't.
  */
 
-export const VOICE_CLEANUP_SCHEMA_VERSION = 2;
+export const VOICE_CLEANUP_SCHEMA_VERSION = 3;
 // Bump when a definition below changes, so runs scored differently aren't compared.
-export const VOICE_CLEANUP_SCORING_VERSION = 2;
+export const VOICE_CLEANUP_SCORING_VERSION = 3;
 
 /** Today's send yardstick (#14793): the wait a send used to give cleanup. */
 export const SEND_WAIT_TARGET_MS = 2000;
@@ -363,7 +363,9 @@ export function corpusProblems(corpus: readonly CleanupCase[]): string[] {
       }
       for (const reference of acceptedReferences(entry)) {
         if (longestSentence(reference) > entry.maxSentenceWords) {
-          problems.push(`${entry.id}: "${reference}" has a sentence over ${entry.maxSentenceWords} words`);
+          problems.push(
+            `${entry.id}: "${reference}" has a sentence over ${entry.maxSentenceWords} words`
+          );
         }
       }
     }
@@ -444,18 +446,29 @@ export function seededShuffle<T>(items: readonly T[], seed: number): T[] {
 /** What became of one passage. */
 export type Disposition = "applied" | "declined" | "rejected" | "failed" | "skipped";
 
-export interface Trial {
-  caseId: string;
-  variant: string;
-  repeat: number;
+/** A reply landed under one guard: what a send would carry. */
+export interface Landing {
   disposition: Disposition;
   rejectReason?: string;
-  /** What the service handed back: the text a send would carry. */
   landed: string;
-  /** What the model proposed, before the checks: the landed text unless it was rejected. */
-  proposal: string;
   landedScore: TextScore;
+}
+
+/** Why a guard refused a cleanup, as opposed to the confidence or command checks. */
+const GUARD_REASONS = new Set(["edit_size", "negation", "number", "protected_span"]);
+
+export interface Trial {
+  caseId: string;
+  /** `model:effort/prompt`. */
+  variant: string;
+  repeat: number;
+  /** The reply as it parsed, before any check; absent when the request failed or was skipped. */
+  reply?: { action: "no_change" | "replace"; correctedText: string; confidence: string };
+  /** What the model proposed: its replacement, else the raw transcript. */
+  proposal: string;
   proposalScore: TextScore;
+  /** The reply landed under each guard the run named, by name. */
+  landings: Record<string, Landing>;
   /** The service's own round trip, request out to reply read. */
   roundTripMs: number | null;
   /** Request out to the first corrected text a streamed reply showed; absent when it didn't stream or showed none. */
@@ -498,13 +511,26 @@ export interface LatencySummary {
   overTarget: number;
 }
 
+export interface GuardChecks {
+  /** Proposals with a meaning risk that a guard check refused. */
+  caught: number;
+  /** Proposals with a meaning risk that landed. */
+  letThrough: number;
+  /** Proposals with no meaning risk that a guard check refused, so the raw text stayed. */
+  heldBack: number;
+  /** Of those, the ones that were the message the speaker would have typed. */
+  heldBackReady: number;
+}
+
 export interface VariantSummary {
   variant: string;
+  guard: string;
   trials: number;
   dispositions: Record<Disposition, number>;
   rejectReasons: Record<string, number>;
   landed: QualitySummary;
   proposed: QualitySummary;
+  guardChecks: GuardChecks;
   /** Passages already right that came back byte for byte. */
   cleanUntouched: { kept: number; of: number };
   /** Requests that came back with a reply the service could read; failures are left out. */
@@ -625,16 +651,22 @@ function firstTexts(rows: ReadonlyArray<{ trial: Trial }>): number[] {
   );
 }
 
+/**
+ * One variant's trials with their replies landed under one guard. Latency,
+ * tokens and cost belong to the requests, so they read the same under every
+ * guard.
+ */
 export function summariseVariant(
   variant: string,
+  guard: string,
   trials: readonly Trial[],
   corpus: readonly CleanupCase[]
 ): VariantSummary {
   const byId = new Map(corpus.map((entry) => [entry.id, entry]));
   const rows = trials
     .filter((trial) => trial.variant === variant)
-    .map((trial) => ({ trial, entry: byId.get(trial.caseId)! }))
-    .filter((row) => row.entry);
+    .map((trial) => ({ trial, entry: byId.get(trial.caseId)!, landing: trial.landings[guard]! }))
+    .filter((row) => row.entry && row.landing);
   const dispositions: Record<Disposition, number> = {
     applied: 0,
     declined: 0,
@@ -643,16 +675,25 @@ export function summariseVariant(
     skipped: 0,
   };
   const rejectReasons: Record<string, number> = {};
-  for (const { trial } of rows) {
-    dispositions[trial.disposition]++;
-    if (trial.rejectReason) {
-      rejectReasons[trial.rejectReason] = (rejectReasons[trial.rejectReason] ?? 0) + 1;
+  const guardChecks: GuardChecks = { caught: 0, letThrough: 0, heldBack: 0, heldBackReady: 0 };
+  for (const { trial, landing } of rows) {
+    dispositions[landing.disposition]++;
+    if (landing.rejectReason) {
+      rejectReasons[landing.rejectReason] = (rejectReasons[landing.rejectReason] ?? 0) + 1;
+    }
+    const risky = hasMeaningRisk(trial.proposalScore);
+    const refused = landing.rejectReason !== undefined && GUARD_REASONS.has(landing.rejectReason);
+    if (risky && refused) guardChecks.caught++;
+    if (hasMeaningRisk(landing.landedScore)) guardChecks.letThrough++;
+    if (!risky && refused) {
+      guardChecks.heldBack++;
+      if (trial.proposalScore.agentReady) guardChecks.heldBackReady++;
     }
   }
   const clean = rows.filter(({ entry }) => entry.raw === entry.reference);
   // A request that failed fast would flatter the cleanups that came back.
   const timed = rows.filter(
-    ({ trial }) => trial.roundTripMs !== null && trial.disposition !== "failed"
+    ({ trial, landing }) => trial.roundTripMs !== null && landing.disposition !== "failed"
   );
   const billed = rows.flatMap(({ trial }) => (trial.usage ? [trial.usage] : []));
   const costs = rows.map(({ trial }) => trial.costUsd);
@@ -661,15 +702,19 @@ export function summariseVariant(
   const totalInput = sum(billed.map((usage) => usage.inputTokens));
   return {
     variant,
+    guard,
     trials: rows.length,
     dispositions,
     rejectReasons,
-    landed: summariseQuality(rows.map(({ entry, trial }) => ({ entry, score: trial.landedScore }))),
+    landed: summariseQuality(
+      rows.map(({ entry, landing }) => ({ entry, score: landing.landedScore }))
+    ),
     proposed: summariseQuality(
       rows.map(({ entry, trial }) => ({ entry, score: trial.proposalScore }))
     ),
+    guardChecks,
     cleanUntouched: {
-      kept: clean.filter(({ trial }) => trial.landedScore.untouched).length,
+      kept: clean.filter(({ landing }) => landing.landedScore.untouched).length,
       of: clean.length,
     },
     roundTrip: summariseLatency(timed.map(({ trial }) => trial.roundTripMs!)),

@@ -1,4 +1,7 @@
-import { CORRECTION_INSTRUCTIONS, type CorrectionInstructions } from "../../../shared/config/voiceCorrection";
+import {
+  CORRECTION_INSTRUCTIONS,
+  type CorrectionInstructions,
+} from "../../../shared/config/voiceCorrection";
 
 /**
  * The cleanup prompts the benchmark can run (`--prompts`). `v11` is a frozen
@@ -166,7 +169,62 @@ export function revise(
   return { core: apply(base.core, edits.core), suffix: apply(base.suffix, edits.suffix) };
 }
 
+// Round 1 (#14786): the two brakes the issue names, the uncertain-tags rule
+// that told the model to leave untagged text verbatim, and filler and tics
+// named outright, with the words that look like them but carry meaning.
+const FIRM = revise(V11, {
+  core: [
+    [
+      "Focus your corrections on these regions. Text outside <uncertain> tags was transcribed with high confidence — preserve it verbatim unless a correction is clearly necessary for grammar or term matching.",
+      "Focus your word corrections on these regions. The tags mark likely mishearings only: they don't limit the rest of the cleanup, so filler, false starts, self-corrections, punctuation and layout are cleaned up everywhere. Outside the tags, change a word only to fix a clear mishearing.",
+    ],
+    [
+      "Add natural paragraph breaks, sentence punctuation, and casing.",
+      'Add natural paragraph breaks, sentence punctuation, and casing. Break a run-on into sentences where the speaker moved to a new thought, often at "and then", "so" or "and also", keeping every clause; a joining "and" or "so" that would start the new sentence may go when it carries no meaning.',
+    ],
+    [
+      'Keep them whenever they compare, express a want, or introduce an example: "make it look like Settings", "I\'d like a test for this", "something like a cache", "you know the API we added".',
+      'Keep them whenever they compare, express a want, or introduce an example: "make it look like Settings", "I\'d like a test for this", "something like a cache", "you know the API we added". Remove verbal tics and empty hedges the same way: "yeah", "okay", "right" and "so" used to open, close or pad a sentence ("yeah, so the build fails" becomes "the build fails", and a closing "so yeah" or "yeah" goes), and "basically", "kind of", "sort of", "pretty much", "honestly", "really" and "literally" when they only soften what is said. Keep any of them that carries meaning: "Yeah" or "Okay" answering a question the agent asked, "just" meaning only, "kind of" naming a type ("what kind of error"), "right" as a direction, "so" meaning therefore or so that, and "I think", "I guess", "maybe" or "probably" marking a guess, which tells the agent it isn\'t a fact.',
+    ],
+    [
+      "PRESERVE: Keep the speaker's meaning, ordering, and phrasing intact. You may lightly restructure punctuation and paragraph breaks and lay out a spoken list so the dictated passage reads cleanly, but do not turn it into polished prose, add new information, summarize, or rewrite it stylistically. Every word you keep is one the speaker said. If the target is already clean enough, return it character-for-character without any modification.",
+      "PRESERVE: Return the message the speaker would have typed to the agent. Take out filler, false starts, stutters and verbal tics, break up run-on sentences, and lay out spoken lists. Keep every request, question, instruction, constraint, condition, reason, name and detail, in the order spoken and in the speaker's own words: never paraphrase, summarize, merge instructions, or add anything. If the target is already clean, return it character-for-character without any modification.",
+    ],
+    [
+      'Corrected: "Add tests for the router, the cache and the session store." (an inline series, not a list)',
+      'Corrected: "Add tests for the router, the cache and the session store." (an inline series, not a list)\n- Target: "yeah so um the login page kind of hangs when the token expires and I guess it\'s retrying forever so can you cap the retries and show an error instead so yeah"\n  Corrected: "The login page hangs when the token expires, and I guess it\'s retrying forever. Can you cap the retries and show an error instead?"\n- Target: "Yeah, and add one for the empty state too." (answering the agent\'s "Should I add a story for the loading state?")\n  Corrected: "Yeah, and add one for the empty state too." (the "Yeah" answers the agent, so it stays)',
+    ],
+  ],
+  suffix: [
+    [
+      '- Use "no_change" when the input should remain exactly as-is, or when you are not sure a change keeps the meaning.',
+      '- Use "no_change" when the input should remain exactly as-is, or when you are not sure a change keeps the meaning.\n- Use "replace" whenever there is filler, a tic, a false start, a run-on or a mishearing to clean up, even when every technical word is already right.',
+    ],
+  ],
+});
+
+// FIRM, also allowed the fewest words a sentence needs to hold together.
+const REPAIR = revise(FIRM, {
+  core: [
+    [
+      "never paraphrase, summarize, merge instructions, or add anything.",
+      "never paraphrase, summarize, merge instructions, or add anything. You may repair grammar with the fewest words it takes (an article, a verb ending, a pronoun) where the spoken sentence doesn't hold together once the filler is gone, but never reword what the speaker asked for.",
+    ],
+  ],
+});
+
 export const PROMPT_VARIANTS: Readonly<Record<string, PromptVariant>> = {
   v11: { description: "the rules production sent before #14786", instructions: V11 },
-  production: { description: "the rules production sends now", instructions: CORRECTION_INSTRUCTIONS },
+  firm: {
+    description: "round 1: v11 with filler, tics and run-ons named, the verbatim brakes lifted",
+    instructions: FIRM,
+  },
+  repair: {
+    description: "round 1: firm, plus the fewest words a sentence needs to hold together",
+    instructions: REPAIR,
+  },
+  production: {
+    description: "the rules production sends now",
+    instructions: CORRECTION_INSTRUCTIONS,
+  },
 };

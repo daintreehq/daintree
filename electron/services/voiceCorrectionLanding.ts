@@ -24,9 +24,7 @@ export interface VoiceCorrectionProposal {
 }
 
 export type VoiceCorrectionRejectReason =
-  | CorrectionRejectReason
-  | VoiceCommandEditRejection
-  | "low_confidence";
+  CorrectionRejectReason | VoiceCommandEditRejection | "low_confidence";
 
 export interface VoiceCorrectionLanding {
   action: "no_change" | "replace";

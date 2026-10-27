@@ -29,14 +29,7 @@ import { REPLAY_CLIPS } from "../../../e2e/helpers/voiceReplayFixtures";
 export type TranscriptStyle = "openai" | "deepgram" | "grok" | "generic";
 
 export type CaseSource =
-  | "replay"
-  | "afternoon"
-  | "context"
-  | "ramble"
-  | "tics"
-  | "lookalike"
-  | "clean"
-  | "regression";
+  "replay" | "afternoon" | "context" | "ramble" | "tics" | "lookalike" | "clean" | "regression";
 
 export interface CleanupCase {
   id: string;
@@ -754,7 +747,7 @@ const TICS: readonly AuthoredCase[] = [
     reference:
       "The commit message generator is writing whole paragraphs for a one-line change. I want it to match the size of the diff, so a small diff gets a one-line subject and nothing else, and it only adds a body when more than one file changed.",
     alsoAccept: [
-      "The commit message generator is writing whole paragraphs for a one-line change, and I want it to match the size of the diff, so a small diff gets a one-line subject and nothing else, and it only adds a body when more than one file changed.",
+      "The commit message generator is writing whole paragraphs for a one-line change. And I want it to match the size of the diff, so a small diff gets a one-line subject and nothing else, and it only adds a body when more than one file changed.",
     ],
     drops: ["yeah", "so"],
     keep: ["nothing else", "only adds a body", "more than one file"],
@@ -805,7 +798,8 @@ const TICS: readonly AuthoredCase[] = [
     style: "deepgram",
     source: "tics",
     raw: "Rename the hook to use voice session, no wait, use dictation session, and update the imports. Basically everywhere it's used, so yeah.",
-    reference: "Rename the hook to useDictationSession, and update the imports everywhere it's used.",
+    reference:
+      "Rename the hook to useDictationSession, and update the imports everywhere it's used.",
     fixes: ["useDictationSession"],
     drops: ["voice session", "no wait", "basically", "so yeah"],
   },
@@ -850,7 +844,8 @@ const LOOKALIKE: readonly AuthoredCase[] = [
     style: "deepgram",
     source: "lookalike",
     raw: "I think it's the cache, but I'm not sure, so check that before you change anything.",
-    reference: "I think it's the cache, but I'm not sure, so check that before you change anything.",
+    reference:
+      "I think it's the cache, but I'm not sure, so check that before you change anything.",
     keep: ["I think", "not sure"],
   },
   {
