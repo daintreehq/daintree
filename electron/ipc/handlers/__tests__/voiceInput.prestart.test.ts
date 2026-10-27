@@ -60,6 +60,7 @@ const shared = vi.hoisted(() => ({
   names: null as null | Promise<{ hosts: string[]; projects: string[]; worktrees: string[] }>,
   /** The names the correction service was last handed. */
   correctionNames: null as string[] | null | undefined,
+  correctionTerminalOutput: undefined as string | undefined,
 }));
 
 vi.mock("../../../window/webContentsRegistry.js", async (importOriginal) => ({
@@ -114,9 +115,10 @@ vi.mock("../../../services/VoiceCorrectionService.js", () => ({
       shared.sessionSignal = signal;
     };
     this.correct = async function (
-      request: { rawText: string },
+      request: { rawText: string; terminalOutput?: string },
       settings: { customDictionary: string[]; knownNames?: string[] }
     ) {
+      shared.correctionTerminalOutput = request.terminalOutput;
       shared.correctionDictionary = settings.customDictionary;
       shared.correctionNames = settings.knownNames;
       return { action: "no_change", confirmedText: request.rawText };
@@ -714,6 +716,7 @@ describe("voiceInput — keyterm target", () => {
   const ptyClient = {
     hasTerminal: vi.fn((id: string) => id === "t-1"),
     getTerminalProjectId: vi.fn((id: string) => (id === "t-1" ? "proj-a" : null)),
+    getTerminalSnapshot: vi.fn(async (): Promise<{ lines: string[] } | null> => null),
   };
 
   beforeEach(() => {
@@ -728,6 +731,7 @@ describe("voiceInput — keyterm target", () => {
     shared.correctionDictionary = null;
     shared.names = null;
     shared.correctionNames = null;
+    shared.correctionTerminalOutput = undefined;
     sender.destroyed = false;
     fakeEvent.sender = makeSender();
     const win = { webContents: { send: vi.fn() }, isDestroyed: vi.fn(() => false) };
@@ -871,6 +875,62 @@ describe("voiceInput — keyterm target", () => {
     fakeEvent.sender = makeSender();
     await getHandler("voice-input:correct")(fakeEvent, { rawText: "fix it", terminalId: "t-1" });
     expect(shared.correctionNames).toEqual([]);
+  });
+
+  describe("cleanup terminal output", () => {
+    const correct = () =>
+      getHandler("voice-input:correct")(fakeEvent, {
+        rawText: "go with the shin",
+        terminalId: "t-1",
+      });
+
+    beforeEach(() => {
+      shared.voiceInput = { correctionEnabled: true };
+      ptyClient.getTerminalSnapshot.mockResolvedValue({
+        lines: ["Migration or the shim?", "> "],
+      });
+    });
+
+    it("sends the target terminal's recent output", async () => {
+      await correct();
+      expect(ptyClient.getTerminalSnapshot).toHaveBeenCalledWith("t-1");
+      expect(shared.correctionTerminalOutput).toBe("Migration or the shim?\n>");
+    });
+
+    it("keeps credential-shaped lines off the request", async () => {
+      const secret = `ghp_${"a1B2".repeat(9)}`;
+      ptyClient.getTerminalSnapshot.mockResolvedValue({
+        lines: [`export GITHUB_TOKEN=${secret}`, "", "Migration or the shim?"],
+      });
+      await correct();
+      expect(shared.correctionTerminalOutput).toBe("Migration or the shim?");
+      expect(shared.correctionTerminalOutput).not.toContain(secret);
+    });
+
+    it("reads no output from a terminal another project owns", async () => {
+      shared.viewProjectId = "proj-b";
+      await correct();
+      expect(ptyClient.getTerminalSnapshot).not.toHaveBeenCalled();
+      expect(shared.correctionTerminalOutput).toBeUndefined();
+    });
+
+    it("reads no output from a terminal main doesn't track", async () => {
+      await getHandler("voice-input:correct")(fakeEvent, {
+        rawText: "go with the shin",
+        terminalId: "t-9",
+      });
+      expect(ptyClient.getTerminalSnapshot).not.toHaveBeenCalled();
+      expect(shared.correctionTerminalOutput).toBeUndefined();
+    });
+
+    it("still cleans up when the terminal can't be read", async () => {
+      ptyClient.getTerminalSnapshot.mockRejectedValue(new Error("gone"));
+      await expect(correct()).resolves.toEqual({
+        action: "no_change",
+        correctedText: "go with the shin",
+      });
+      expect(shared.correctionTerminalOutput).toBeUndefined();
+    });
   });
 
   it("rejects a malformed start without superseding the one in flight", async () => {

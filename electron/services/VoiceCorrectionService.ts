@@ -48,13 +48,14 @@ const MIN_OUTPUT_TOKENS = 1024;
 const OUTPUT_TOKENS_PER_CHAR = 1.5;
 const OUTPUT_TOKENS_OVERHEAD = 256;
 const FILE_LINK_MAX_OUTPUT_TOKENS = 256;
-const PROMPT_CACHE_PREFIX = "voice-correction-v10";
+const PROMPT_CACHE_PREFIX = "voice-correction-v11";
 // OpenAI rejects a prompt_cache_key longer than 64 characters.
 const PROMPT_CACHE_KEY_MAX_LENGTH = 64;
 const FILE_LINK_DETECTION_TIMEOUT_MS = 4000;
 const REWRITE_CACHE_PREFIX = "voice-rewrite-v1";
 const MIN_REWRITE_TIMEOUT_MS = 10000;
 const FILE_LINK_CACHE_PREFIX = "voice-file-link-v2";
+const PROMPT_TAG_OPEN_RE = /<(?=\/?(?:terminal_output|target|job|confirmed_history|uncertain)\b)/gi;
 const LEADING_FILLER_RE = /^(?:\s*(?:um|uh)[\s,.;:!-]+)+/i;
 
 const FILE_LINK_DETECTION_SCHEMA = {
@@ -152,7 +153,8 @@ export interface VoiceCorrectionSettings {
 export interface VoiceCorrectionRequest {
   rawText: string;
   recentContext?: string[];
-  rightContext?: string;
+  /** What the dictated terminal recently printed, redacted and bounded; evidence for what was heard, never text to correct. */
+  terminalOutput?: string;
   reason?: string;
   segmentCount?: number;
   uncertainWords?: string[];
@@ -432,8 +434,11 @@ export class VoiceCorrectionService {
         : request.rawText;
     parts.push(`<target>\n${targetText}\n</target>`);
 
-    if (request.rightContext?.trim()) {
-      parts.push(`<right_context>\n${request.rightContext.trim()}\n</right_context>`);
+    if (request.terminalOutput?.trim()) {
+      // Output the terminal printed must not be able to close its own block or
+      // open a <target> of its own.
+      const output = request.terminalOutput.trim().replace(PROMPT_TAG_OPEN_RE, "‹");
+      parts.push(`<terminal_output>\n${output}\n</terminal_output>`);
     }
 
     return parts.join("\n\n");
@@ -717,6 +722,7 @@ export class VoiceCorrectionService {
     logDebug(`${P} Calling Responses API`, {
       model,
       contextLen: request.recentContext?.length ?? 0,
+      terminalOutputLen: request.terminalOutput?.length ?? 0,
       reason: request.reason ?? "unspecified",
       segmentCount: request.segmentCount ?? 0,
     });

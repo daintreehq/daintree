@@ -177,9 +177,11 @@ function namesCredential(run: string): boolean {
   });
 }
 
-function isCodeValue(value: string, call: string | undefined): boolean {
+// A number is code to a keyterm filter, but strict callers send the line on,
+// where `PGPASSWORD=123456` is a password.
+function isCodeValue(value: string, call: string | undefined, strict: boolean): boolean {
   if (call !== undefined) return call === "()";
-  if (/^\d+$/.test(value) || ENV_REFERENCE_RE.test(value)) return true;
+  if ((!strict && /^\d+$/.test(value)) || ENV_REFERENCE_RE.test(value)) return true;
   return TYPE_WORDS.has(value.toLowerCase()) || MEMBER_CHAIN_RE.test(value);
 }
 
@@ -190,7 +192,7 @@ function namesHeldCredential(name: string): boolean {
   return wordsOf(name).some((word) => ASSIGNED_CREDENTIAL_WORDS.has(word.toLowerCase()));
 }
 
-function assignsCredential(text: string): boolean {
+function assignsCredential(text: string, strict: boolean): boolean {
   for (const match of text.matchAll(ASSIGNMENT_RE)) {
     const [, name, quote, value, call] = match;
     if (!namesHeldCredential(name)) continue;
@@ -200,7 +202,7 @@ function assignsCredential(text: string): boolean {
       if (text.slice(match.index + match[0].length).trim() === "") return true;
       continue;
     }
-    if (!isCodeValue(value, call)) return true;
+    if (!isCodeValue(value, call, strict)) return true;
   }
   return false;
 }
@@ -208,12 +210,12 @@ function assignsCredential(text: string): boolean {
 // A shell argument is a literal, so unlike an assignment a dotted value isn't
 // taken for code. Help text's `--token string` and `--password $DB_PASSWORD`
 // still aren't credentials.
-function passesCredentialFlag(text: string): boolean {
+function passesCredentialFlag(text: string, strict: boolean): boolean {
   for (const [, name, quote, value] of text.matchAll(FLAG_VALUE_RE)) {
     if (!namesHeldCredential(name)) continue;
     if (quote) return true;
     if (!value || value.startsWith("-")) continue;
-    if (/^\d+$/.test(value) || ENV_REFERENCE_RE.test(value)) continue;
+    if ((!strict && /^\d+$/.test(value)) || ENV_REFERENCE_RE.test(value)) continue;
     if (!TYPE_WORDS.has(value.toLowerCase())) return true;
   }
   return false;
@@ -230,15 +232,16 @@ export function isSecretShaped(term: string): boolean {
 /**
  * Whether `text` holds a credential: a known secret format, a key-shaped run,
  * credentials in a URL or a `.netrc` line, or a value assigned to a
- * credential name or passed to a credential flag.
+ * credential name or passed to a credential flag. `strict` also counts a
+ * bare number there, for text that leaves the machine as written.
  */
-export function holdsCredential(text: string): boolean {
+export function holdsCredential(text: string, strict = false): boolean {
   if (findSecretInValue(text)) return true;
   if (URL_CREDENTIALS_RE.test(text) || NETRC_RE.test(text)) return true;
   for (const [run] of text.matchAll(CANDIDATE_RUN_RE)) {
     if (isCredentialShaped(run)) return true;
   }
-  return assignsCredential(text) || passesCredentialFlag(text);
+  return assignsCredential(text, strict) || passesCredentialFlag(text, strict);
 }
 
 /**
@@ -264,13 +267,14 @@ const BARE_RUN_RE = /^[\s│┃║|⎿]*[A-Za-z0-9_\-+/=]+[\s│┃║|]*$/;
  * lines that are still one bare run of key characters, up to a blank line. Cutting the key out
  * instead would leave any piece that slipped past detection, or that sat
  * beside a recognised token, free to match as an identifier. In the lines that
- * remain, opaque IDs and bare credential names are blanked.
+ * remain, opaque IDs and bare credential names are blanked. `strict` is for
+ * lines sent on as text rather than mined for words (see {@link holdsCredential}).
  */
-export function redactSecretShapedLines(lines: readonly string[]): string[] {
+export function redactSecretShapedLines(lines: readonly string[], strict = false): string[] {
   let wrapping = false;
   let firstAfter = false;
   return lines.map((line) => {
-    if (holdsCredential(line)) {
+    if (holdsCredential(line, strict)) {
       wrapping = true;
       firstAfter = true;
       return "";

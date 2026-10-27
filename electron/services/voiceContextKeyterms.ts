@@ -259,7 +259,7 @@ function isValidTerm(term: string): boolean {
   return true;
 }
 
-function stripAnsi(text: string): string {
+export function stripAnsi(text: string): string {
   return text.replace(OSC_RE, "").replace(ANSI_RE, "");
 }
 
