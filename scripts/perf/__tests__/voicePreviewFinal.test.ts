@@ -108,7 +108,14 @@ describe("collectSegments", () => {
           startResult: { ok: false, error: "nope" },
           reconnects: 1,
           droppedReplay: 2,
-          vad: { forks: 1, ready: 0, speechStarts: 0, speechEnds: 0, errors: 1, unexpectedExits: 0 },
+          vad: {
+            forks: 1,
+            ready: 0,
+            speechStarts: 0,
+            speechEnds: 0,
+            errors: 1,
+            unexpectedExits: 0,
+          },
         }
       )
     );
@@ -293,9 +300,7 @@ describe("scorePolicy", () => {
   });
 
   it("reports an undefined ratio as null, not zero", () => {
-    const clean = [
-      scoreSession({ clip: "a", pass: 1 }, [segment(" commit", "commit")], "commit"),
-    ];
+    const clean = [scoreSession({ clip: "a", pass: 1 }, [segment(" commit", "commit")], "commit")];
     const policy = scorePolicy("any", clean);
     expect(policy.precision).toBeNull();
     expect(policy.recall).toBeNull();

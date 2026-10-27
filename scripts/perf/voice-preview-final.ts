@@ -406,7 +406,9 @@ async function main(): Promise<number> {
   try {
     options = parseArgs(process.argv.slice(2));
   } catch (error) {
-    console.error(`[voice-preview-final] ${formatErrorMessage(error, "bad arguments")}\n\n${USAGE}`);
+    console.error(
+      `[voice-preview-final] ${formatErrorMessage(error, "bad arguments")}\n\n${USAGE}`
+    );
     return 1;
   }
   if (!options) {
@@ -440,8 +442,7 @@ async function main(): Promise<number> {
       voice: process.env.VOICE_REPLAY_VOICE,
     })
   );
-  const audioMinutes =
-    (clips.reduce((n, clip) => n + clip.audioMs, 0) * options.repeats) / 60_000;
+  const audioMinutes = (clips.reduce((n, clip) => n + clip.audioMs, 0) * options.repeats) / 60_000;
   console.error(
     `[voice-preview-final] ${clips.length * options.repeats} sessions, ${audioMinutes.toFixed(1)} min of audio, about $${(audioMinutes * LIVE_TRANSCRIBE_USD_PER_MINUTE).toFixed(2)}`
   );

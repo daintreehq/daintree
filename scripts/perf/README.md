@@ -374,14 +374,14 @@ A segment's preview is every delta the provider emitted for its item before the 
 
 Words go through the replay benchmark's `normaliseWords`, so casing, punctuation, spacing and spelled-out numbers can't disagree. Each segment's final is aligned against its preview, and every run of words between matches is a span:
 
-| Kind | Meaning |
-| --- | --- |
-| changed | Final words in place of preview words with different letters |
-| spacing | The same letters split differently (`web socket` and `websocket`) |
-| inserted | Final words the preview didn't have, between matched words |
-| suffix | Final words after the preview's last match, where the preview had nothing |
-| no-preview | A segment whose preview had no words |
-| drop | Preview words the final left out: nothing to flag |
+| Kind       | Meaning                                                                   |
+| ---------- | ------------------------------------------------------------------------- |
+| changed    | Final words in place of preview words with different letters              |
+| spacing    | The same letters split differently (`web socket` and `websocket`)         |
+| inserted   | Final words the preview didn't have, between matched words                |
+| suffix     | Final words after the preview's last match, where the preview had nothing |
+| no-preview | A segment whose preview had no words                                      |
+| drop       | Preview words the final left out: nothing to flag                         |
 
 The finals are then joined in order and aligned against the clip's reference, and each final word is right or wrong by that alignment, wrong being a substitution or an insertion. Four policies are fixed in `lib/voicePreviewFinalScore.ts` before any run: flag every word the preview didn't have (`any`), only words that replaced preview words (`substituted`), those less spacing (`changed`), and changed plus inserted (`interior`). Each reports how many words it flags, how many of those are wrong and right, its precision, the wrong words it misses and its recall, and its lift over the base wrong-word rate (1× is no better than random). The report also counts the finals that match their preview character for character, gives the headline under a literal normaliser (casing and punctuation only), and breaks it down by span kind, pass and clip.
 
