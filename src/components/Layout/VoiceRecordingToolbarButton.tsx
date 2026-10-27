@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, type CSSProperties, type ReactNode } from "react";
 import { Lock, Mic } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -39,6 +39,18 @@ const TAU_ATTACK = 0.22;
 const TAU_RELEASE = 0.5;
 const AUDIO_SMOOTH = 0.15;
 const BASE_THICKNESS = 2; // px
+
+/** A 2px band on the ring's edge: the orbit's, the wait arc's, the held ring's. */
+const RING_BAND: CSSProperties = {
+  padding: `${BASE_THICKNESS}px`,
+  mask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
+  WebkitMask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
+  maskComposite: "exclude",
+  WebkitMaskComposite: "xor",
+};
+
+// Only listening spends the accent; waiting and paused rings are neutral ink.
+const RING_INK = "var(--color-text-secondary)";
 
 function formatDuration(seconds: number): string {
   const minutes = Math.floor(seconds / 60);
@@ -270,33 +282,9 @@ export function VoiceRecordingToolbarButton({
   useEffect(() => {
     if (!showOrbit) return;
 
-    // Paused: freeze the ring at a dim static state. Skip the RAF loop so the
-    // toolbar isn't redrawing 60 times a second while the user is thinking.
-    if (isPaused) {
-      const wrapper = wrapperRef.current;
-      if (wrapper) wrapper.style.transform = `rotate(0deg) translateZ(0)`;
-      const ring = ringRef.current;
-      if (ring) {
-        ring.style.background = [
-          `conic-gradient(from 0deg,`,
-          `transparent 200deg,`,
-          `rgb(from var(--theme-accent-primary) r g b / 0.04) 280deg,`,
-          `rgb(from var(--theme-accent-primary) r g b / 0.12) 340deg,`,
-          `rgb(from var(--theme-accent-primary) r g b / 0.2) 360deg,`,
-          `transparent 360deg)`,
-        ].join(" ");
-      }
-      const core = dotCoreRef.current;
-      if (core) core.style.opacity = "0.35";
-      const halo = dotHaloRef.current;
-      if (halo) {
-        halo.style.boxShadow = "none";
-        halo.style.opacity = "0.2";
-      }
-      const track = trackRef.current;
-      if (track) track.style.opacity = "0.06";
-      return;
-    }
+    // Paused draws a still neutral ring instead of the orbit, and no RAF loop
+    // runs: the toolbar isn't redrawn 60 times a second while the user thinks.
+    if (isPaused) return;
 
     let lastTime = performance.now();
     let angle = 0;
@@ -354,12 +342,17 @@ export function VoiceRecordingToolbarButton({
         core.style.opacity = String(0.82 + level * 0.18);
       }
 
+      // A glow only reads as light on a dark strip; on a light theme the
+      // halo lands as a pale ghost of the dot, so the dot goes without.
       const halo = dotHaloRef.current;
       if (halo) {
+        const glows = document.documentElement.dataset.colorMode !== "light";
         const haloAlpha = (0.18 + level * 0.22).toFixed(3);
         const haloBlur = 6 + level * 6;
-        halo.style.boxShadow = `0 0 ${haloBlur}px rgb(from var(--theme-accent-primary) r g b / ${haloAlpha})`;
-        halo.style.opacity = String(0.5 + level * 0.5);
+        halo.style.boxShadow = glows
+          ? `0 0 ${haloBlur}px rgb(from var(--theme-accent-primary) r g b / ${haloAlpha})`
+          : "none";
+        halo.style.opacity = glows ? String(0.5 + level * 0.5) : "0";
       }
 
       const track = trackRef.current;
@@ -464,48 +457,58 @@ export function VoiceRecordingToolbarButton({
               void voiceRecordingService.focusActiveTarget();
             }}
             className={cn(
-              "toolbar-icon-button relative mr-0.5 text-text-primary",
+              "toolbar-icon-button relative mr-0.5",
+              isPaused ? "text-text-secondary" : "text-text-primary",
               "hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]"
             )}
             aria-label={tooltipTitle}
           >
             <Mic className="h-4 w-4" />
-            {/* Arming ring — static accent border painted during the
-              pre-audio confirmation window. Replaces the orbit until
-              audio is hot, so the user sees an immediate confirmation
-              that the hotkey was registered. */}
+            {/* Waiting ring — arming, the mic starting, reconnecting and
+              finishing. It paints from the hotkey press, so the press is
+              acknowledged at once, and spins neutral: the accent orbit takes
+              over only once the mic is hearing. */}
             {showArming && (
+              <>
+                <span
+                  aria-hidden="true"
+                  className="absolute inset-1 rounded-full pointer-events-none"
+                  style={{ ...RING_BAND, background: RING_INK, opacity: 0.2 }}
+                />
+                <span
+                  aria-hidden="true"
+                  className="absolute inset-1 rounded-full pointer-events-none animate-spin motion-reduce:animate-none"
+                  data-voice-ring="wait"
+                  style={{
+                    ...RING_BAND,
+                    background: `conic-gradient(${RING_INK} 0deg 100deg, transparent 100deg)`,
+                  }}
+                />
+              </>
+            )}
+            {/* Held ring — a pause the user chose: still, whole, neutral. */}
+            {showOrbit && isPaused && (
               <span
                 aria-hidden="true"
                 className="absolute inset-1 rounded-full pointer-events-none"
-                style={{
-                  background: `var(--theme-accent-primary)`,
-                  opacity: 0.55,
-                  mask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
-                  WebkitMask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
-                  maskComposite: "exclude",
-                  WebkitMaskComposite: "xor",
-                  padding: `${BASE_THICKNESS}px`,
-                }}
+                data-voice-ring="held"
+                style={{ ...RING_BAND, background: RING_INK, opacity: 0.7 }}
               />
             )}
             {/* Orbit overlay — absolute inset on the relative Button. No
               contain:strict at this scale: the toolbar button is a flex
               child and clipping the orbit would crop the ring. */}
-            {showOrbit && (
+            {showOrbit && !isPaused && (
               <>
                 <span
                   ref={trackRef}
                   aria-hidden="true"
                   className="absolute inset-1 rounded-full pointer-events-none"
+                  data-voice-ring="orbit"
                   style={{
+                    ...RING_BAND,
                     opacity: 0.08,
                     background: `var(--theme-accent-primary)`,
-                    mask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
-                    WebkitMask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
-                    maskComposite: "exclude",
-                    WebkitMaskComposite: "xor",
-                    padding: `${BASE_THICKNESS}px`,
                     transition: "opacity var(--duration-75) ease-out",
                   }}
                 />
@@ -515,26 +518,17 @@ export function VoiceRecordingToolbarButton({
                   className="absolute inset-1 pointer-events-none"
                   style={{ willChange: "transform" }}
                 >
-                  <span
-                    ref={ringRef}
-                    className="absolute inset-0 rounded-full"
-                    style={{
-                      padding: `${BASE_THICKNESS}px`,
-                      mask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
-                      WebkitMask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
-                      maskComposite: "exclude",
-                      WebkitMaskComposite: "xor",
-                    }}
-                  />
+                  <span ref={ringRef} className="absolute inset-0 rounded-full" style={RING_BAND} />
                   <span
                     ref={dotHaloRef}
-                    className="absolute rounded-full bg-daintree-accent/30"
+                    className="absolute rounded-full"
                     style={{
                       width: "6px",
                       height: "6px",
-                      top: 0,
+                      top: BASE_THICKNESS / 2,
                       left: "50%",
-                      transform: "translate(-50%, -35%)",
+                      transform: "translate(-50%, -50%)",
+                      background: "rgb(from var(--theme-accent-primary) r g b / 0.3)",
                     }}
                   />
                   <span
@@ -543,9 +537,9 @@ export function VoiceRecordingToolbarButton({
                     style={{
                       width: "3.5px",
                       height: "3.5px",
-                      top: 0,
+                      top: BASE_THICKNESS / 2,
                       left: "50%",
-                      transform: "translate(-50%, -15%)",
+                      transform: "translate(-50%, -50%)",
                     }}
                   />
                 </div>

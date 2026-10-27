@@ -56,8 +56,29 @@ export interface InputBarColors {
   waitEdge: string;
   /** The wait's caption, on the border: fitted to 4.5:1 over the pane, the shell and the wash. */
   waitCaption: string;
+  /**
+   * The mic's listening orbit. The shell's own accent, so the orbit and the
+   * listening shell around it are one signal in one hue, leaned toward the
+   * foreground only as far as 3:1 against the listening fill and the mic's
+   * disc needs: it is the one mark that says the mic is hearing.
+   */
+  voiceSignal: string;
+  /**
+   * The ring round a paused mic: neutral, as a pause is the user's and not a
+   * signal, fitted to 3:1 against the mic's disc at rest and hovered.
+   */
+  voiceHeld: string;
   isDark: boolean;
 }
+
+/** How much accent the listening shell's fill carries (`HybridInputBar`). */
+export const VOICE_LISTENING_FILL_MIX = 12;
+
+/** The mic's disc over the shell's fill, at rest and hovered (`VoiceInputButton`). */
+const VOICE_DISC_MIXES = [12, 18] as const;
+
+/** The orbit's dot at the quietest a listening voice leaves it (`VoiceInputButton`). */
+export const VOICE_ORBIT_MIN_OPACITY = 0.82;
 
 type Rgb = readonly [number, number, number];
 
@@ -132,6 +153,12 @@ function fromOklab([L, a, b]: Rgb): Rgb {
   ];
 }
 
+/** `x` at `alpha` painted over opaque `y`, as the compositor blends it. */
+function over(x: Rgb, y: Rgb, alpha: number): Rgb {
+  const blend = (i: 0 | 1 | 2) => x[i] * alpha + y[i] * (1 - alpha);
+  return [blend(0), blend(1), blend(2)];
+}
+
 /** What `color-mix(in oklab, x p%, y)` paints, for opaque x and y. */
 function mixOklab(x: Rgb, y: Rgb, p: number): Rgb {
   const [a, b] = [toOklab(x), toOklab(y)];
@@ -204,6 +231,8 @@ export function resolveInputBarColors(theme: ITheme): InputBarColors {
   let placeholderSelectedPct = 72;
   let waitEdgePct = 60;
   let waitCaptionPct = 72;
+  let voiceSignal = acInk?.css ?? accent;
+  let voiceHeldPct = 60;
   if (fg && bg) {
     const rest = mixOklab(bg, BLACK, restDim);
     const hover = mixOklab(bg, BLACK, hoverDim);
@@ -216,6 +245,14 @@ export function resolveInputBarColors(theme: ITheme): InputBarColors {
     const waitFill = mixOklab(fg, rest, WAIT_FILL_MIX / 100);
     waitEdgePct = fitMix(fg, bg, 40, 3.1, [rest, waitFill, bg]) ?? 100;
     waitCaptionPct = fitMix(fg, bg, 48, 4.6, [rest, waitFill, bg]) ?? 100;
+    voiceHeldPct =
+      fitMix(
+        fg,
+        bg,
+        40,
+        3.1,
+        VOICE_DISC_MIXES.map((p) => over(fg, rest, p / 100))
+      ) ?? 100;
     if (acInk) {
       const ringPct = fitMix(acInk.rgb, bg, 60, 3.1, [bg]);
       // A cursor too close to its background (Rosé Pine Dawn's) cannot reach
@@ -225,6 +262,27 @@ export function resolveInputBarColors(theme: ITheme): InputBarColors {
         ringPct !== null
           ? mix(acInk.css, ringPct, background)
           : mix(fgCss, fitMix(fg, acInk.rgb, 0, 3.1, [bg]) ?? 100, acInk.css);
+      // The disc is the foreground at low alpha over the listening fill, and
+      // the dot is the signal at its quietest opacity over the disc: fit what
+      // the compositor actually paints, not the opaque inks.
+      const listening = mixOklab(acInk.rgb, bg, VOICE_LISTENING_FILL_MIX / 100);
+      const discs = VOICE_DISC_MIXES.map((p) => over(fg, listening, p / 100));
+      // A palette that cannot reach 3:1 at any lean goes all the way to the
+      // foreground, as every other fit here does.
+      let lean = 100;
+      for (let p = 0; p < 100; p++) {
+        const ink = mixOklab(fg, acInk.rgb, p / 100);
+        const reads = discs.every(
+          (disc) => contrast(over(ink, disc, VOICE_ORBIT_MIN_OPACITY), disc) >= 3.1
+        );
+        if (reads) {
+          lean = p;
+          break;
+        }
+      }
+      // Emitted as a resolved colour: the orbit derives its alpha steps from it
+      // with relative colour syntax, once per frame.
+      if (lean > 0) voiceSignal = toHex(mixOklab(fg, acInk.rgb, lean / 100));
     }
   }
 
@@ -253,6 +311,8 @@ export function resolveInputBarColors(theme: ITheme): InputBarColors {
     waitFill: mix(fgCss, WAIT_FILL_MIX, mix(background, restDim * 100, "black")),
     waitEdge: mix(fgCss, waitEdgePct, background),
     waitCaption: mix(fgCss, waitCaptionPct, background),
+    voiceSignal,
+    voiceHeld: mix(fgCss, voiceHeldPct, background),
     isDark,
   };
 }
