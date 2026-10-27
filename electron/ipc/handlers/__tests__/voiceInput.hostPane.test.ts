@@ -437,6 +437,8 @@ describe("voiceInput — dictating into a host's pane", () => {
     reader.readCorrection.mockResolvedValueOnce({ ...CORRECTION, agentReply });
     await start(view, TERMINAL, "replied");
     await stop(view, "replied");
+    // Read as the stop landed, before any passage asked.
+    expect(reader.readCorrection).toHaveBeenCalledTimes(1);
     for (const rawText of ["go with the shin", "and the second passage"]) {
       await getHandler(CHANNELS.VOICE_INPUT_CORRECT)(
         { sender: view },
@@ -478,6 +480,24 @@ describe("voiceInput — dictating into a host's pane", () => {
 
       await expect(askAtStop()).resolves.toMatchObject({ correctedText: "run the tests" });
       expect(shared.correctCalls).toHaveLength(1);
+    });
+
+    it("is the stop's when the host read the same agent reply again", async () => {
+      const reply = {
+        text: "Shim or migration?",
+        truncated: false,
+        recordedAt: 1,
+        newerRecordsFollow: false,
+      };
+      reader.readCorrection.mockResolvedValue({ ...CORRECTION, agentReply: { ...reply } });
+      await start(view, TERMINAL, "paused");
+      await prefetch();
+      await vi.waitFor(() => expect(shared.correctCalls).toHaveLength(1));
+      await stop(view, "paused");
+
+      await expect(askAtStop()).resolves.toMatchObject({ correctedText: "run the tests" });
+      expect(shared.correctCalls).toHaveLength(1);
+      expect(shared.correctCalls[0]?.request.agentReply).toEqual(reply);
     });
 
     it("gives way to the stop's own when the agent's reply changed since, the screen alike", async () => {

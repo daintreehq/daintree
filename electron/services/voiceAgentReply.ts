@@ -15,8 +15,9 @@ const REPLY_READ_BYTES = 8 * 1024;
  * A reply's text ready to send: credential-shaped lines emptied, blank runs
  * folded, then the newest characters kept within the bound, starting at a
  * word. A head the transcript read already cut loses its first paragraph,
- * since the cut may have taken the name that marks a credential below it.
- * Null when nothing readable is left.
+ * since the cut may have taken the name that marks a credential below it, and
+ * with no paragraph break to stop at, nothing is left to trust. Null when
+ * nothing readable is left.
  */
 export function boundAgentReply(
   text: string,
@@ -25,7 +26,8 @@ export function boundAgentReply(
   let lines = text.split(/\r?\n/);
   if (headCut) {
     const end = lines.findIndex((line, index) => index > 0 && line.trim() === "");
-    lines = end < 0 ? lines.slice(1) : lines.slice(end + 1);
+    if (end < 0) return null;
+    lines = lines.slice(end + 1);
   }
   const kept: string[] = [];
   for (const raw of readTerminalLines(lines, true)) {

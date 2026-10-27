@@ -1330,8 +1330,15 @@ describe("voiceInput — keyterm target", () => {
       it("reads it once with the output while the stop drains, for every passage after", async () => {
         await startWith({ terminalId: "t-1" });
         expect(readAgentReply).not.toHaveBeenCalled();
-        await stop();
+        let finishDrain!: () => void;
+        shared.drainPromise = new Promise((resolve) => {
+          finishDrain = resolve;
+        });
+        const stopping = stop();
+        await vi.waitFor(() => expect(shared.calls).toContain("stopGracefully"));
         expect(readAgentReply).toHaveBeenCalledTimes(1);
+        finishDrain();
+        await stopping;
         agentReplyFixture.reply = { ...REPLY, text: "A later reply." };
         for (const rawText of ["go with the shin", "and the second passage"]) {
           await getHandler("voice-input:correct")(fakeEvent, {
@@ -1343,6 +1350,28 @@ describe("voiceInput — keyterm target", () => {
         }
         expect(readAgentReply).toHaveBeenCalledTimes(1);
       });
+
+      it("reads it fresh for each chunk while the dictation runs, then keeps the stop's", async () => {
+        await startWith({ terminalId: "t-1" });
+        const correctChunk = (rawText: string) =>
+          getHandler("voice-input:correct")(fakeEvent, {
+            rawText,
+            terminalId: "t-1",
+            sessionId: currentSessionId,
+          });
+        await correctChunk("the first chunk");
+        expect(shared.correctionAgentReply).toEqual(REPLY);
+        const newer = { ...REPLY, text: "A newer reply." };
+        agentReplyFixture.reply = newer;
+        await correctChunk("the second chunk");
+        expect(shared.correctionAgentReply).toEqual(newer);
+        const atStop = { ...REPLY, text: "As it stopped." };
+        agentReplyFixture.reply = atStop;
+        await stop();
+        agentReplyFixture.reply = { ...REPLY, text: "Too late." };
+        await correctChunk("the rest");
+        expect(shared.correctionAgentReply).toEqual(atStop);
+      });
     });
 
     it("reads none at the stop with cleanup off", async () => {
@@ -1350,6 +1379,7 @@ describe("voiceInput — keyterm target", () => {
       await startWith({ terminalId: "t-1" });
       await stop();
       expect(ptyClient.getTerminalSnapshot).not.toHaveBeenCalled();
+      expect(readAgentReply).not.toHaveBeenCalled();
     });
 
     it("reads none at the stop once cleanup was turned off mid-dictation", async () => {
@@ -1357,6 +1387,7 @@ describe("voiceInput — keyterm target", () => {
       shared.voiceInput = { correctionEnabled: false };
       await stop();
       expect(ptyClient.getTerminalSnapshot).not.toHaveBeenCalled();
+      expect(readAgentReply).not.toHaveBeenCalled();
     });
   });
 

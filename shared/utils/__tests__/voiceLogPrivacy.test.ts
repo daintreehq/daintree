@@ -243,6 +243,12 @@ describe("the log-call scan", () => {
     expect(scan("warn('a', { n: request.recentPrompts.length });")).toEqual([]);
   });
 
+  it("flags a terminal's output and its agent's reply, but not their lengths", () => {
+    expect(scan("warn('a', { terminalOutput });")).not.toEqual([]);
+    expect(scan("warn('a', { reply: request.agentReply });")).not.toEqual([]);
+    expect(scan("warn('a', { n: request.terminalOutput.length, agentReplyLen });")).toEqual([]);
+  });
+
   it("flags microphone names", () => {
     expect(scan("warn('a', { mic: track.label });")).not.toEqual([]);
     expect(scan("warn('a', { deviceLabel });")).not.toEqual([]);

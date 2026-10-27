@@ -295,7 +295,7 @@ function settingsFor(
 }
 
 // The reply's times, stamped as long before `now` as the corpus says.
-function agentReplyAt(reply: CorpusAgentReply, now: number): VoiceAgentReply {
+export function agentReplyAt(reply: CorpusAgentReply, now: number): VoiceAgentReply {
   const before = (minutes: number | null) => (minutes === null ? null : now - minutes * 60_000);
   const { observedState } = reply;
   return {

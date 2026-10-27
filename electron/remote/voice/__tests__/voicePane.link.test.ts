@@ -299,6 +299,20 @@ describe("a host that can't give the pane's context gives none", () => {
     await expect(client.readCorrection(HOST, SCOPE, { timeoutMs: 500 })).resolves.toEqual(answer);
   });
 
+  it("carries a reply with nothing stamped and no state, as long as it may be", async () => {
+    const answer = {
+      ...CORRECTION,
+      agentReply: {
+        text: "x".repeat(MAX_CORRECTION_REPLY_CHARS),
+        truncated: true,
+        recordedAt: null,
+        newerRecordsFollow: true,
+      },
+    };
+    deps.readCorrection.mockResolvedValueOnce(answer);
+    await expect(client.readCorrection(HOST, SCOPE, { timeoutMs: 500 })).resolves.toEqual(answer);
+  });
+
   it.each([
     ["too long", { ...REPLY, text: "x".repeat(MAX_CORRECTION_REPLY_CHARS + 1) }],
     ["empty", { ...REPLY, text: "" }],
@@ -307,6 +321,17 @@ describe("a host that can't give the pane's context gives none", () => {
       { ...REPLY, observedState: { state: "pondering", lastStateChangeAt: null } },
     ],
     ["stamped with no time", { ...REPLY, recordedAt: -1 }],
+    ["stamped between milliseconds", { ...REPLY, recordedAt: 1.5 }],
+    [
+      "with a state change stamped with no time",
+      { ...REPLY, observedState: { state: "waiting", lastStateChangeAt: 0 } },
+    ],
+    [
+      "waiting for a reason this Shell doesn't know",
+      { ...REPLY, observedState: { state: "waiting", waitingReason: "?", lastStateChangeAt: 1 } },
+    ],
+    ["with a cut that isn't a flag", { ...REPLY, truncated: "yes" }],
+    ["with newer records that aren't a flag", { ...REPLY, newerRecordsFollow: 1 }],
   ])("drops a reply %s, and keeps the rest of the answer", async (_name, agentReply) => {
     deps.readCorrection.mockResolvedValueOnce({ ...CORRECTION, agentReply });
     const read = await client.readCorrection(HOST, SCOPE, { timeoutMs: 500 });

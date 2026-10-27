@@ -172,7 +172,7 @@ describe("prefetchKey", () => {
     expect(prefetchKey(request, { model: "n" })).not.toBe(key);
   });
 
-  it("tells apart agent replies by anything observed of them, and not by when they were read", () => {
+  it("tells apart agent replies by anything observed of them, whatever order its fields arrive in", () => {
     const reply = {
       text: "Shim or migration?",
       truncated: false,
@@ -196,12 +196,19 @@ describe("prefetchKey", () => {
         {}
       )
     ).toBe(key);
+    const { observedState: _state, ...stateless } = reply;
     for (const changed of [
+      { ...reply, text: "Shim, or migration?" },
+      { ...reply, truncated: true },
+      { ...reply, recordedAt: 1_001 },
       { ...reply, newerRecordsFollow: true },
       { ...reply, observedState: { ...reply.observedState, state: "working" } },
+      { ...reply, observedState: { ...reply.observedState, waitingReason: "question" } },
       { ...reply, observedState: { ...reply.observedState, lastStateChangeAt: 3_000 } },
+      stateless,
     ]) {
       expect(prefetchKey({ ...request, agentReply: changed }, {})).not.toBe(key);
     }
+    expect(prefetchKey(request, {})).not.toBe(key);
   });
 });

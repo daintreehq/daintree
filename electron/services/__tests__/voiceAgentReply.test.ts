@@ -57,12 +57,14 @@ describe("boundAgentReply", () => {
   });
 
   it("keeps the newest text, starting at a word", () => {
-    const head = "older ".repeat(800);
-    const out = boundAgentReply(`${head}\n\nShould I add a shim that reads both keys?`)!;
+    // The bound falls three letters into one of the nine-character words,
+    // which goes whole rather than leave "defgh".
+    const question = "Should I add a shim that reads both keys?";
+    const out = boundAgentReply(`${"abcdefgh ".repeat(400)}\n\n${question}`)!;
     expect(out.cut).toBe(true);
     expect(out.text.length).toBeLessThanOrEqual(MAX_CORRECTION_REPLY_CHARS);
-    expect(out.text.endsWith("Should I add a shim that reads both keys?")).toBe(true);
-    expect(out.text.startsWith("older")).toBe(true);
+    expect(out.text.endsWith(question)).toBe(true);
+    expect(out.text.startsWith("abcdefgh abcdefgh")).toBe(true);
   });
 
   it("drops the first paragraph of a head the transcript read already cut", () => {
@@ -71,7 +73,12 @@ describe("boundAgentReply", () => {
       true
     )!;
     expect(out.text).toBe("Shall I push?");
-    expect(boundAgentReply("only a cut line\nShall I push?", true)!.text).toBe("Shall I push?");
+  });
+
+  it("gives nothing for a cut head with no paragraph break to stop at", () => {
+    // The cut took the line that named the credential its wrapped tail belongs to.
+    expect(boundAgentReply("first fragment\nhunter2\ncorrecthorsebattery", true)).toBeNull();
+    expect(boundAgentReply("first fragment\nhunter2\ncorrecthorsebattery")).not.toBeNull();
   });
 
   it("redacts a credential colour codes split", () => {
@@ -116,6 +123,7 @@ describe("readAgentReplyForCorrection", () => {
       expect.objectContaining({ maxBytes: expect.any(Number) }),
       expect.any(AbortSignal)
     );
+    expect(client.getTerminalAsync).toHaveBeenCalledWith("term-1");
   });
 
   it("sends the reply alone when no state was observed", async () => {
@@ -144,30 +152,45 @@ describe("readAgentReplyForCorrection", () => {
     const failing = {
       getTerminalAsync: vi.fn().mockRejectedValue(new Error("rpc")),
     } as unknown as PtyClient;
-    await expect(readAgentReplyForCorrection(failing, "term-1", 500)).resolves.toMatchObject({
-      text: "Done.",
-    });
+    const failed = await readAgentReplyForCorrection(failing, "term-1", 500);
+    expect(failed?.text).toBe("Done.");
+    expect(failed).not.toHaveProperty("observedState");
     const hanging = {
       getTerminalAsync: vi.fn(() => new Promise(() => {})),
     } as unknown as PtyClient;
-    const reply = readAgentReplyForCorrection(hanging, "term-1", 200);
-    await vi.advanceTimersByTimeAsync(200);
+    let settled = false;
+    const reply = readAgentReplyForCorrection(hanging, "term-1", 200).finally(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(199);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
     const read = await reply;
     expect(read?.text).toBe("Done.");
     expect(read).not.toHaveProperty("observedState");
   });
 
-  it("carries a cut the transcript read made", async () => {
+  it("carries a cut the transcript read made, its cut paragraph dropped", async () => {
     readLastMessage.mockResolvedValue(ok("cut line\n\ntail of a long reply", { truncated: true }));
     const reply = await readAgentReplyForCorrection(clientWith(), "term-1", 500);
+    expect(reply).toMatchObject({ text: "tail of a long reply", truncated: true });
+  });
+
+  it("marks a reply its own bound cut, though the transcript read didn't", async () => {
+    readLastMessage.mockResolvedValue(ok(`${"older words ".repeat(400)}\n\nShall I push?`));
+    const reply = await readAgentReplyForCorrection(clientWith(), "term-1", 500);
     expect(reply?.truncated).toBe(true);
+    expect(reply?.text.endsWith("Shall I push?")).toBe(true);
   });
 
   it.each([
     ["another agent", { status: "unavailable", reason: "provider-mismatch" }],
     ["a store never pinned down", { status: "unavailable", reason: "store-unknown" }],
     ["no reply on record", { status: "unavailable", reason: "no-message" }],
-    ["only an unanswered tool use", ok(null)],
+    [
+      "only an unanswered tool use",
+      { ...ok(null), unansweredToolUses: [{ id: "toolu_1", name: "AskUserQuestion" }] },
+    ],
     ["a reply with nothing readable", ok("API_KEY=sk-live-abcdefghijklmnopqrstuvwxyz0123")],
   ])("gives nothing for %s", async (_name, result) => {
     readLastMessage.mockResolvedValue(result);
@@ -191,8 +214,14 @@ describe("readAgentReplyForCorrection", () => {
       signal = s;
       return new Promise(() => {});
     });
-    const reply = readAgentReplyForCorrection(clientWith(), "term-1", 200);
-    await vi.advanceTimersByTimeAsync(200);
+    let settled = false;
+    const reply = readAgentReplyForCorrection(clientWith(), "term-1", 200).finally(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(199);
+    expect(settled).toBe(false);
+    expect(signal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
     await expect(reply).resolves.toBeNull();
     expect(signal?.aborted).toBe(true);
   });

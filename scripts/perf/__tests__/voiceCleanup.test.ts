@@ -33,7 +33,7 @@ import {
   type Disposition,
   type Trial,
 } from "../lib/voiceCleanupScore";
-import { inputHash, renderReport, requestFor, rescore } from "../voice-cleanup";
+import { agentReplyAt, inputHash, renderReport, requestFor, rescore } from "../voice-cleanup";
 
 // `raw` with the words that spell `name` written as the name, as a cleanup
 // that took them for it would.
@@ -295,17 +295,60 @@ describe("inputHash", () => {
       const hashes = [
         inputHash(passage),
         early,
+        inputHash({ ...passage, agentReply: { ...reply, text: "Shim, or migration?" } }),
+        inputHash({ ...passage, agentReply: { ...reply, truncated: true } }),
         inputHash({ ...passage, agentReply: { ...reply, newerRecordsFollow: true } }),
         inputHash({ ...passage, agentReply: { ...reply, recordedMinutesAgo: 6 } }),
         inputHash({
           ...passage,
           agentReply: { ...reply, observedState: { state: "working", changedMinutesAgo: 0 } },
         }),
+        inputHash({
+          ...passage,
+          agentReply: {
+            ...reply,
+            observedState: { state: "waiting", waitingReason: "question", changedMinutesAgo: 0 },
+          },
+        }),
+        inputHash({
+          ...passage,
+          agentReply: { ...reply, observedState: { state: "waiting", changedMinutesAgo: 3 } },
+        }),
       ];
       expect(new Set(hashes).size).toBe(hashes.length);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("stamps a reply's times as long before the request as the corpus says", () => {
+    const now = 1_800_000_000_000;
+    expect(
+      agentReplyAt(
+        {
+          text: "Shim or migration?",
+          recordedMinutesAgo: 6,
+          newerRecordsFollow: true,
+          observedState: { state: "waiting", waitingReason: "question", changedMinutesAgo: null },
+        },
+        now
+      )
+    ).toEqual({
+      text: "Shim or migration?",
+      truncated: false,
+      recordedAt: now - 6 * 60_000,
+      newerRecordsFollow: true,
+      observedState: { state: "waiting", waitingReason: "question", lastStateChangeAt: null },
+    });
+  });
+
+  it("sends the short answer again with the screen alone, as its twin", () => {
+    const withReply = CLEANUP_CORPUS.find((entry) => entry.id === "context-reply-answer:deepgram");
+    const bare = CLEANUP_CORPUS.find((entry) => entry.id === "context-reply-answer-bare:deepgram");
+    const { id: _id, agentReply, ...rest } = withReply!;
+    const { id: _bareId, ...bareRest } = bare!;
+    expect(agentReply).toBeDefined();
+    expect(bareRest).toEqual(rest);
   });
 
   it("changes with anything its session tells cleanup, and only that", () => {

@@ -143,14 +143,19 @@ describe("readTerminalContextForCorrection", () => {
     newerRecordsFollow: false,
   };
 
-  it("reads the screen and the agent's reply of the same terminal within one budget", async () => {
-    readAgentReply.mockResolvedValue(REPLY);
-    const client = clientWith(vi.fn().mockResolvedValue({ lines: ["screen"] }));
-    await expect(readTerminalContextForCorrection(client, "t-1", 300)).resolves.toEqual({
-      terminalOutput: "screen",
-      agentReply: REPLY,
-    });
+  it("reads the screen and the agent's reply of the same terminal side by side, in one budget", async () => {
+    let answerReply!: (reply: typeof REPLY) => void;
+    readAgentReply.mockReturnValue(new Promise((resolve) => (answerReply = resolve)));
+    let answerScreen!: (snapshot: { lines: string[] }) => void;
+    const snapshot = vi.fn(() => new Promise((resolve) => (answerScreen = resolve)));
+    const client = clientWith(snapshot);
+    const read = readTerminalContextForCorrection(client, "t-1", 300);
+    // Both reads are out before either answers.
+    expect(snapshot).toHaveBeenCalledWith("t-1");
     expect(readAgentReply).toHaveBeenCalledWith(client, "t-1", 300);
+    answerReply(REPLY);
+    answerScreen({ lines: ["screen"] });
+    await expect(read).resolves.toEqual({ terminalOutput: "screen", agentReply: REPLY });
   });
 
   it("keeps whichever read came back when the other gives nothing", async () => {
