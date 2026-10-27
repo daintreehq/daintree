@@ -3480,7 +3480,7 @@ class VoiceRecordingService {
   }
 
   /**
-   * A chunk that landed while its dictation ran, for Restore and undo to move
+   * A chunk that landed while its dictation ran, for an undo or redo to move
    * within the baseline its stop writes later: just its passages, either side.
    */
   private chunkBaseline(
@@ -3519,7 +3519,7 @@ class VoiceRecordingService {
     const current = buffer?.sessionCorrectedText;
     if (!baseline || !current || this.baselineOwners.get(cleanup.panelId) !== cleanup) return null;
     if (current !== baseline.text) {
-      // A Restore or undo moved a chunk inside it meanwhile, so the places
+      // An undo or redo moved a chunk inside it meanwhile, so the places
       // taken at stop no longer hold: each passage is found by its words.
       if (buffer.dictationSessionId !== cleanup.sessionId) return null;
       baseline.text = current;

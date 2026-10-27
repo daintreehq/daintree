@@ -21,11 +21,11 @@ import {
 import { createComposerHistory, outsideDraftWrite } from "../inputEditorExtensions/composerHistory";
 import {
   correctionLanded,
+  correctionReviewField,
   createCorrectionReview,
   diffCorrection,
   endCorrectionReview,
   replayLandedCorrection,
-  restoreCorrection,
   type CorrectionReview,
 } from "../inputEditorExtensions/correctionReview";
 
@@ -165,8 +165,7 @@ function land(view: EditorView, review: CorrectionReview): void {
 
 const marked = (view: EditorView) =>
   [...view.contentDOM.querySelectorAll(".cm-voice-corrected")].map((el) => el.textContent);
-const restoreControl = (view: EditorView) =>
-  view.contentDOM.querySelector<HTMLElement>(".cm-voice-restore");
+const reviewing = (view: EditorView) => view.state.field(correctionReviewField, false) != null;
 
 const INTRO = "Intro. ";
 const RAW = "um open the zoo stand store";
@@ -174,13 +173,13 @@ const CORRECTED = "Open the Zustand store.";
 const review: CorrectionReview = { from: INTRO.length, rawText: RAW, correctedText: CORRECTED };
 
 describe("correction review", () => {
-  it("marks the changed words and offers a named restore control", () => {
+  it("marks the changed words and puts no restore control in the text", () => {
     const view = mount(INTRO + RAW);
     land(view, review);
 
     expect(view.state.doc.toString()).toBe(INTRO + CORRECTED);
     expect(marked(view)).toEqual(["Open", "Zustand store."]);
-    expect(restoreControl(view)?.getAttribute("aria-label")).toBe("Restore original transcription");
+    expect(view.contentDOM.querySelector(".cm-voice-restore")).toBeNull();
     expect(onShown).toHaveBeenCalledWith(review);
   });
 
@@ -189,20 +188,22 @@ describe("correction review", () => {
     land(view, { from: 0, rawText: "fix  the test", correctedText: "fix the test" });
 
     expect(marked(view)).toEqual([]);
-    expect(restoreControl(view)).toBeNull();
+    expect(reviewing(view)).toBe(false);
     expect(onShown).not.toHaveBeenCalled();
   });
 
-  it("fades the marks on its own and keeps the restore control until the next edit", () => {
+  it("fades the marks on its own and keeps the review until the next edit", () => {
     const view = mount(INTRO + RAW);
     land(view, review);
 
     vi.advanceTimersByTime(VOICE_CORRECTION_MARK_DWELL_MS);
     expect(view.contentDOM.querySelectorAll(".cm-voice-corrected-fading")).not.toHaveLength(0);
+    expect(view.contentDOM.querySelector(".cm-voice-restore")).toBeNull();
 
     vi.advanceTimersByTime(VOICE_CORRECTION_MARK_FADE_MS);
     expect(marked(view)).toEqual([]);
-    expect(restoreControl(view)).not.toBeNull();
+    expect(reviewing(view)).toBe(true);
+    expect(view.contentDOM.querySelector(".cm-voice-restore")).toBeNull();
     expect(onShown).toHaveBeenCalledTimes(1);
     const dispatch = vi.spyOn(view, "dispatch");
     vi.advanceTimersByTime(VOICE_CORRECTION_MARK_DWELL_MS * 10);
@@ -210,7 +211,7 @@ describe("correction review", () => {
     dispatch.mockRestore();
 
     view.dispatch({ changes: { from: view.state.doc.length, insert: " ok" } });
-    expect(restoreControl(view)).toBeNull();
+    expect(reviewing(view)).toBe(false);
   });
 
   it("clears the marks on the next edit", () => {
@@ -220,7 +221,7 @@ describe("correction review", () => {
     view.dispatch({ changes: { from: 0, insert: "x" }, userEvent: "input.type" });
 
     expect(marked(view)).toEqual([]);
-    expect(restoreControl(view)).toBeNull();
+    expect(reviewing(view)).toBe(false);
     const dispatch = vi.spyOn(view, "dispatch");
     vi.advanceTimersByTime(VOICE_CORRECTION_MARK_DWELL_MS + VOICE_CORRECTION_MARK_FADE_MS);
     expect(dispatch).not.toHaveBeenCalled();
@@ -237,21 +238,19 @@ describe("correction review", () => {
       outsideDraftWrite({ from: end, insert: more }, view.state.doc.toString() + more, null)
     );
     expect(marked(view)).toEqual(["Open", "Zustand store."]);
-    expect(restoreControl(view)).not.toBeNull();
+    expect(reviewing(view)).toBe(true);
 
     vi.advanceTimersByTime(VOICE_CORRECTION_MARK_DWELL_MS / 2);
     expect(view.contentDOM.querySelectorAll(".cm-voice-corrected-fading")).not.toHaveLength(0);
   });
 
-  it("follows its passage when an outside write lands before it, and restores it there", () => {
+  it("follows its passage when an outside write lands before it", () => {
     const view = mount(INTRO + RAW);
     land(view, review);
 
     view.dispatch(outsideDraftWrite({ from: 0, insert: "Note. " }, "Note. ", null));
     expect(marked(view)).toEqual(["Open", "Zustand store."]);
-
-    restoreControl(view)!.dispatchEvent(new MouseEvent("click", { bubbles: true, button: 0 }));
-    expect(view.state.doc.toString()).toBe("Note. " + INTRO + RAW);
+    expect(view.state.doc.toString()).toBe("Note. " + INTRO + CORRECTED);
   });
 
   it("ends when an outside write takes text out, even next to an identical copy", () => {
@@ -261,13 +260,13 @@ describe("correction review", () => {
     view.dispatch(
       outsideDraftWrite({ from: view.state.doc.length, insert: copy }, "", null, { anchor: 0 })
     );
-    expect(restoreControl(view)).not.toBeNull();
+    expect(reviewing(view)).toBe(true);
 
     // A scratch of the dictated copy, which a diff reads as removing the second.
     const end = view.state.doc.length;
     view.dispatch(outsideDraftWrite({ from: end - copy.length, to: end }, "", null, { anchor: 0 }));
     expect(marked(view)).toEqual([]);
-    expect(restoreControl(view)).toBeNull();
+    expect(reviewing(view)).toBe(false);
   });
 
   it("ends when an outside write reaches its passage", () => {
@@ -277,33 +276,17 @@ describe("correction review", () => {
     const at = INTRO.length + 5;
     view.dispatch(outsideDraftWrite({ from: at, to: at + 3, insert: "XYZ" }, "", null));
     expect(marked(view)).toEqual([]);
-    expect(restoreControl(view)).toBeNull();
+    expect(reviewing(view)).toBe(false);
   });
 
-  it("restores the raw transcription with the control, as one undo step", () => {
-    const view = mount(INTRO + RAW);
-    land(view, review);
-
-    restoreControl(view)!.dispatchEvent(new MouseEvent("click", { bubbles: true, button: 0 }));
-
-    expect(view.state.doc.toString()).toBe(INTRO + RAW);
-    expect(onSwapped).toHaveBeenLastCalledWith(review, "raw");
-    expect(restoreControl(view)).toBeNull();
-
-    undoKey(view);
-    expect(view.state.doc.toString()).toBe(INTRO + CORRECTED);
-    expect(marked(view)).toEqual(["Open", "Zustand store."]);
-    expect(onSwapped).toHaveBeenLastCalledWith(review, "corrected");
-  });
-
-  it("undoes the swap with Cmd+Z, and redoes it with its marks", () => {
+  it("undoes the swap with Cmd+Z as one step, and redoes it with its marks", () => {
     const view = mount(INTRO + RAW);
     land(view, review);
 
     undoKey(view);
     expect(view.state.doc.toString()).toBe(INTRO + RAW);
     expect(onSwapped).toHaveBeenLastCalledWith(review, "raw");
-    expect(restoreControl(view)).toBeNull();
+    expect(reviewing(view)).toBe(false);
 
     redoKey(view);
     expect(view.state.doc.toString()).toBe(INTRO + CORRECTED);
@@ -347,23 +330,13 @@ describe("correction review", () => {
     expect(onSwapped).toHaveBeenLastCalledWith(review, "raw");
   });
 
-  it("refuses to replay or restore a correction the draft no longer holds", () => {
+  it("refuses to replay a correction the draft no longer holds", () => {
     const view = mount(INTRO + "something else entirely");
     replayLandedCorrection(view, review);
 
     expect(marked(view)).toEqual([]);
     expect(undoDepth(view.state)).toBe(0);
-    expect(restoreCorrection(view)).toBe(false);
     expect(view.state.doc.toString()).toBe(INTRO + "something else entirely");
-  });
-
-  it("takes no restore while the composer is locked", () => {
-    const view = mount(INTRO + RAW, [EditorView.editable.of(false)]);
-    land(view, review);
-
-    expect(restoreCorrection(view)).toBe(false);
-    expect(view.state.doc.toString()).toBe(INTRO + CORRECTED);
-    expect(onSwapped).not.toHaveBeenCalled();
   });
 
   it("ends on request, leaving the text, the caret and the undo step as they were (#14875)", () => {
@@ -376,11 +349,10 @@ describe("correction review", () => {
 
     endCorrectionReview(view);
     expect(marked(view)).toEqual([]);
-    expect(restoreControl(view)).toBeNull();
+    expect(reviewing(view)).toBe(false);
     expect(view.state.doc).toBe(doc);
     expect(view.state.selection.eq(selection)).toBe(true);
     expect(undoDepth(view.state)).toBe(depth);
-    expect(restoreCorrection(view)).toBe(false);
 
     endCorrectionReview(view);
     vi.advanceTimersByTime(VOICE_CORRECTION_MARK_DWELL_MS + VOICE_CORRECTION_MARK_FADE_MS);
@@ -393,15 +365,15 @@ describe("correction review", () => {
     expect(onSwapped).toHaveBeenLastCalledWith(review, "raw");
   });
 
-  it("ends a review whose marks already faded, taking the restore control with it", () => {
+  it("ends a review whose marks already faded", () => {
     const view = mount(INTRO + RAW);
     land(view, review);
     vi.advanceTimersByTime(VOICE_CORRECTION_MARK_DWELL_MS + VOICE_CORRECTION_MARK_FADE_MS);
-    expect(restoreControl(view)).not.toBeNull();
+    expect(reviewing(view)).toBe(true);
 
     endCorrectionReview(view);
 
-    expect(restoreControl(view)).toBeNull();
+    expect(reviewing(view)).toBe(false);
     expect(view.state.doc.toString()).toBe(INTRO + CORRECTED);
   });
 
@@ -420,7 +392,7 @@ describe("correction review", () => {
 
     expect(view.state.doc.toString()).toBe(after);
     expect(marked(view)).toEqual([]);
-    expect(restoreControl(view)).toBeNull();
+    expect(reviewing(view)).toBe(false);
     expect(onShown).not.toHaveBeenCalled();
 
     undoKey(view);
@@ -435,7 +407,7 @@ describe("correction review", () => {
     const view = mount(INTRO + CORRECTED);
     replayLandedCorrection(view, review, false);
 
-    expect(restoreControl(view)).toBeNull();
+    expect(reviewing(view)).toBe(false);
     expect(undoDepth(view.state)).toBe(1);
     undoKey(view);
     expect(view.state.doc.toString()).toBe(INTRO + RAW);

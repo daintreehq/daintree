@@ -19,9 +19,6 @@ import {
   type Text,
 } from "@codemirror/state";
 import { invertedEffects, isolateHistory } from "@codemirror/commands";
-import { createTrustedHTML, setTrustedInnerHTML } from "@/lib/trustedTypesPolicy";
-import { isMac } from "@/lib/platform";
-import { labelWithShortcut } from "@/lib/kbdShortcut";
 import {
   UI_ANIMATION_DURATION,
   VOICE_CORRECTION_MARK_DWELL_MS,
@@ -128,7 +125,7 @@ export const outsideWrite = Annotation.define<true>();
 
 /**
  * `marked`: the changed words are underlined. `fading`: the underline is on its
- * way out. `settled`: only the restore control is left, until the next edit.
+ * way out. `settled`: nothing shows, and the review lasts until the next edit.
  */
 type ReviewPhase = "marked" | "fading" | "settled";
 
@@ -169,9 +166,9 @@ function carryReview(state: ReviewState, tr: Transaction): ReviewState | null {
 
 /**
  * The correction that last landed in this draft. An edit of the user's ends
- * the review: the marks and the restore control describe that one swap, and
- * after an edit the passage is either the user's or no longer what the
- * correction wrote. An outside write that leaves the passage alone moves it.
+ * the review: the marks describe that one swap, and after an edit the passage
+ * is either the user's or no longer what the correction wrote. An outside
+ * write that leaves the passage alone moves it.
  */
 export const correctionReviewField = StateField.define<ReviewState | null>({
   create() {
@@ -228,32 +225,6 @@ export function endCorrectionReview(view: EditorView): void {
   view.dispatch({ effects: correctionReviewEnded.of(null) });
 }
 
-const RESTORE_USER_EVENT = "input.restore";
-
-/**
- * Puts the raw transcription back over the corrected passage, as one undo step.
- * False when no correction is under review.
- */
-export function restoreCorrection(view: EditorView): boolean {
-  const state = view.state.field(correctionReviewField, false);
-  if (!state || !view.state.facet(EditorView.editable)) return false;
-  const { review } = state;
-  const to = review.from + review.correctedText.length;
-  if (view.state.doc.sliceString(review.from, to) !== review.correctedText) return false;
-  view.dispatch({
-    changes: { from: review.from, to, insert: review.rawText },
-    selection: { anchor: review.from + review.rawText.length },
-    effects: correctionReverted.of(review),
-    annotations: [isolateHistory.of("full"), Transaction.userEvent.of(RESTORE_USER_EVENT)],
-    scrollIntoView: true,
-  });
-  return true;
-}
-
-const ROTATE_CCW_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>`;
-
-const RESTORE_LABEL = "Restore original transcription";
-
 function phaseClass(base: string, phase: ReviewPhase): string {
   return phase === "fading" ? `${base} cm-voice-corrected-fading` : base;
 }
@@ -279,33 +250,6 @@ class RemovedWordsWidget extends WidgetType {
   }
 }
 
-class RestoreControlWidget extends WidgetType {
-  toDOM(view: EditorView): HTMLElement {
-    const control = document.createElement("span");
-    control.className = "cm-voice-restore";
-    // Not focusable: Tab belongs to the composer. While this shows, the
-    // correction is the newest undo step, so Cmd+Z is the keyboard path.
-    control.setAttribute("role", "button");
-    control.setAttribute("aria-label", RESTORE_LABEL);
-    setTrustedInnerHTML(control, createTrustedHTML(ROTATE_CCW_SVG));
-    control.addEventListener("mousedown", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-    });
-    control.addEventListener("click", (e) => {
-      if (e.button !== 0) return;
-      e.preventDefault();
-      e.stopPropagation();
-      if (restoreCorrection(view)) view.focus();
-    });
-    return control;
-  }
-
-  eq(): boolean {
-    return true;
-  }
-}
-
 const changedMark = Decoration.mark({ class: "cm-voice-corrected" });
 const fadingChangedMark = Decoration.mark({ class: phaseClass("cm-voice-corrected", "fading") });
 
@@ -327,11 +271,6 @@ function reviewDecorations(state: ReviewState | null): DecorationSet {
       );
     }
   }
-  ranges.push(
-    Decoration.widget({ widget: new RestoreControlWidget(), side: 1 }).range(
-      review.from + review.correctedText.length
-    )
-  );
   return Decoration.set(ranges, true);
 }
 
@@ -444,17 +383,10 @@ const dismissCaretCardOnEscape = EditorView.domEventObservers({
 });
 
 const reviewTooltip = chipHoverTooltip(
-  (view, pos, side) => {
+  (view, pos) => {
     const state = view.state.field(correctionReviewField, false);
     if (!state) return null;
-    const { review, phase } = state;
-    const end = review.from + review.correctedText.length;
-    if (pos === end && side > 0) {
-      return chipTooltip({ from: end, to: end }, ".cm-voice-restore", () => [
-        chipCardText(labelWithShortcut(RESTORE_LABEL, "Cmd+Z", isMac())),
-      ]);
-    }
-    if (phase === "settled") return null;
+    if (state.phase === "settled") return null;
     const card = changeCard(state, pos);
     // The caret's card for the same change is already up.
     if (card && view.state.field(caretCardField, false)?.pos === card.pos) return null;
@@ -491,8 +423,6 @@ const reviewFadeTheme = EditorView.baseTheme({
   ".cm-voice-corrected-gap.cm-voice-corrected-fading": {
     animation: `cm-voice-corrected-out ${VOICE_CORRECTION_MARK_FADE_MS}ms ease-out forwards`,
   },
-  // A locked composer (disabled, or holding a send) takes no restore.
-  '.cm-content[contenteditable="false"] .cm-voice-restore': { display: "none" },
 });
 
 export interface CorrectionReviewOptions {
@@ -500,7 +430,7 @@ export interface CorrectionReviewOptions {
   onShown?: (review: CorrectionReview) => void;
   /**
    * The passage changed hands between the correction and the raw transcription,
-   * by the restore control, an undo or a redo. `now` is what the draft holds.
+   * by an undo or a redo. `now` is what the draft holds.
    */
   onSwapped?: (review: CorrectionReview, now: "raw" | "corrected") => void;
 }

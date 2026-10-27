@@ -193,7 +193,7 @@ export const UI_TYPING_LOCATOR_REPORT_DWELL_MS = 3_000;
 
 /** How long the words an AI correction changed stay marked in the composer.
  *  Long enough to look back at a passage that landed while the user's eyes
- *  were elsewhere, and to reach the restore control beside it. */
+ *  were elsewhere. */
 export const VOICE_CORRECTION_MARK_DWELL_MS = 5_000;
 
 /** The marks' fade once the dwell ends. Slow on purpose: the decay is the
