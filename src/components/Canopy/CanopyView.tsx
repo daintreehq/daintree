@@ -982,7 +982,7 @@ function CanopyInbox({
   const trashEntries = canopy?.trash ?? NO_TRASH;
   // This view's own project's trash is in its dock too, which says its expiries itself.
   const dockAnnounces = useCallback(
-    (runId: string, workspaceId: string) => {
+    (workspaceId: string) => {
       if (otherHost && !everyHost) return false;
       const here = getViewWorkspaceId();
       if (!everyHost) return workspaceId === here;

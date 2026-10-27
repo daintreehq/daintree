@@ -105,7 +105,7 @@ export function CanopyTrashSection({
   /** The host or hosts shown: another's trash starts afresh, its departures unsaid. */
   scopeKey: string;
   /** The dock beside the panel says this run's expiry itself: its own project's trash. */
-  dockAnnounces: (runId: string, workspaceId: string) => boolean;
+  dockAnnounces: (workspaceId: string) => boolean;
   /** Up off the Trash bar, back into the inbox. */
   onLeaveUp: () => void;
   /** "/" from a row. */
@@ -157,7 +157,7 @@ export function CanopyTrashSection({
         if (current.has(key)) continue;
         if (actedRef.current.delete(key)) continue;
         if (now < item.expiresAt - EXPIRY_SLACK_MS) continue;
-        if (dockAnnounces(item.runId, item.row.run.workspaceId)) continue;
+        if (dockAnnounces(item.row.run.workspaceId)) continue;
         expired.push(item.subject);
       }
     } else {
