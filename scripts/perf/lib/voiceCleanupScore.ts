@@ -61,6 +61,19 @@ function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/**
+ * Copies of a kept span, letter for letter except the first one's case:
+ * capitalising the word a sentence opens with is cleanup, not a change.
+ */
+function countKept(haystack: string, keep: string): number {
+  const [first = "", ...rest] = [...keep];
+  const lead =
+    first.toLowerCase() === first.toUpperCase()
+      ? escapeRegExp(first)
+      : `[${first.toLowerCase()}${first.toUpperCase()}]`;
+  return haystack.match(new RegExp(lead + escapeRegExp(rest.join("")), "gu"))?.length ?? 0;
+}
+
 /** Whole-word, case-insensitive: "um" isn't found in "umbrella". */
 function countPhrase(haystack: string, phrase: string): number {
   const pattern = new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(phrase)}(?![\\p{L}\\p{N}])`, "giu");
@@ -141,9 +154,7 @@ export function scoreText(entry: CleanupCase, text: string): TextScore {
     (drop) => countPhrase(text, drop) > countPhrase(entry.reference, drop)
   );
   const keeps = entry.keep ?? [];
-  const lostKeeps = keeps.filter(
-    (keep) => countOccurrences(text, keep) < countOccurrences(entry.raw, keep)
-  );
+  const lostKeeps = keeps.filter((keep) => countKept(text, keep) < countKept(entry.raw, keep));
 
   const lines = lineWords(text);
   return {
@@ -203,8 +214,9 @@ export function corpusProblems(corpus: readonly CleanupCase[]): string[] {
       }
     }
     for (const keep of entry.keep ?? []) {
-      if (!entry.raw.includes(keep)) problems.push(`${entry.id}: keep "${keep}" is not in the raw`);
-      if (countOccurrences(entry.reference, keep) < countOccurrences(entry.raw, keep)) {
+      if (countKept(entry.raw, keep) === 0)
+        problems.push(`${entry.id}: keep "${keep}" is not in the raw`);
+      if (countKept(entry.reference, keep) < countKept(entry.raw, keep)) {
         problems.push(`${entry.id}: keep "${keep}" does not survive into the reference`);
       }
     }
