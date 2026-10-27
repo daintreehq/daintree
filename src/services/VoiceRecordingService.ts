@@ -3087,7 +3087,6 @@ class VoiceRecordingService {
       type: "warning",
       title: "Passage not transcribed",
       message,
-      transient: true,
       priority: "high",
       replaceKey: "voice-passage-failed",
       context: { eventKind: "uiFeedback" },
