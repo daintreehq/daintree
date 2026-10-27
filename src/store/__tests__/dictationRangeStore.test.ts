@@ -1043,7 +1043,9 @@ describe("draft writes that touch several places (#14781)", () => {
       { from: 0, to: 2, insert: "AAA" },
       { from: 6, to: 8, insert: "C" },
     ];
-    useDictationRangeStore.getState().expectDraftChange(PANEL, PROJECT, "aa bb cc", "AAA bb C", changes);
+    useDictationRangeStore
+      .getState()
+      .expectDraftChange(PANEL, PROJECT, "aa bb cc", "AAA bb C", changes);
     setDraft("AAA bb C");
 
     expect(only().utterances[0]!.range).toEqual({ from: 4, to: 6, edited: false });
@@ -1069,7 +1071,9 @@ describe("draft writes that touch several places (#14781)", () => {
     dictate("the parsr");
     useDictationRangeStore.getState().setAnchor(other, { from: 9, to: 9 });
     const seen: string[] = [];
-    const stop = useDictationRangeStore.subscribe(() => seen.push(textOf(only().utterances[0]!.range)));
+    const stop = useDictationRangeStore.subscribe(() =>
+      seen.push(textOf(only().utterances[0]!.range))
+    );
 
     edit(0, 0, "note: ");
     stop();

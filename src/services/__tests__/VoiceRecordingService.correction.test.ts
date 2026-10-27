@@ -442,7 +442,10 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     caret.recordComposerState(
       "panel-1",
       {},
-      { doc: { length: text.length, toString: () => text }, selection: { main: { from: 0, to: 0 } } }
+      {
+        doc: { length: text.length, toString: () => text },
+        selection: { main: { from: 0, to: 0 } },
+      }
     );
     dictate("panel-1", "fix");
     expect(draft("panel-1")).toBe("fix the parsr");
@@ -469,9 +472,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     });
     await flush();
 
-    expect(draft("panel-1")).toBe(
-      "Look at the parser in /src/parser.ts\nand fix the lexer too."
-    );
+    expect(draft("panel-1")).toBe("Look at the parser in /src/parser.ts\nand fix the lexer too.");
   });
 
   it("cleans every stretch around pasted paths, blank lines and an image, leaving them as they were", async () => {

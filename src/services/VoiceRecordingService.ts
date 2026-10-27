@@ -2898,7 +2898,9 @@ class VoiceRecordingService {
       }
       // Spelled out, so the text between passages, and a session dictating
       // there, isn't taken as rewritten along with them.
-      useDictationRangeStore.getState().expectDraftChange(panelId, projectId, before, next, changes);
+      useDictationRangeStore
+        .getState()
+        .expectDraftChange(panelId, projectId, before, next, changes);
       this.writeShiftedDraft(panelId, next, projectId);
       // One span from the first rewritten passage to the last, so restoring it
       // puts every passage back and leaves text typed between them as it is.
