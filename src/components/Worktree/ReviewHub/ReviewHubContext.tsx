@@ -29,12 +29,19 @@ const FIRST_PROMPT_LABEL: Record<TerminalFirstPrompt["via"], string> = {
 
 /**
  * A launch that never started claims nothing: a missing-CLI gate holds its
- * launch's prompt for "Run anyway", and a failed or refused spawn keeps its
- * record for the retry that replays it, but neither ran.
+ * launch's prompt for "Run anyway", and a pane whose first spawn failed keeps
+ * its record for a retry that replays it, but neither ran. A pane that did run
+ * (restarted, restored, or seen running its agent) still shows what that run
+ * was asked when a later restart fails.
  */
 function shownFirstPrompt(panel: PtyPanelData): TerminalFirstPrompt | undefined {
-  if (panel.spawnStatus === "missing-cli" || panel.spawnStatus === "failed") return undefined;
-  return panel.firstPrompt;
+  if (panel.spawnStatus === "missing-cli") return undefined;
+  const firstLaunchFailed =
+    panel.spawnStatus === "failed" &&
+    (panel.restartKey ?? 0) === 0 &&
+    panel.restoreProvenance === undefined &&
+    panel.everDetectedAgent !== true;
+  return firstLaunchFailed ? undefined : panel.firstPrompt;
 }
 
 function latestActivity(entry: RunEntry): number {

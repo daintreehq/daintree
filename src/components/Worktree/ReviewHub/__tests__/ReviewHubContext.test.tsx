@@ -176,7 +176,7 @@ describe("ReviewHubContext", () => {
     expect(brief?.querySelector(".line-clamp-4")).toBeNull();
   });
 
-  it("claims nothing for a launch whose spawn failed", () => {
+  it("claims nothing for a launch whose first spawn failed", () => {
     worktrees.set("wt-1", { id: "wt-1", path: "/repo/wt" });
     panelsById.a = terminal("a", {
       spawnStatus: "failed",
@@ -184,6 +184,20 @@ describe("ReviewHubContext", () => {
     });
     const { container } = render(<ReviewHubContext worktreePath="/repo/wt" worktreeId="wt-1" />);
     expect(container.firstChild).toBeNull();
+  });
+
+  it.each([
+    ["was restarted", { restartKey: 1 }],
+    ["was restored", { restoreProvenance: { at: NOW, disposition: "resume" } }],
+    ["was seen running its agent", { everDetectedAgent: true }],
+  ])("still shows the prompt of a run that %s when a later spawn fails", (_label, ran) => {
+    panelsById.a = terminal("a", {
+      spawnStatus: "failed",
+      firstPrompt: { text: "Delivered earlier", via: "launch", at: NOW },
+      ...ran,
+    });
+    const { getByTestId } = render(<ReviewHubContext worktreePath="/repo/wt" worktreeId="wt-1" />);
+    expect(getByTestId("review-hub-first-prompt").textContent).toContain("Delivered earlier");
   });
 
   it("shows no prompt for a missing-CLI gate, where nothing ran yet", () => {

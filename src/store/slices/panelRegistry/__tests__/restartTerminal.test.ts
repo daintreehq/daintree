@@ -2343,6 +2343,21 @@ describe("restartTerminal and the run's first prompt (#14592)", () => {
     expect(paneAfterRestart().firstPrompt).toEqual(expected);
   });
 
+  it("never keeps a sent prompt when the stored command runs again", async () => {
+    const { agentSettingsClient } = await import("@/clients");
+    vi.mocked(agentSettingsClient.get).mockRejectedValue(new Error("settings unavailable"));
+    show({
+      ...launched,
+      agentLaunchFlags: undefined,
+      firstPrompt: { ...firstPrompt, via: "send" as const },
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(mockSpawn.mock.calls[0]![0].command).toBe(launched.command);
+    expect(paneAfterRestart().firstPrompt).toBeUndefined();
+  });
+
   it("drops the record when a demoted pane restarts as a bare shell", async () => {
     show({ ...launched, agentState: "exited" as const });
 

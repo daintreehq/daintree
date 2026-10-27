@@ -4440,6 +4440,31 @@ describe("first prompt restore (#14592)", () => {
     expect(result.firstPrompt).toEqual(firstPrompt);
   });
 
+  it("never keeps a sent prompt, or one with no saved command, for a run that starts over", () => {
+    const sent = { ...firstPrompt, via: "send" as const };
+    const replayed = buildArgsForRespawn(
+      { ...claudePane, command: "claude", firstPrompt: sent },
+      "terminal",
+      "/repo",
+      undefined,
+      false,
+      "/tmp"
+    );
+    expect(replayed.command).toBe("claude");
+    expect(replayed.firstPrompt).toBeUndefined();
+
+    const shell = buildArgsForRespawn(
+      { id: "s1", kind: "terminal" as const, cwd: "/repo", location: "grid", firstPrompt },
+      "terminal",
+      "/repo",
+      undefined,
+      false,
+      "/tmp"
+    );
+    expect(shell.command).toBeUndefined();
+    expect(shell.firstPrompt).toBeUndefined();
+  });
+
   describe("an untrusted on-disk record", () => {
     const backend = { id: "t1", cwd: "/repo", kind: "terminal" as const };
     const builders: Array<[string, (saved: SavedSnapshot) => AddTerminalArgs]> = [

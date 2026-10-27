@@ -909,13 +909,16 @@ export const createRestartActions = (
       // The record of what the run was first asked (#14592) stays only while
       // that run goes on: a resume of the pane's own conversation (a forced
       // resume may name another one), or a start-over that replays the stored
-      // launch command, prompt included. A new conversation, or the bare shell
-      // a demoted pane restarts as, was never handed it.
+      // launch command, which carries a launch prompt (never a sent one). A new
+      // conversation, or the bare shell a demoted pane restarts as, was never
+      // handed it.
       const startsOver = !consumedSessionId && !usedResumeLatest;
       const keepsFirstPrompt =
         isAgent &&
         (startsOver
-          ? freshCommand === currentTerminal.command
+          ? currentTerminal.firstPrompt?.via === "launch" &&
+            freshCommand !== undefined &&
+            freshCommand === currentTerminal.command
           : usedResumeLatest ||
             !forcedResume ||
             consumedSessionId === currentTerminal.agentSessionId);
