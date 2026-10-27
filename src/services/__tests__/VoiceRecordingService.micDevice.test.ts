@@ -546,8 +546,9 @@ describe("VoiceRecordingService — chosen mic not available (#14606)", () => {
 
     await service.start(TARGET);
 
+    // An alias follows the system input, so it opens as the system default.
     expect(harness.getUserMedia).toHaveBeenCalledWith(
-      chosen
+      chosen === "usb-mic"
         ? { audio: { deviceId: { ideal: chosen } }, video: false }
         : { audio: true, video: false }
     );
@@ -675,6 +676,34 @@ describe("VoiceRecordingService — chosen mic that won't open (#14850)", () => 
 
     expect(harness.getUserMedia).toHaveBeenCalledTimes(1);
     expect(store.getState().lastError?.code).toBe("mic_access_failed");
+  });
+
+  it("lets go of a fallback mic that opened after the start was stopped", async () => {
+    const harness = setupGlobals({ deviceId: "usb-mic", tracks: [DEFAULT_TRACK] });
+    harness.getUserMedia.mockRejectedValueOnce(notReadable());
+    let grant: () => void = () => {};
+    harness.getUserMedia.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          grant = () => {
+            const track = createTrack(DEFAULT_TRACK.label, DEFAULT_TRACK.deviceId);
+            harness.tracks.push(track);
+            resolve(createStream(track));
+          };
+        })
+    );
+    const { store, service } = await load();
+
+    const starting = service.start(TARGET);
+    await vi.waitFor(() => expect(harness.getUserMedia).toHaveBeenCalledTimes(2));
+    await service.stop();
+    grant();
+    await starting;
+
+    expect(harness.tracks[0]!.stop).toHaveBeenCalled();
+    expect(harness.voiceInput.start).not.toHaveBeenCalled();
+    expect(store.getState().micNotice).toBeNull();
+    expect(store.getState().lastError).toBeNull();
   });
 
   it("opens no second mic when the start was stopped while the chosen one failed", async () => {
@@ -827,7 +856,10 @@ describe("VoiceRecordingService — silent mic (#14606)", () => {
 
     await service.switchToMicFromNotice(notice);
 
-    expect(harness.voiceInput.setSettings).toHaveBeenCalledWith({ deviceId: "builtin" });
+    expect(harness.voiceInput.setSettings).toHaveBeenCalledWith({
+      deviceId: "builtin",
+      deviceLabel: "MacBook Pro Microphone",
+    });
     expect(harness.getUserMedia).toHaveBeenLastCalledWith({
       audio: { deviceId: { ideal: "builtin" } },
       video: false,
@@ -856,7 +888,10 @@ describe("VoiceRecordingService — silent mic (#14606)", () => {
     releaseSave();
     await switching;
 
-    expect(harness.voiceInput.setSettings).toHaveBeenCalledWith({ deviceId: "builtin" });
+    expect(harness.voiceInput.setSettings).toHaveBeenCalledWith({
+      deviceId: "builtin",
+      deviceLabel: "MacBook Pro Microphone",
+    });
     expect(harness.getUserMedia).toHaveBeenCalledTimes(1);
     expect(store.getState().activeTarget).toBeNull();
   });
@@ -902,7 +937,10 @@ describe("VoiceRecordingService — silent mic (#14606)", () => {
 
     await service.switchToMicFromNotice(notice);
 
-    expect(harness.voiceInput.setSettings).toHaveBeenCalledWith({ deviceId: "builtin" });
+    expect(harness.voiceInput.setSettings).toHaveBeenCalledWith({
+      deviceId: "builtin",
+      deviceLabel: "MacBook Pro Microphone",
+    });
     expect(harness.getUserMedia).toHaveBeenCalledTimes(1);
     expect(store.getState().status).toBe("paused");
     expect(store.getState().micNotice).toBeNull();
@@ -924,7 +962,10 @@ describe("VoiceRecordingService — silent mic (#14606)", () => {
 
     await service.switchToMicFromNotice(notice);
 
-    expect(harness.voiceInput.setSettings).toHaveBeenCalledWith({ deviceId: "builtin" });
+    expect(harness.voiceInput.setSettings).toHaveBeenCalledWith({
+      deviceId: "builtin",
+      deviceLabel: "MacBook Pro Microphone",
+    });
     expect(harness.getUserMedia).toHaveBeenCalledTimes(1);
     expect(store.getState().activeTarget?.panelId).toBe(PANEL_ID);
   });

@@ -16,14 +16,20 @@ vi.mock("@/lib/voiceInputSettingsEvents", () => ({
 
 vi.mock("@/utils/logger", () => ({ logWarn: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }));
 
+const audioDevices = vi.hoisted(() => {
+  const systemDefault = { value: "__system_default__", label: "System default" };
+  const initial = () => ({
+    devices: [systemDefault] as Array<{ value: string; label: string }>,
+    loading: false,
+    error: null as string | null,
+    complete: true,
+  });
+  return { systemDefault, initial, current: initial() };
+});
+
 vi.mock("@/hooks/useAudioDevices", () => ({
   SYSTEM_DEFAULT_VALUE: "__system_default__",
-  useAudioDevices: () => ({
-    devices: [{ value: "__system_default__", label: "System default" }],
-    loading: false,
-    error: null,
-    refresh: vi.fn(),
-  }),
+  useAudioDevices: () => ({ ...audioDevices.current, refresh: vi.fn() }),
 }));
 
 vi.mock("../SettingsValidationRegistry", () => ({
@@ -45,6 +51,7 @@ const BASE = {
   paragraphingStrategy: "spoken-command",
   resolveFileLinks: true,
   deviceId: "",
+  deviceLabel: "",
   organizationId: "",
   projectId: "",
   recordingMode: "toggle",
@@ -95,6 +102,7 @@ const term = (value: string): VoiceDictionaryEntry => ({
 
 afterEach(() => {
   vi.clearAllMocks();
+  audioDevices.current = audioDevices.initial();
 });
 
 describe("maskApiKey", () => {
@@ -546,6 +554,143 @@ describe("VoiceInputSettingsTab provider select", () => {
     fireEvent.click(screen.getByRole("button", { name: /Reset Transcription provider/ }));
     await waitFor(() =>
       expect(setSettings).toHaveBeenCalledWith({ transcriptionProvider: "openai" })
+    );
+  });
+});
+
+describe("VoiceInputSettingsTab input device (#14850)", () => {
+  const BUILT_IN = { value: "builtin", label: "MacBook Pro Microphone" };
+  const AIRPODS = { value: "airpods", label: "Greg's AirPods Pro" };
+  const withDevices = (...devices: Array<{ value: string; label: string }>) => {
+    audioDevices.current.devices = [audioDevices.systemDefault, ...devices];
+  };
+  const inputDevice = () => screen.findByRole("combobox", { name: "Input device" });
+  const row = () => document.getElementById("voice-input-device")!;
+
+  it("keeps naming the chosen mic, marked not connected, while it's unplugged", async () => {
+    withDevices(BUILT_IN);
+    install({ deviceId: "airpods", deviceLabel: "Greg's AirPods Pro" });
+    render(<VoiceInputSettingsTab />);
+
+    await waitFor(async () =>
+      expect((await inputDevice()).textContent).toContain("Greg's AirPods Pro (not connected)")
+    );
+    expect(row().textContent).toMatch(/dictation uses the system default until it's back/);
+  });
+
+  it("drops the mark once the chosen mic is plugged back in", async () => {
+    withDevices(BUILT_IN, AIRPODS);
+    install({ deviceId: "airpods", deviceLabel: "Greg's AirPods Pro" });
+    render(<VoiceInputSettingsTab />);
+
+    await waitFor(async () =>
+      expect((await inputDevice()).textContent).toContain("Greg's AirPods Pro")
+    );
+    expect((await inputDevice()).textContent).not.toContain("not connected");
+  });
+
+  it.each([
+    ["the list is still loading", { loading: true }],
+    ["the list couldn't be read", { error: "Could not enumerate audio devices" }],
+    ["devices are still unnamed", { complete: false }],
+  ])("doesn't call the chosen mic gone while %s", async (_case, state) => {
+    withDevices();
+    Object.assign(audioDevices.current, state);
+    install({ deviceId: "airpods", deviceLabel: "Greg's AirPods Pro" });
+    render(<VoiceInputSettingsTab />);
+
+    await waitFor(async () =>
+      expect((await inputDevice()).textContent).toContain("Greg's AirPods Pro")
+    );
+    expect(row().textContent).not.toContain("not connected");
+  });
+
+  it("names a mic chosen before its name was saved", async () => {
+    withDevices(BUILT_IN);
+    install({ deviceId: "airpods" });
+    render(<VoiceInputSettingsTab />);
+
+    await waitFor(async () =>
+      expect((await inputDevice()).textContent).toContain("Selected microphone (not connected)")
+    );
+  });
+
+  it("says System default follows the system input", async () => {
+    withDevices(BUILT_IN);
+    install({ deviceId: "" });
+    render(<VoiceInputSettingsTab />);
+
+    expect((await inputDevice()).textContent).toContain("System default");
+    await waitFor(() =>
+      expect(row().textContent).toMatch(/system input, so a headset that connects takes over/)
+    );
+  });
+
+  it.each(["default", "communications"])(
+    "reads a saved %j alias as System default, not a change",
+    async (deviceId) => {
+      withDevices(BUILT_IN);
+      install({ deviceId, deviceLabel: "Default - MacBook Pro Microphone" });
+      render(<VoiceInputSettingsTab />);
+
+      await waitFor(async () =>
+        expect((await inputDevice()).textContent).toContain("System default")
+      );
+      expect(screen.queryByRole("button", { name: /Reset Input device/ })).toBeNull();
+    }
+  );
+
+  it("saves the picked mic's name with its id", async () => {
+    withDevices(BUILT_IN, AIRPODS);
+    const api = install({ deviceId: "" });
+    render(<VoiceInputSettingsTab />);
+
+    const trigger = await inputDevice();
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: "Enter" });
+    fireEvent.keyDown(await screen.findByRole("option", { name: AIRPODS.label }), {
+      key: "Enter",
+    });
+
+    await waitFor(() =>
+      expect(api.setSettings).toHaveBeenCalledWith({
+        deviceId: "airpods",
+        deviceLabel: "Greg's AirPods Pro",
+      })
+    );
+  });
+
+  it("clears the name with the id on reset", async () => {
+    withDevices(BUILT_IN);
+    const api = install({ deviceId: "airpods", deviceLabel: "Greg's AirPods Pro" });
+    render(<VoiceInputSettingsTab />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Reset Input device/ }));
+
+    await waitFor(() =>
+      expect(api.setSettings).toHaveBeenCalledWith({ deviceId: "", deviceLabel: "" })
+    );
+  });
+
+  it("puts the name back with the id when a pick fails to save", async () => {
+    withDevices(BUILT_IN);
+    const api = install(
+      { deviceId: "airpods", deviceLabel: "Greg's AirPods Pro" },
+      { setSettings: vi.fn().mockRejectedValue(new Error("disk full")) }
+    );
+    render(<VoiceInputSettingsTab />);
+
+    const trigger = await inputDevice();
+    await waitFor(() => expect(trigger.textContent).toContain("Greg's AirPods Pro"));
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: "Enter" });
+    fireEvent.keyDown(await screen.findByRole("option", { name: BUILT_IN.label }), {
+      key: "Enter",
+    });
+
+    await waitFor(() => expect(api.setSettings).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(trigger.textContent).toContain("Greg's AirPods Pro (not connected)")
     );
   });
 });
