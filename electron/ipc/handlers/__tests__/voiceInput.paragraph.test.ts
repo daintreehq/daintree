@@ -1553,6 +1553,29 @@ describe.each(["openai", "deepgram"] as const)(
         expect(sends()).toBe(0);
       });
 
+      it("lands held words as said, unsent, when the drain reports an error", async () => {
+        const stopping = stopDraining();
+        emitTranscriptionEvent({
+          type: "complete",
+          text: "Fix the login bug, send it",
+          itemId: "A",
+        });
+        expect(completes()).toEqual([]);
+        emitTranscriptionEvent({
+          type: "error",
+          error: { severity: "transient", code: "ws_transport_error", message: "dropped" },
+        });
+        shared.drainResolve?.();
+        await stopping;
+
+        expect(landed()).toBe("Fix the login bug, send it");
+        expect(sends()).toBe(0);
+        const channels = win.__sent.map((m) => m.channel);
+        expect(channels.indexOf("voice-input:transcription-complete")).toBeLessThan(
+          channels.indexOf("voice-input:error")
+        );
+      });
+
       it("sends a split 'send it' once, ahead of the provider's idle", async () => {
         const stopping = stopDraining();
         emitTranscriptionEvent({ type: "complete", text: "Fix the login bug, send", itemId: "A" });
