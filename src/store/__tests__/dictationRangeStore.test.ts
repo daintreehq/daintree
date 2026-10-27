@@ -629,6 +629,290 @@ describe("dictationRangeStore", () => {
     });
   });
 
+  describe("rewriteWords", () => {
+    const swapWords = (
+      edits: Array<{ from: number; to: number; text: string }>,
+      heardSwaps?: Map<string, Array<{ from: number; to: number; text: string }>>
+    ) =>
+      useDictationRangeStore
+        .getState()
+        .rewriteWords(records()[0]!.id, edits, (next) => setDraft(next), heardSwaps);
+    const at = (needle: string) => {
+      const from = draft().indexOf(needle);
+      return { from, to: from + needle.length };
+    };
+
+    it("swaps words inside an utterance and leaves everything unedited around the new text", () => {
+      setDraft("Typed.");
+      dictate("first part");
+      dictate("link to the router now");
+      dictate("last part");
+      const other = { ...target, sessionId: "session-2" };
+      dictate("later", other);
+
+      swapWords([{ ...at("link to the router"), text: "@src/router.ts" }]);
+
+      expect(draft()).toBe("Typed. first part @src/router.ts now last part later");
+      const [record, later] = records();
+      expect(record!.range).toEqual({ from: 6, to: 46, edited: false });
+      expect(record!.utterances.map((u) => [textOf(u.range), u.range.edited])).toEqual([
+        ["first part", false],
+        ["@src/router.ts now", false],
+        ["last part", false],
+      ]);
+      expect(record!.utterances.map((u) => [textOf(u.insertion), u.insertion.edited])).toEqual([
+        [" first part", false],
+        [" @src/router.ts now", false],
+        [" last part", false],
+      ]);
+      expect(textOf(later!.range)).toBe(" later");
+      expect(later!.range.edited).toBe(false);
+    });
+
+    it.each([
+      ["the start", "link to the router now", "link to the router", "@a.ts now"],
+      ["the end", "see link to the router", "link to the router", "see @a.ts"],
+      ["every word", "link to the router", "link to the router", "@a.ts"],
+    ])(
+      "swaps words at %s of an utterance without trimming its ranges",
+      (_where, words, span, want) => {
+        dictate("one");
+        dictate(words);
+        dictate("three");
+
+        swapWords([{ ...at(span), text: "@a.ts" }]);
+
+        const [, swapped, last] = only().utterances;
+        expect(textOf(swapped!.range)).toBe(want);
+        expect(textOf(swapped!.insertion)).toBe(` ${want}`);
+        expect(textOf(last!.range)).toBe("three");
+        for (const range of [only().range, swapped!.range, swapped!.insertion, last!.range]) {
+          expect(range.edited).toBe(false);
+        }
+      }
+    );
+
+    it("swaps in a token longer than the words, moving what follows without flagging it", () => {
+      dictate("one");
+      dictate("link to app");
+      dictate("three");
+
+      swapWords([{ ...at("link to app"), text: "@src/very/long/path/App.tsx" }]);
+
+      expect(draft()).toBe("one @src/very/long/path/App.tsx three");
+      const [, swapped, last] = only().utterances;
+      expect(swapped!.range).toEqual({ from: 4, to: 31, edited: false });
+      expect(textOf(swapped!.insertion)).toBe(" @src/very/long/path/App.tsx");
+      expect(textOf(last!.range)).toBe("three");
+      expect([only().range, swapped!.insertion, last!.insertion].map((r) => r.edited)).toEqual([
+        false,
+        false,
+        false,
+      ]);
+    });
+
+    it("keeps each paragraph break where it was, so a cancel still takes them all", () => {
+      setDraft("Keep.");
+      dictate("link to the router");
+      paragraphBreak();
+      dictate("second");
+
+      swapWords([{ ...at("link to the router"), text: "@a.ts" }]);
+
+      expect(draft()).toBe("Keep. @a.ts\nsecond");
+      const [paragraph] = only().breaks;
+      expect(textOf(paragraph!)).toBe("\n");
+      expect(paragraph!.edited).toBe(false);
+      const spans = dictatedSpans(only(), draft())!;
+      expect(spans).not.toBeNull();
+      setDraft(spans.reduce((rest, { from, to }) => rest.slice(0, from) + rest.slice(to), draft()));
+      expect(draft()).toBe("Keep.");
+    });
+
+    it("swaps several places in one utterance and across utterances", () => {
+      dictate("link to the router and link to the readme");
+      dictate("then link to the store");
+
+      swapWords([
+        { ...at("link to the router"), text: "@r.ts" },
+        { ...at("link to the readme"), text: "@README.md" },
+        { ...at("link to the store"), text: "@s.ts" },
+      ]);
+
+      expect(draft()).toBe("@r.ts and @README.md then @s.ts");
+      expect(only().utterances.map((u) => [textOf(u.range), u.range.edited])).toEqual([
+        ["@r.ts and @README.md", false],
+        ["then @s.ts", false],
+      ]);
+      expect(only().range.edited).toBe(false);
+    });
+
+    it("moves a space kept before typed text and the learning span with the swap", () => {
+      setDraft("link to the router tail");
+      useDictationRangeStore.getState().recordUtterance(target, {
+        insertion: { from: 0, to: 18 },
+        words: { from: 0, to: 18 },
+        separatorAfter: { from: 18, to: 19 },
+      });
+
+      swapWords([{ ...at("link to the router"), text: "@a.ts" }]);
+
+      expect(draft()).toBe("@a.ts tail");
+      expect(only().utterances[0]!.separatorAfter).toEqual({ from: 5, to: 6, edited: false });
+      expect(only().learningSpan).toEqual({ from: 0, to: 5 });
+    });
+
+    it("still counts a later edit inside the swapped words, or around them, as the user's", () => {
+      dictate("open it, link to the router, please");
+      swapWords([{ ...at("link to the router"), text: "@src/router.ts" }]);
+      expect(draft()).toBe("open it, @src/router.ts, please");
+      expect(only().utterances[0]!.range.edited).toBe(false);
+
+      edit(draft().indexOf("router"), draft().indexOf("router") + 1, "R");
+
+      expect(only().utterances[0]!.range.edited).toBe(true);
+      expect(only().range.edited).toBe(true);
+    });
+
+    it("keeps text typed against the swapped words out of them", () => {
+      dictate("link to the router");
+      swapWords([{ ...at("link to the router"), text: "@src/router.ts" }]);
+
+      edit(0, 0, "Note: ");
+      edit(draft().length, draft().length, " thanks");
+
+      expect(draft()).toBe("Note: @src/router.ts thanks");
+      expect(textOf(only().utterances[0]!.range)).toBe("@src/router.ts");
+      expect(only().utterances[0]!.range.edited).toBe(false);
+      expect(only().range.edited).toBe(false);
+    });
+
+    it("keeps an envelope flagged for text typed between utterances", () => {
+      dictate("first");
+      setDraft(draft() + " typed");
+      dictate("link to the router");
+
+      swapWords([{ ...at("link to the router"), text: "@a.ts" }]);
+
+      expect(only().range.edited).toBe(true);
+      expect(only().utterances.map((u) => u.range.edited)).toEqual([false, false]);
+    });
+
+    it("maps a swap inside words the user already edited like anyone's", () => {
+      dictate("link to the router");
+      edit(0, 4, "LINK");
+
+      swapWords([{ ...at("to the router"), text: "@a.ts" }]);
+
+      expect(draft()).toBe("LINK @a.ts");
+      const [swapped] = only().utterances;
+      // Mapped like anyone's: the replaced words left the ranges, whose
+      // surviving text is the space before them.
+      expect(swapped!.range).toEqual({ from: 4, to: 5, edited: true });
+      expect(swapped!.insertion).toEqual({ from: 4, to: 5, edited: true });
+      expect(only().range.edited).toBe(true);
+    });
+
+    it("keeps the unsure words around a swap, placed in their own utterance, and drops the one it replaced", () => {
+      dictate("intro words");
+      dictate("fix the padding, link to the router, thanks", target, [
+        { from: 4, to: 7 },
+        { from: 29, to: 35 },
+        { from: 37, to: 43 },
+      ]);
+
+      swapWords([{ ...at("link to the router"), text: "@a.ts" }]);
+
+      expect(draft()).toBe("intro words fix the padding, @a.ts, thanks");
+      const [, utterance] = only().utterances;
+      expect(utterance!.uncertain).toEqual([
+        { from: 4, to: 7 },
+        { from: 24, to: 30 },
+      ]);
+      expect(
+        utterance!.uncertain!.map((s) =>
+          textOf({ from: s.from + utterance!.range.from, to: s.to + utterance!.range.from })
+        )
+      ).toEqual(["the", "thanks"]);
+    });
+
+    describe("the words as heard", () => {
+      const hear = (
+        written: string,
+        heard: string,
+        heardUncertain?: Array<{ from: number; to: number }>
+      ) => {
+        const base = draft();
+        const separator = base ? " " : "";
+        setDraft(base + separator + written);
+        useDictationRangeStore.getState().recordUtterance(target, {
+          insertion: { from: base.length, to: base.length + separator.length + written.length },
+          words: {
+            from: base.length + separator.length,
+            to: base.length + separator.length + written.length,
+          },
+          heard,
+          ...(heardUncertain ? { heardUncertain } : {}),
+        });
+      };
+
+      it("takes the same swap, and carries its unsure words past it", () => {
+        hear("Zustand: link to the router, thanks", "zoo stand: link to the router, thanks", [
+          { from: 0, to: 3 },
+          { from: 14, to: 22 },
+          { from: 31, to: 37 },
+        ]);
+
+        swapWords(
+          [{ ...at("link to the router"), text: "@a.ts" }],
+          new Map([[only().utterances[0]!.id, [{ from: 11, to: 29, text: "@a.ts" }]]])
+        );
+
+        expect(only().utterances[0]!.heard).toBe("zoo stand: @a.ts, thanks");
+        expect(only().utterances[0]!.heardUncertain).toEqual([
+          { from: 0, to: 3 },
+          { from: 18, to: 24 },
+        ]);
+        expect(only().utterances[0]!.range.edited).toBe(false);
+      });
+
+      it("leaves the swap an edit when none was made in the words as heard", () => {
+        hear("Zustand: link to the router", "zoo stand: link to the router", [{ from: 0, to: 3 }]);
+
+        swapWords([{ ...at("link to the router"), text: "@a.ts" }]);
+
+        const [utterance] = only().utterances;
+        expect(utterance!.heard).toBe("zoo stand: link to the router");
+        expect(utterance!.heardUncertain).toEqual([{ from: 0, to: 3 }]);
+        expect(utterance!.range.edited).toBe(true);
+        expect(only().range.edited).toBe(true);
+      });
+
+      it("is left alone on an utterance the swap didn't reach", () => {
+        hear("Zustand time", "zoo stand time");
+        dictate("link to the router");
+
+        swapWords([{ ...at("link to the router"), text: "@a.ts" }]);
+
+        expect(only().utterances[0]!.heard).toBe("zoo stand time");
+      });
+    });
+
+    it("writes nothing for a dictation that is gone", () => {
+      dictate("link to the router");
+      let written: string | null = null;
+
+      useDictationRangeStore
+        .getState()
+        .rewriteWords("missing", [{ ...at("link to the router"), text: "@a.ts" }], (next) => {
+          written = next;
+        });
+
+      expect(written).toBeNull();
+      expect(draft()).toBe("link to the router");
+    });
+  });
+
   it("keeps each paragraph break on its own through edits around it", () => {
     dictate("first");
     paragraphBreak();

@@ -181,6 +181,16 @@ describe("createHeardAsRewriter", () => {
 
   it.each([
     ["an @-reference", "check @zoo stand and zoo stand", "check @zoo stand and Zustand"],
+    [
+      "a quoted @-reference with spaces",
+      'check @"docs/my zoo stand notes.md" and zoo stand',
+      'check @"docs/my zoo stand notes.md" and Zustand',
+    ],
+    [
+      "a quoted @-reference with an escaped quote",
+      'check @"my \\"zoo stand\\".md" and zoo stand',
+      'check @"my \\"zoo stand\\".md" and Zustand',
+    ],
     ["backticked text", "run `zoo stand` then zoo stand", "run `zoo stand` then Zustand"],
     ["a path", "open ~/zoo stand and zoo stand", "open ~/zoo stand and Zustand"],
     [

@@ -7,6 +7,7 @@ import {
   type TrackedTextRange,
 } from "@/lib/textRangeMapping";
 import { makeDraftKey } from "@/lib/draftKey";
+import { carrySpansThroughEdits } from "@shared/utils/voiceUncertainWords";
 import { useTerminalInputStore } from "./terminalInputStore";
 
 export interface DictationTextSpan {
@@ -92,6 +93,11 @@ export interface DictationDraftTarget {
   projectId?: string;
 }
 
+/** A swap of `from`..`to` for `text` that the session makes in its own words. */
+export interface DictationWordEdit extends DictationTextSpan {
+  text: string;
+}
+
 /**
  * Where a session's next words go in one draft. It starts as the caret, or the
  * selection the first words will replace, and becomes a point after the words
@@ -169,6 +175,23 @@ interface DictationRangeState {
     heard: string,
     uncertain?: { text: DictationTextSpan[]; heard: DictationTextSpan[] }
   ) => DictationTextSpan | null;
+  /**
+   * Swaps words inside the session's own utterances, as the session, for a
+   * write that changes what they say but not whose they are (a spoken file
+   * link becoming its token): the utterance, its insertion and the dictation
+   * stay unedited around the new text, and an edit made there afterwards still
+   * counts as the user's. `edits` are in draft order and must not overlap;
+   * `write` receives the new draft and puts it there. Words the heard-as rules
+   * rewrote rerun from the words as heard at stop, so those need `heardSwaps`,
+   * the same swaps in them by utterance id: without them the swap stays an
+   * edit, as one inside words already edited does.
+   */
+  rewriteWords: (
+    id: string,
+    edits: readonly DictationWordEdit[],
+    write: (next: string) => void,
+    heardSwaps?: ReadonlyMap<string, readonly DictationWordEdit[]>
+  ) => void;
   getDictation: (id: string) => DictationRecord | null;
   listDictations: (panelId: string, projectId?: string) => DictationRecord[];
   /** Every live record the voice session wrote, in any draft. */
@@ -259,6 +282,73 @@ function mapRecord(record: DictationRecord, change: TextChange): DictationRecord
     breaks: breaksChanged ? breaks : record.breaks,
     ...(learningSpan ? { learningSpan } : {}),
   };
+}
+
+function holds(range: DictationTextSpan, change: TextChange): boolean {
+  return range.from < range.to && range.from <= change.from && change.to <= range.to;
+}
+
+/** The unedited utterance whose own words a change lies inside and `owns` lets it swap, or -1. */
+function ownerOf(
+  record: DictationRecord,
+  change: TextChange,
+  owns: (utterance: DictationUtterance) => boolean
+): number {
+  return record.utterances.findIndex((u) => !u.range.edited && holds(u.range, change) && owns(u));
+}
+
+/**
+ * Carries a record through a change its session wrote inside the words of its
+ * utterance `owner`. Every range that held those words still holds them,
+ * rewritten, and stays as unedited as it was, where `mapRecord` would trim the
+ * range to what survives and flag it.
+ */
+function mapOwnEdit(record: DictationRecord, change: TextChange, owner: number): DictationRecord {
+  const delta = change.insert.length - (change.to - change.from);
+  const through = (range: TrackedTextRange): TrackedTextRange =>
+    holds(range, change) ? { ...range, to: range.to + delta } : mapTextRange(range, change);
+  const learningSpan = record.learningSpan && mapSpanKeepingEdits(record.learningSpan, change);
+  return {
+    ...record,
+    range: through(record.range),
+    utterances: record.utterances.map((utterance, i) => {
+      const separatorAfter = utterance.separatorAfter && through(utterance.separatorAfter);
+      const mapped: DictationUtterance = {
+        ...utterance,
+        range: through(utterance.range),
+        insertion: through(utterance.insertion),
+        ...(separatorAfter ? { separatorAfter } : {}),
+      };
+      if (i !== owner || !utterance.uncertain) return mapped;
+      // An unsure word the change replaced is gone; the rest keep their words.
+      const at = utterance.range.from;
+      const uncertain = carrySpansThroughEdits(utterance.uncertain, [
+        { from: change.from - at, to: change.to - at, insert: change.insert },
+      ]);
+      const { uncertain: _uncertain, ...rest } = mapped;
+      return uncertain.length > 0 ? { ...rest, uncertain } : rest;
+    }),
+    breaks: record.breaks.map(through),
+    ...(learningSpan ? { learningSpan } : {}),
+  };
+}
+
+/** The utterance with `swaps` made in the words it was heard as, which the heard-as rules rerun at stop. */
+function withSwappedHeard(
+  utterance: DictationUtterance,
+  swaps: readonly DictationWordEdit[]
+): DictationUtterance {
+  if (utterance.heard === undefined) return utterance;
+  const heard = swaps.reduceRight(
+    (words, { from, to, text }) => words.slice(0, from) + text + words.slice(to),
+    utterance.heard
+  );
+  const unsure = carrySpansThroughEdits(
+    utterance.heardUncertain ?? [],
+    swaps.map(({ from, to, text }) => ({ from, to, insert: text }))
+  );
+  const { heardUncertain: _heardUncertain, ...rest } = utterance;
+  return { ...rest, heard, ...(unsure.length > 0 ? { heardUncertain: unsure } : {}) };
 }
 
 /** A stretch of the draft the dictation wrote, as it comes back out. */
@@ -370,6 +460,19 @@ function withInsertion(
     ...(learningSpan ? { learningSpan } : {}),
   };
   return { ...drafts, [key]: records.map((r, i) => (i === index ? record : r)) };
+}
+
+/** `record` in place of the one with its id, unless its draft released it meanwhile. */
+function replaceRecord(
+  state: DictationRangeState,
+  record: DictationRecord
+): Partial<DictationRangeState> {
+  const key = makeDraftKey(record.panelId, record.projectId);
+  const records = state.drafts[key];
+  if (!records?.some((r) => r.id === record.id)) return state;
+  return {
+    drafts: { ...state.drafts, [key]: records.map((r) => (r.id === record.id ? record : r)) },
+  };
 }
 
 // One-shot and keyed by draft: a write that never lands as expected (another
@@ -605,15 +708,45 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
         return paragraphBreak.to <= from || paragraphBreak.from >= to;
       }),
     };
-    set((state) => {
-      const key = makeDraftKey(record.panelId, record.projectId);
-      const records = state.drafts[key];
-      if (!records?.some((r) => r.id === id)) return state;
-      return {
-        drafts: { ...state.drafts, [key]: records.map((r) => (r.id === id ? rewritten : r)) },
-      };
-    });
+    set((state) => replaceRecord(state, rewritten));
     return { from, to };
+  },
+
+  rewriteWords: (id, edits, write, heardSwaps) => {
+    const record = get().getDictation(id);
+    if (!record || edits.length === 0) return;
+    let next = useTerminalInputStore.getState().getDraftInput(record.panelId, record.projectId);
+    let rewritten = record;
+    const owners = new Set<string>();
+    // Words the heard-as rules wrote are replayed from the words as heard at
+    // stop, which would put the spoken command back over a swap they don't
+    // carry; that swap stays an edit.
+    const owns = (utterance: DictationUtterance) =>
+      utterance.heard === undefined || heardSwaps?.has(utterance.id) === true;
+    // Last first, so each edit is still placed where it was planned.
+    for (let i = edits.length - 1; i >= 0; i--) {
+      const { from, to, text } = edits[i]!;
+      const change = { from, to, insert: text };
+      next = next.slice(0, from) + text + next.slice(to);
+      const owner = ownerOf(rewritten, change, owns);
+      if (owner < 0) {
+        rewritten = mapRecord(rewritten, change);
+        continue;
+      }
+      owners.add(rewritten.utterances[owner]!.id);
+      rewritten = mapOwnEdit(rewritten, change, owner);
+    }
+    rewritten = {
+      ...rewritten,
+      utterances: rewritten.utterances.map((utterance) => {
+        const swaps = heardSwaps?.get(utterance.id);
+        return swaps && owners.has(utterance.id) ? withSwappedHeard(utterance, swaps) : utterance;
+      }),
+    };
+    write(next);
+    // The write was mapped like anyone's, which flagged the words it swapped
+    // edited. The session wrote them, so the record is the one mapped above.
+    set((state) => replaceRecord(state, rewritten));
   },
 
   getDictation: (id) => {
