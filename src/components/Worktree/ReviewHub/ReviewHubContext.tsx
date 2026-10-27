@@ -28,11 +28,13 @@ const FIRST_PROMPT_LABEL: Record<TerminalFirstPrompt["via"], string> = {
 };
 
 /**
- * A missing-CLI gate holds its launch's prompt for "Run anyway", but nothing
- * ran there yet, so it claims nothing.
+ * A launch that never started claims nothing: a missing-CLI gate holds its
+ * launch's prompt for "Run anyway", and a failed or refused spawn keeps its
+ * record for the retry that replays it, but neither ran.
  */
 function shownFirstPrompt(panel: PtyPanelData): TerminalFirstPrompt | undefined {
-  return panel.spawnStatus === "missing-cli" ? undefined : panel.firstPrompt;
+  if (panel.spawnStatus === "missing-cli" || panel.spawnStatus === "failed") return undefined;
+  return panel.firstPrompt;
 }
 
 function latestActivity(entry: RunEntry): number {

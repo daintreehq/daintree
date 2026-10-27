@@ -25,8 +25,10 @@ export function buildFirstPrompt(
   via: TerminalFirstPromptVia,
   at: number
 ): TerminalFirstPrompt | undefined {
-  if (typeof text !== "string" || text.trim().length === 0) return undefined;
+  if (typeof text !== "string") return undefined;
   const capped = capText(text);
+  // The kept text is what Review Hub shows and what restore will accept.
+  if (capped.text.trim().length === 0) return undefined;
   return {
     text: capped.text,
     via,

@@ -1123,9 +1123,12 @@ export function buildArgsForRespawn(
     restore: true,
     lastActiveAt: sanitizeLastActiveAt(saved.lastActiveAt),
     scratchpad: sanitizeScratchpad(saved.scratchpad),
-    // A pane that resumes or is held carries on its run; one that starts over
-    // is a fresh launch and was never handed its first prompt (#14592).
-    firstPrompt: restoreRecovery || resumed ? sanitizeFirstPrompt(saved.firstPrompt) : undefined,
+    // A pane that resumes, is held, or replays its saved launch command carries
+    // on its run; one that starts over was never handed its first prompt (#14592).
+    firstPrompt:
+      restoreRecovery || resumed || command === (saved.command?.trim() || undefined)
+        ? sanitizeFirstPrompt(saved.firstPrompt)
+        : undefined,
   };
 }
 

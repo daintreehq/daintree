@@ -416,57 +416,69 @@ describe("addPanel — the run's first prompt on an existing record (#14592)", (
     await drainMicrotasks();
   }
 
+  function startHeld(id: string, record?: typeof firstPrompt) {
+    return usePanelStore.getState().addPanel({
+      kind: "terminal",
+      requestedId: id,
+      replacesRestoreRecovery: true,
+      launchAgentId: "codex",
+      command: "codex",
+      cwd: "/worktrees/task-a",
+      worktreeId: "/worktrees/task-a",
+      ...(record && { firstPrompt: record }),
+      title: "Task A",
+    });
+  }
+
   it("lets a held pane's launch decide it: a fresh start carries none", async () => {
     await holdWithPrompt("held-1");
     expect(ptyPanel("held-1")?.firstPrompt).toEqual(firstPrompt);
 
-    await expect(launchOver("held-1")).resolves.toBe("held-1");
+    await expect(startHeld("held-1")).resolves.toBe("held-1");
     await drainMicrotasks();
 
+    expect(ptyPanel("held-1")?.restoreRecovery).toBeUndefined();
     expect(ptyPanel("held-1")?.firstPrompt).toBeUndefined();
   });
 
-  it("keeps it when the held pane's launch carries it on", async () => {
+  it("takes the record the held pane's launch carries over the one it held", async () => {
     await holdWithPrompt("held-1");
+    const carried = { text: "Port the parser, carried", via: "launch" as const, at: 2_000 };
 
-    await usePanelStore.getState().addPanel({
-      kind: "terminal",
-      requestedId: "held-1",
-      replacesRestoreRecovery: true,
-      launchAgentId: "codex",
-      command: "codex resume sess-1",
-      agentSessionId: "sess-1",
-      cwd: "/worktrees/task-a",
-      worktreeId: "/worktrees/task-a",
-      firstPrompt,
-      title: "Task A",
-    });
+    await expect(startHeld("held-1", carried)).resolves.toBe("held-1");
     await drainMicrotasks();
 
-    expect(ptyPanel("held-1")?.firstPrompt).toEqual(firstPrompt);
+    expect(ptyPanel("held-1")?.firstPrompt).toEqual(carried);
   });
 
-  it("keeps the live record when a reconnect lands with a snapshot that has none", async () => {
-    await usePanelStore.getState().addPanel({
-      kind: "terminal",
-      existingId: "p1",
-      cwd: "/repo",
-      firstPrompt,
-      bypassLimits: true,
-    });
-    await drainMicrotasks();
+  it.each([
+    ["has none", undefined],
+    ["has an older one", { text: "stale snapshot", via: "launch" as const, at: 500 }],
+  ])(
+    "keeps the live record when a reconnect lands with a snapshot that %s",
+    async (_label, incoming) => {
+      await usePanelStore.getState().addPanel({
+        kind: "terminal",
+        existingId: "p1",
+        cwd: "/repo",
+        firstPrompt,
+        bypassLimits: true,
+      });
+      await drainMicrotasks();
 
-    await usePanelStore.getState().addPanel({
-      kind: "terminal",
-      requestedId: "p1",
-      existingId: "p1",
-      cwd: "/repo",
-      bypassLimits: true,
-    });
-    await drainMicrotasks();
+      await usePanelStore.getState().addPanel({
+        kind: "terminal",
+        requestedId: "p1",
+        existingId: "p1",
+        cwd: "/repo",
+        ...(incoming && { firstPrompt: incoming }),
+        bypassLimits: true,
+      });
+      await drainMicrotasks();
 
-    expect(ptyPanel("p1")?.firstPrompt).toEqual(firstPrompt);
-  });
+      expect(ptyPanel("p1")?.firstPrompt).toEqual(firstPrompt);
+    }
+  );
 });
 
 /**

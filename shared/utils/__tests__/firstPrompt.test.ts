@@ -14,12 +14,27 @@ describe("buildFirstPrompt", () => {
   });
 
   it("keeps a prompt at the cap whole and flags one past it", () => {
-    const atCap = "a".repeat(FIRST_PROMPT_MAX_CHARS);
-    expect(buildFirstPrompt(atCap, "launch", 1)?.truncated).toBeUndefined();
+    const atCap = `HEAD${"a".repeat(FIRST_PROMPT_MAX_CHARS - 4)}`;
+    expect(buildFirstPrompt(atCap, "launch", 1)).toEqual({ text: atCap, via: "launch", at: 1 });
 
-    const over = buildFirstPrompt(`${atCap}b`, "launch", 1);
-    expect(over?.text).toBe(atCap);
-    expect(over?.truncated).toBe(true);
+    expect(buildFirstPrompt(`${atCap}TAIL`, "launch", 1)).toEqual({
+      text: atCap,
+      via: "launch",
+      at: 1,
+      truncated: true,
+    });
+  });
+
+  it("records nothing when all it would keep is blank", () => {
+    const text = `${" ".repeat(FIRST_PROMPT_MAX_CHARS)}Fix this`;
+    expect(buildFirstPrompt(text, "launch", 1)).toBeUndefined();
+  });
+
+  it("builds only records that restore accepts back unchanged", () => {
+    for (const length of [1, FIRST_PROMPT_MAX_CHARS - 1, FIRST_PROMPT_MAX_CHARS, 9_000]) {
+      const record = buildFirstPrompt(`x${" y".repeat(length)}`, "launch", 3);
+      expect(sanitizeFirstPrompt(record)).toEqual(record);
+    }
   });
 
   it("never cuts between the halves of a surrogate pair", () => {
@@ -54,13 +69,9 @@ describe("sanitizeFirstPrompt", () => {
     expect(sanitizeFirstPrompt(value)).toBeUndefined();
   });
 
-  it("caps an oversized record and flags it", () => {
-    const record = sanitizeFirstPrompt({
-      text: "x".repeat(FIRST_PROMPT_MAX_CHARS + 50),
-      via: "launch",
-      at: 1,
-    });
-    expect(record?.text.length).toBe(FIRST_PROMPT_MAX_CHARS);
-    expect(record?.truncated).toBe(true);
+  it("caps an oversized record at its start and flags it", () => {
+    const kept = `HEAD${"x".repeat(FIRST_PROMPT_MAX_CHARS - 4)}`;
+    const record = sanitizeFirstPrompt({ text: `${kept}TAIL`, via: "launch", at: 1 });
+    expect(record).toEqual({ text: kept, via: "launch", at: 1, truncated: true });
   });
 });

@@ -4431,9 +4431,40 @@ describe("first prompt restore (#14592)", () => {
     expect(result.firstPrompt).toBeUndefined();
   });
 
-  it("drops a malformed on-disk record instead of handing it to the pane", () => {
+  it("keeps the record when the respawn runs the saved launch command again", () => {
+    // No settings to rebuild from and no resume path: the saved command, prompt
+    // included, is what launches.
+    const saved = { ...claudePane, command: "claude 'Fix the flaky test then push'" };
+    const result = buildArgsForRespawn(saved, "terminal", "/repo", undefined, false, "/tmp");
+    expect(result.command).toBe(saved.command);
+    expect(result.firstPrompt).toEqual(firstPrompt);
+  });
+
+  describe("an untrusted on-disk record", () => {
     const backend = { id: "t1", cwd: "/repo", kind: "terminal" as const };
-    const saved = { ...claudePane, firstPrompt: { text: 42, via: "launch", at: 1 } };
-    expect(buildArgsForBackendTerminal(backend, saved, "/repo").firstPrompt).toBeUndefined();
+    const builders: Array<[string, (saved: SavedSnapshot) => AddTerminalArgs]> = [
+      ["a live PTY", (saved) => buildArgsForBackendTerminal(backend, saved, "/repo")],
+      ["a reconnect fallback", (saved) => buildArgsForReconnectedFallback(backend, saved, "/repo")],
+      ["a resumed respawn", (saved) => respawn({ ...saved, agentSessionId: "sess-c" })],
+      [
+        "a held respawn",
+        (saved) => respawn({ ...saved, restoreRecovery: { reason: "resume-deferred" } }),
+      ],
+    ];
+
+    it.each(builders)("is dropped when malformed, for %s", (_label, build) => {
+      expect(
+        build({ ...claudePane, firstPrompt: { text: 42, via: "launch", at: 1 } }).firstPrompt
+      ).toBeUndefined();
+    });
+
+    it.each(builders)("is cut to the cap when oversized, for %s", (_label, build) => {
+      const restored = build({
+        ...claudePane,
+        firstPrompt: { text: "y".repeat(9_000), via: "launch", at: 1 },
+      }).firstPrompt;
+      expect(restored?.text.length).toBe(8_000);
+      expect(restored?.truncated).toBe(true);
+    });
   });
 });

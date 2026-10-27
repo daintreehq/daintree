@@ -198,6 +198,23 @@ describe("buildPanelSnapshotOptions", () => {
     });
   });
 
+  it("reopens with the launch record, since the stored command carries its prompt (#14592)", () => {
+    const firstPrompt = { text: "Port the parser", via: "launch" as const, at: 1_000 };
+    const reopened = buildPanelSnapshotOptions(
+      makePanel({ launchAgentId: "claude", command: "claude 'Port the parser'", firstPrompt })
+    );
+    expect(reopened?.firstPrompt).toEqual(firstPrompt);
+
+    const sent = buildPanelSnapshotOptions(
+      makePanel({
+        launchAgentId: "claude",
+        command: "claude",
+        firstPrompt: { text: "Port the parser", via: "send", at: 1_000 },
+      })
+    );
+    expect(sent).not.toHaveProperty("firstPrompt");
+  });
+
   it("keeps a recipe agent's required plugin tools on the reopened pane (#14096)", () => {
     const panel = makePanel({
       kind: "terminal",
@@ -307,6 +324,38 @@ describe("panelDuplicationService", () => {
     const result = await buildPanelDuplicateOptions(panel, "grid");
 
     expect(result.command).toBe("fallback-cmd");
+  });
+
+  it("hands a copy that replays the stored command its launch record (#14592)", async () => {
+    const { agentSettingsClient } = await import("@/clients");
+    vi.mocked(agentSettingsClient.get).mockRejectedValue(new Error("network error"));
+    const firstPrompt = { text: "Port the parser", via: "launch" as const, at: 1_000 };
+
+    const result = await buildPanelDuplicateOptions(
+      makePanel({ launchAgentId: "claude", command: "claude 'Port the parser'", firstPrompt }),
+      "grid"
+    );
+
+    expect(result.command).toBe("claude 'Port the parser'");
+    expect(result.firstPrompt).toMatchObject({ text: "Port the parser", via: "launch" });
+    expect(result.firstPrompt?.at).toBeGreaterThan(firstPrompt.at);
+  });
+
+  it("gives a copy rebuilt from settings no record, since it was never handed the prompt (#14592)", async () => {
+    const { agentSettingsClient } = await import("@/clients");
+    vi.mocked(agentSettingsClient.get).mockResolvedValue({ agents: { claude: {} } });
+
+    const result = await buildPanelDuplicateOptions(
+      makePanel({
+        launchAgentId: "claude",
+        command: "claude 'Port the parser'",
+        firstPrompt: { text: "Port the parser", via: "launch", at: 1_000 },
+      }),
+      "grid"
+    );
+
+    expect(result.command).toBe("generated-claude-command");
+    expect(result).not.toHaveProperty("firstPrompt");
   });
 
   it("uses existing command for unregistered agents", async () => {

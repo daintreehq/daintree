@@ -2259,8 +2259,8 @@ describe("restartTerminal and the run's first prompt (#14592)", () => {
     vi.mocked(agentSettingsClient.get).mockResolvedValue({ agents: {} });
     vi.mocked(projectClient.getSettings).mockResolvedValue({ runCommands: [] });
     const { buildResumeCommand, buildResumeLatestCommand } = await import("@shared/types");
-    vi.mocked(buildResumeCommand).mockReturnValue(null);
-    vi.mocked(buildResumeLatestCommand).mockReturnValue(null);
+    vi.mocked(buildResumeCommand).mockReturnValue(undefined);
+    vi.mocked(buildResumeLatestCommand).mockReturnValue(undefined);
     const { reset } = usePanelStore.getState();
     await reset();
     usePanelStore.setState({
@@ -2325,6 +2325,31 @@ describe("restartTerminal and the run's first prompt (#14592)", () => {
 
     expect(mockSpawn.mock.calls[0]![0].command).toBe(launched.command);
     expect(paneAfterRestart().firstPrompt).toEqual(firstPrompt);
+  });
+
+  it.each([
+    ["keeps", "the pane's own conversation", "abc", firstPrompt],
+    ["drops", "another conversation", "other", undefined],
+  ])("%s the record when a forced resume reopens %s", async (_verb, _which, target, expected) => {
+    const { buildResumeCommand } = await import("@shared/types");
+    vi.mocked(buildResumeCommand).mockImplementation(
+      (_agent, sessionId) => `claude -r ${sessionId}`
+    );
+    show({ ...launched, agentSessionId: "abc" });
+
+    await usePanelStore.getState().restartTerminal("test-1", { resumeSessionId: target });
+
+    expect(mockSpawn.mock.calls[0]![0].command).toBe(`claude -r ${target}`);
+    expect(paneAfterRestart().firstPrompt).toEqual(expected);
+  });
+
+  it("drops the record when a demoted pane restarts as a bare shell", async () => {
+    show({ ...launched, agentState: "exited" as const });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(mockSpawn.mock.calls[0]![0].command).toBeUndefined();
+    expect(paneAfterRestart().firstPrompt).toBeUndefined();
   });
 
   it("drops the record when a fallback preset starts a new conversation", async () => {

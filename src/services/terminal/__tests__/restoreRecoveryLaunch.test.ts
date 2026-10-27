@@ -243,18 +243,34 @@ describe("buildRestoreRecoveryLaunchOptions — restore provenance and the plugi
 describe("buildRestoreRecoveryLaunchOptions — first prompt (#14592)", () => {
   const firstPrompt = { text: "Port the parser", via: "launch" as const, at: 1_000 };
 
-  it("keeps the record when the held pane resumes its conversation", () => {
+  const heldWithConversation = () =>
+    heldPane({
+      firstPrompt,
+      restoreRecovery: { reason: "sibling-owns-session-id", sessionId: "sess-1" },
+    });
+
+  it("keeps the record when the held pane resumes the conversation it was held with", () => {
     const options = buildRestoreRecoveryLaunchOptions(
-      heldPane({ firstPrompt }),
+      heldWithConversation(),
       { kind: "resume", sessionId: "sess-1" },
       NO_INPUTS
     );
     expect(options?.firstPrompt).toEqual(firstPrompt);
   });
 
+  it("drops the record when another conversation is picked for the held pane", () => {
+    const options = buildRestoreRecoveryLaunchOptions(
+      heldWithConversation(),
+      { kind: "resume", sessionId: "sess-2" },
+      NO_INPUTS
+    );
+    expect(options).not.toBeNull();
+    expect(options?.firstPrompt).toBeUndefined();
+  });
+
   it("drops the record when the held pane starts a new conversation", () => {
     const options = buildRestoreRecoveryLaunchOptions(
-      heldPane({ firstPrompt }),
+      heldWithConversation(),
       { kind: "fresh" },
       NO_INPUTS
     );

@@ -906,14 +906,19 @@ export const createRestartActions = (
       }
 
       const spawnCommand = commandToRun;
-      // A restart that starts a new conversation is a fresh launch in the pane,
-      // so the record of what the last one was first asked goes (#14592), unless
-      // the stored launch command, prompt included, is what runs again.
+      // The record of what the run was first asked (#14592) stays only while
+      // that run goes on: a resume of the pane's own conversation (a forced
+      // resume may name another one), or a start-over that replays the stored
+      // launch command, prompt included. A new conversation, or the bare shell
+      // a demoted pane restarts as, was never handed it.
+      const startsOver = !consumedSessionId && !usedResumeLatest;
       const keepsFirstPrompt =
-        !isAgent ||
-        Boolean(consumedSessionId) ||
-        usedResumeLatest ||
-        freshCommand === currentTerminal.command;
+        isAgent &&
+        (startsOver
+          ? freshCommand === currentTerminal.command
+          : usedResumeLatest ||
+            !forcedResume ||
+            consumedSessionId === currentTerminal.agentSessionId);
       // Resume commands are transient: keep the original command as the
       // durable stored command so a later restart doesn't replay a consumed
       // session id or re-run resume-latest instead of launching fresh. The

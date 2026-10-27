@@ -60,6 +60,24 @@ export interface ResolvedCommand {
    * the conversation being copied from.
    */
   agentSessionId: string | undefined;
+  /**
+   * The source's stored command runs again, so its launch prompt is handed to
+   * the copy too (#14592). False when the command was rebuilt from settings,
+   * which never carries one.
+   */
+  replaysSourceCommand: boolean;
+}
+
+/**
+ * The source's launch record for a pane that runs its stored command, which
+ * carries the launch prompt; a prompt sent after launch never rides it (#14592).
+ */
+function replayedLaunchPrompt(
+  panel: import("@shared/types/panel").PtyPanelData,
+  at?: number
+): import("@shared/types/panel").TerminalFirstPrompt | undefined {
+  if (panel.firstPrompt?.via !== "launch") return undefined;
+  return at === undefined ? panel.firstPrompt : { ...panel.firstPrompt, at };
 }
 
 /**
@@ -141,6 +159,7 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
           preset,
           presetWasStale,
           agentSessionId,
+          replaysSourceCommand: false,
         };
       } catch (error) {
         console.warn(
@@ -161,6 +180,7 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
           preset: undefined,
           presetWasStale: false,
           agentSessionId: undefined,
+          replaysSourceCommand: panel.command !== undefined,
         };
       }
     }
@@ -173,6 +193,7 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
     preset: undefined,
     presetWasStale: false,
     agentSessionId: undefined,
+    replaysSourceCommand: isPtyPanel(panel) && panel.command !== undefined,
   };
 }
 
@@ -269,6 +290,8 @@ export function buildPanelSnapshotOptions(panel: PanelInstance): AddPanelOptions
     if (!panel.command) {
       return null;
     }
+    // Reopening runs the stored command again, launch prompt included (#14592).
+    const firstPrompt = replayedLaunchPrompt(panel);
     return {
       kind: "terminal",
       launchAgentId: panel.launchAgentId,
@@ -294,6 +317,7 @@ export function buildPanelSnapshotOptions(panel: PanelInstance): AddPanelOptions
       callerLaunchFlags: panel.callerLaunchFlags ? [...panel.callerLaunchFlags] : undefined,
       // A reopened recipe agent is still held to its plugin's tools (#14096).
       requiredPluginTools: panel.requiredPluginTools ? [...panel.requiredPluginTools] : undefined,
+      ...(firstPrompt && { firstPrompt }),
     };
   }
 
@@ -387,6 +411,7 @@ export async function buildPanelDuplicateOptions(
     preset,
     presetWasStale,
     agentSessionId,
+    replaysSourceCommand,
   } = await resolveCommandForPanel(sourcePanel);
 
   if (isPtyPanel(sourcePanel) && sourcePanel.launchAgentId && kind === "terminal") {
@@ -404,6 +429,7 @@ export async function buildPanelDuplicateOptions(
       ? undefined
       : (preset?.color ?? sourcePanel.agentPresetColor);
     const title = presetWasStale ? fallbackTitle : sourcePanel.title;
+    const launchPrompt = replayedLaunchPrompt(sourcePanel, Date.now());
     return {
       kind: "terminal",
       launchAgentId: sourcePanel.launchAgentId,
@@ -427,6 +453,7 @@ export async function buildPanelDuplicateOptions(
       requiredPluginTools: sourcePanel.requiredPluginTools
         ? [...sourcePanel.requiredPluginTools]
         : undefined,
+      ...(replaysSourceCommand && launchPrompt && { firstPrompt: launchPrompt }),
     };
   }
 
