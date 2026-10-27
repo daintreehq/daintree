@@ -314,7 +314,9 @@ describe("createAllHostsRoute", () => {
       { runId: allHostsKey("remote", "t2"), ...target },
     ]);
     expect(ownCalls.emptyTrash).toHaveBeenCalledWith([{ runId: "t1", ...target }]);
-    expect(invoke).toHaveBeenCalledWith("remote", "canopy:empty-trash", [{ runId: "t2", ...target }]);
+    expect(invoke).toHaveBeenCalledWith("remote", "canopy:empty-trash", [
+      { runId: "t2", ...target },
+    ]);
     expect(removed).toBe(2);
 
     // A host that refuses fails the whole: nothing is reported done that wasn't.

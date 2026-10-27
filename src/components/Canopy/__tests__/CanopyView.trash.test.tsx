@@ -269,9 +269,9 @@ describe("CanopyView Trash", () => {
       useCanopyStore.setState({ snapshot: { ...baseSnapshot, trash: [TRASH[0]!] } });
     });
     await frames();
-    expect(
-      document.getElementById("canopy-card-older")?.getAttribute("aria-selected")
-    ).toBe("true");
+    expect(document.getElementById("canopy-card-older")?.getAttribute("aria-selected")).toBe(
+      "true"
+    );
     expect(vi.mocked(notify)).not.toHaveBeenCalled();
   });
 

@@ -57,7 +57,8 @@ export class CanopyTrashLedger {
   list(): CanopyTrashEntry[] {
     return [...this.entries.values()].sort(
       (a, b) =>
-        b.trashedAt - a.trashedAt || (a.run.runId < b.run.runId ? -1 : a.run.runId > b.run.runId ? 1 : 0)
+        b.trashedAt - a.trashedAt ||
+        (a.run.runId < b.run.runId ? -1 : a.run.runId > b.run.runId ? 1 : 0)
     );
   }
 
@@ -156,8 +157,6 @@ function runOf(runId: string, record: TrashedTerminalRecord, workspaceId: string
     ...(record.everDetectedAgent !== undefined
       ? { everDetectedAgent: record.everDetectedAgent }
       : {}),
-    ...(record.agentPresetColor !== undefined
-      ? { agentPresetColor: record.agentPresetColor }
-      : {}),
+    ...(record.agentPresetColor !== undefined ? { agentPresetColor: record.agentPresetColor } : {}),
   };
 }

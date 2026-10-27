@@ -120,7 +120,10 @@ export function CanopyTrashSection({
 
   // Named and placed as each run's inbox row was. The clock behind the rows'
   // age matters to no row here: the trash keeps none past a minute.
-  const items = useMemo(() => buildCanopyTrash(entries, workspaces, Date.now()), [entries, workspaces]);
+  const items = useMemo(
+    () => buildCanopyTrash(entries, workspaces, Date.now()),
+    [entries, workspaces]
+  );
   const shown = useMemo(
     () => (searching ? items.filter((item) => trashMatches(item, terms)) : items),
     [items, terms, searching]

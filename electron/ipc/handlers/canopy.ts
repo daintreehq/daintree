@@ -1715,10 +1715,7 @@ export const canopyNamespace = defineIpcNamespace({
      */
     emptyTrash: op(
       CANOPY_METHOD_CHANNELS.emptyTrash,
-      async (
-        ctx,
-        targets: Array<CanopyTrashTarget & { runId: string }>
-      ): Promise<number> => {
+      async (ctx, targets: Array<CanopyTrashTarget & { runId: string }>): Promise<number> => {
         checkRateLimit(CANOPY_METHOD_CHANNELS.emptyTrash, 10, 10_000);
         if (!Array.isArray(targets) || targets.length > MAX_EMPTY_TRASH) {
           throw new Error("Invalid trash targets");
