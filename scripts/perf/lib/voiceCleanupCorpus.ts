@@ -20,9 +20,9 @@ import type { CorrectionWorktreeContext } from "../../../shared/config/voiceCorr
  *   and punctuated, numbers as digits, "um", "uh" and stutters gone but "yeah",
  *   "you know" and hedges kept, compounds and identifiers written as ordinary
  *   words ("Web Socket", "use Terminal Store"), and spelled letters as capitals
- *   ("N P M"). Its words under 0.65 confidence reach cleanup as unsure
- *   (#14859), the same cut-off as Deepgram's, so its misheard words are
- *   flagged too.
+ *   ("N P M"). It flags no unsure words: the provider would flag a word scored
+ *   under 0.65 (#14859), but xAI's streaming API sends no word confidence, so
+ *   production never hands cleanup a Grok `<uncertain>` span (#14903).
  *
  * The cleanup regression prompts (`dictatedPrompts.ts`) come in as they are,
  * in no provider's style.
@@ -40,6 +40,7 @@ export type CaseSource =
   | "ramble"
   | "tics"
   | "lookalike"
+  | "codenames"
   | "clean"
   | "regression";
 
@@ -51,6 +52,17 @@ export interface CleanupSession {
   /** As `screenCorrectionRepositoryNames` sends them. */
   repositoryNames?: string[];
   worktree?: CorrectionWorktreeContext;
+}
+
+/**
+ * The repository a passage is dictated into, for its code names (#14903): what
+ * main indexes for a pane's project, beside the session's repository names.
+ */
+export interface CleanupCodebase {
+  /** Paths as `FileSearchService.listFiles` lists them. */
+  files?: string[];
+  /** Identifiers the branch's diff writes; each must be one main mines from a diff (`diffCodeNames`). */
+  identifiers?: string[];
 }
 
 /**
@@ -84,7 +96,7 @@ export interface CleanupCase {
   keep?: string[];
   /** A run-on the cleanup should break up: no sentence it writes may run longer than this many words. */
   maxSentenceWords?: number;
-  /** Words the recogniser was unsure of, located in `raw` in order. Deepgram and Grok only. */
+  /** Words the recogniser was unsure of, located in `raw` in order. Deepgram only: Grok scores no streamed word. */
   uncertain?: string[];
   recentContext?: string[];
   /** The prompts last sent to the terminal, oldest first, as production sends them (#14855). */
@@ -94,6 +106,8 @@ export interface CleanupCase {
   startsPrompt?: boolean;
   /** Absent for a passage dictated with no worktree or repository names, as before #14854. */
   session?: CleanupSession;
+  /** The files and identifiers its repository has; the code names the passage spells go with it. */
+  codebase?: CleanupCodebase;
 }
 
 interface Transcript {
@@ -130,7 +144,6 @@ export const REPLAY_TRANSCRIPTS: Readonly<Record<string, ReplayTranscripts>> = {
       raw: "Zustand selector in the work tree store is returning a new array on every render. Wrap it in use shallow.",
       fixes: { worktree: "form", useShallow: "form" },
       keep: ["Zustand"],
-      uncertain: ["work tree", "use shallow"],
     },
   },
   "npm-test-watch": {
@@ -202,7 +215,6 @@ export const REPLAY_TRANSCRIPTS: Readonly<Record<string, ReplayTranscripts>> = {
     grok: {
       raw: "The Project View Manager evicts the least recently used view when memory is tight, but the renderer for that view keeps its X term instances alive because nothing calls dispose on them when the web contents goes away. Find the leak and fix it.",
       fixes: { xterm: "form" },
-      uncertain: ["X term"],
     },
   },
   "rebase-develop": {
@@ -297,7 +309,6 @@ export const REPLAY_TRANSCRIPTS: Readonly<Record<string, ReplayTranscripts>> = {
       raw: "The React compiler bailed out on use Terminal Store. Check the Babel plug-in output for the reason.",
       fixes: { useTerminalStore: "form", plugin: "form" },
       keep: ["Babel"],
-      uncertain: ["use Terminal Store"],
     },
   },
   "playwright-spec": {
@@ -357,7 +368,6 @@ export const REPLAY_TRANSCRIPTS: Readonly<Record<string, ReplayTranscripts>> = {
         "Deepgram Nova 3 rejects the keyterm parameter when the list is too long, so cap it before building the URL.",
       fixes: { keyterm: "form", URL: "form" },
       keep: ["Deepgram"],
-      uncertain: ["key term"],
     },
   },
   "pull-request": {
@@ -378,7 +388,6 @@ export const REPLAY_TRANSCRIPTS: Readonly<Record<string, ReplayTranscripts>> = {
     grok: {
       raw: "Move the handler into Electron slash IPC slash handlers and regenerate the preload types with code gen colon IPC.",
       fixes: { "electron/ipc/handlers": "form", "codegen:ipc": "form" },
-      uncertain: ["code gen"],
     },
   },
   "xterm-webgl": {
@@ -395,7 +404,6 @@ export const REPLAY_TRANSCRIPTS: Readonly<Record<string, ReplayTranscripts>> = {
     grok: {
       raw: "The X term Web GL renderer drops glyphs after a resize. Check the texture atlas size.",
       fixes: { xterm: "form", WebGL: "form" },
-      uncertain: ["X term", "Web GL"],
     },
   },
   "node-pty-rebuild": {
@@ -1038,7 +1046,6 @@ const NAMES: readonly AuthoredCase[] = [
       "Use the validation library spelled Z-O-D. Validate the payload with Zod before it reaches the handler.",
     fixes: { "Z-O-D": "form", "with Zod": "misread" },
     keep: ["before it reaches the handler"],
-    uncertain: ["squad"],
   },
   // Every mention takes the spelling, either side of it, and only those.
   {
@@ -1243,7 +1250,6 @@ const TICS: readonly AuthoredCase[] = [
     fixes: { "Claude Code": "misread", Codex: "misread" },
     drops: ["basically", "you know", "yeah"],
     keep: ["not waiting on each other"],
-    uncertain: ["Cloud Code", "codecs"],
   },
   {
     id: "tics-false-start:openai",
@@ -1457,6 +1463,124 @@ const LOOKALIKE: readonly AuthoredCase[] = [
   },
 ];
 
+// A slice of this repository's listing and of a branch's diff (#14903): main
+// indexes both, so a passage that says one of these names word by word sends
+// it to cleanup as a code name.
+const VOICE_BRANCH_CODEBASE: CleanupCodebase = {
+  files: [
+    "electron/services/VoiceCorrectionService.ts",
+    "electron/services/voiceCodeNames.ts",
+    "shared/utils/voiceUncertainWords.ts",
+    "src/components/ui/Dialog.tsx",
+    "src/hooks/useVoiceRecording.test.ts",
+    "src/hooks/useVoiceRecording.ts",
+    "src/store/terminalInputStore.ts",
+  ],
+  identifiers: [
+    "annotateUncertainSpans",
+    "prompt_cache_key",
+    "useEffect",
+    "indexOf",
+    "forEach",
+    "isOpen",
+  ],
+};
+
+// Names the speaker says word by word that cleanup must write as the code
+// does, and words that run together into one of them and must stay words.
+const IN_REPO: readonly AuthoredCase[] = [
+  {
+    id: "codenames-annotate:openai",
+    style: "openai",
+    source: "codenames",
+    raw: "Rename annotate uncertain spans so the name says it returns marked-up text, and update its callers.",
+    reference:
+      "Rename annotateUncertainSpans so the name says it returns marked-up text, and update its callers.",
+    fixes: { annotateUncertainSpans: "form" },
+    keep: ["update its callers"],
+    codebase: VOICE_BRANCH_CODEBASE,
+  },
+  {
+    id: "codenames-hook:grok",
+    style: "grok",
+    source: "codenames",
+    raw: "Open the use Voice Recording hook and check how it releases the microphone on unmount.",
+    reference:
+      "Open the useVoiceRecording hook and check how it releases the microphone on unmount.",
+    fixes: { useVoiceRecording: "form" },
+    keep: ["releases the microphone on unmount"],
+    codebase: VOICE_BRANCH_CODEBASE,
+  },
+  {
+    id: "codenames-cache-key:openai",
+    style: "openai",
+    source: "codenames",
+    raw: "Set prompt cache key on the request to the session's ID, so the warm-up and the cleanup share a cache.",
+    reference:
+      "Set prompt_cache_key on the request to the session's ID, so the warm-up and the cleanup share a cache.",
+    fixes: { prompt_cache_key: "form" },
+    keep: ["share a cache"],
+    codebase: VOICE_BRANCH_CODEBASE,
+  },
+  {
+    id: "codenames-use-effect:grok",
+    style: "grok",
+    source: "codenames",
+    raw: "Move the subscription out of the use Effect and into the store, so it survives a remount.",
+    reference:
+      "Move the subscription out of the useEffect and into the store, so it survives a remount.",
+    fixes: { useEffect: "form" },
+    keep: ["survives a remount"],
+    codebase: VOICE_BRANCH_CODEBASE,
+  },
+  {
+    id: "codenames-index-of:openai",
+    style: "openai",
+    source: "codenames",
+    raw: "Log the index of the selected item before the list moves it.",
+    reference: "Log the index of the selected item before the list moves it.",
+    keep: ["index of the selected item"],
+    codebase: VOICE_BRANCH_CODEBASE,
+  },
+  {
+    id: "codenames-for-each:grok",
+    style: "grok",
+    source: "codenames",
+    raw: "For each worktree, run the type check and list the ones that fail.",
+    reference: "For each worktree, run the type check and list the ones that fail.",
+    keep: ["For each worktree"],
+    codebase: VOICE_BRANCH_CODEBASE,
+  },
+  {
+    id: "codenames-is-open:openai",
+    style: "openai",
+    source: "codenames",
+    raw: "Check whether the dialog is open before you move focus into it.",
+    reference: "Check whether the dialog is open before you move focus into it.",
+    keep: ["the dialog is open"],
+    codebase: VOICE_BRANCH_CODEBASE,
+  },
+  {
+    id: "codenames-effect-size:openai",
+    style: "openai",
+    source: "codenames",
+    raw: "Use effect size, not just the p value, when you compare the two benchmark runs.",
+    reference: "Use effect size, not just the p value, when you compare the two benchmark runs.",
+    keep: ["Use effect size"],
+    codebase: VOICE_BRANCH_CODEBASE,
+  },
+];
+
+// Each passage again with no repository: what the code names add, or cost, is
+// the difference between the two.
+const CODE_NAMES: readonly AuthoredCase[] = [
+  ...IN_REPO,
+  ...IN_REPO.map(({ codebase: _codebase, ...entry }) => ({
+    ...entry,
+    id: entry.id.replace(":", "-bare:"),
+  })),
+];
+
 // Passages already right: cleanup should hand them back untouched.
 const CLEAN: readonly AuthoredCase[] = [
   {
@@ -1537,6 +1661,7 @@ export const CLEANUP_CORPUS: readonly CleanupCase[] = [
     ...RAMBLE,
     ...TICS,
     ...LOOKALIKE,
+    ...CODE_NAMES,
     ...CLEAN,
   ].map((entry) => ({
     ...entry,
