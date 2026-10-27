@@ -569,13 +569,59 @@ describe("GrokTranscriptionProvider", () => {
       provider.stop();
     });
 
+    it("keeps every chunk in the preview when chunk finals are timed from the utterance's start", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      // As Grok sends them: each interim runs from the last chunk's end, and
+      // each chunk final from the utterance's start with only its own words.
+      socket.simulateMessage(chunkFinal("I noticed it.", 0, 8.74));
+      socket.simulateMessage(partial("I'm using Grok.", { start: 8.74, duration: 0.86 }));
+      socket.simulateMessage(chunkFinal("I'm using Grok Transcribe now.", 0, 10.82));
+      socket.simulateMessage(partial("Can you take a-", { start: 10.82, duration: 0.78 }));
+      socket.simulateMessage(chunkFinal("Can you take a look?", 0, 14.2));
+      socket.simulateMessage(
+        utteranceFinal("I noticed it. I'm using Grok Transcribe now. Can you take a look?", 0, 14.4)
+      );
+
+      expect(deltasOf(events).map((d) => d.text)).toEqual([
+        "I noticed it.",
+        "I noticed it. I'm using Grok.",
+        "I noticed it. I'm using Grok Transcribe now.",
+        "I noticed it. I'm using Grok Transcribe now. Can you take a",
+        "I noticed it. I'm using Grok Transcribe now. Can you take a look?",
+      ]);
+      expect(completesOf(events).map((c) => c.text)).toEqual([
+        "I noticed it. I'm using Grok Transcribe now. Can you take a look?",
+      ]);
+      provider.stop();
+    });
+
+    it("drops an interim's cut-off mark but keeps a final's ellipsis", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      socket.simulateMessage(partial("it's kind of...", { start: 0, duration: 1 }));
+      socket.simulateMessage(partial("it's kind of hiding big…", { start: 0, duration: 2 }));
+      socket.simulateMessage(
+        partial("it's kind of hiding big chunks of what -", { start: 0, duration: 3 })
+      );
+      socket.simulateMessage(utteranceFinal("It's kind of hiding things...", 0, 3.5));
+
+      expect(deltasOf(events).map((d) => d.text)).toEqual([
+        "it's kind of",
+        "it's kind of hiding big",
+        "it's kind of hiding big chunks of what",
+      ]);
+      expect(completesOf(events).map((c) => c.text)).toEqual(["It's kind of hiding things..."]);
+      provider.stop();
+    });
+
     it("handles interims that restate the utterance so far without repeating text", async () => {
       const { provider, events } = setup();
       const socket = await bringSessionReady(provider);
       socket.simulateMessage(chunkFinal("one two three", 0, 3));
       socket.simulateMessage(partial("one two three four", { start: 0, duration: 3.5 }));
       expect(deltasOf(events).at(-1)?.text).toBe("one two three four");
-      socket.simulateMessage(chunkFinal("one two three four five six", 0, 6));
+      socket.simulateMessage(chunkFinal("four five six", 0, 6));
       expect(deltasOf(events).at(-1)?.text).toBe("one two three four five six");
       socket.simulateMessage(utteranceFinal("One two three four five six.", 0, 6.4));
       expect(completesOf(events).map((c) => c.text)).toEqual(["One two three four five six."]);
@@ -588,6 +634,187 @@ describe("GrokTranscriptionProvider", () => {
       socket.simulateMessage(chunkFinal("first part", 0, 3));
       socket.simulateMessage(utteranceFinal("second part", 3, 1.2));
       expect(completesOf(events).map((c) => c.text)).toEqual(["first part second part"]);
+      provider.stop();
+    });
+
+    it("keeps the chunk finals' words when a final timed from the utterance's start leaves them out", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      socket.simulateMessage(chunkFinal("So the thing I wanted to point out.", 0, 2.32));
+      socket.simulateMessage(chunkFinal("Is that when this is finished.", 0, 3.98));
+      socket.simulateMessage(partial("You need to use", { start: 3.98, duration: 1 }));
+      socket.simulateMessage(
+        utteranceFinal("You need to use the github create issue/command.", 0, 7.42)
+      );
+      expect(completesOf(events).map((c) => c.text)).toEqual([
+        "So the thing I wanted to point out. Is that when this is finished. You need to use the github create issue/command.",
+      ]);
+      provider.stop();
+    });
+
+    it("keeps only the chunks a final doesn't restate, repeating none it does", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      socket.simulateMessage(chunkFinal("One two three.", 0, 2));
+      socket.simulateMessage(chunkFinal("Four five six.", 0, 4));
+      socket.simulateMessage(chunkFinal("Seven eight nine.", 0, 6));
+      socket.simulateMessage(utteranceFinal("Seven eight nine, ten eleven.", 0, 7));
+      expect(completesOf(events).map((c) => c.text)).toEqual([
+        "One two three. Four five six. Seven eight nine, ten eleven.",
+      ]);
+      provider.stop();
+    });
+
+    it("takes a final that rewords a few restated words as restating them", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      socket.simulateMessage(chunkFinal("I noticed it.", 0, 2));
+      socket.simulateMessage(chunkFinal("I'm using Grok transcribe now.", 0, 4));
+      socket.simulateMessage(
+        utteranceFinal("I noticed that. I'm using Grok Transcribe now. Can you look?", 0, 5.5)
+      );
+      expect(completesOf(events).map((c) => c.text)).toEqual([
+        "I noticed that. I'm using Grok Transcribe now. Can you look?",
+      ]);
+      provider.stop();
+    });
+
+    it("doesn't take a new phrase that opens like a chunk for its restatement", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      socket.simulateMessage(chunkFinal("I think so.", 0, 1.5));
+      socket.simulateMessage(utteranceFinal("I think we should ship it.", 0, 3.5));
+      expect(completesOf(events).map((c) => c.text)).toEqual([
+        "I think so. I think we should ship it.",
+      ]);
+      provider.stop();
+    });
+
+    it("lands the chunk finals' words when the utterance final comes back empty", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      socket.simulateMessage(chunkFinal("Nothing here", 0, 2));
+      socket.simulateMessage(chunkFinal("may go missing.", 0, 4));
+      socket.simulateMessage(utteranceFinal("", 0, 4.5));
+      expect(completesOf(events)).toEqual([
+        expect.objectContaining({ text: "Nothing here may go missing.", endOfSpeech: true }),
+      ]);
+      provider.stop();
+    });
+
+    it("doesn't take a run of chunks as restated when its first chunk isn't", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      socket.simulateMessage(chunkFinal("Do not.", 0, 1));
+      socket.simulateMessage(chunkFinal("I think we should ship now.", 0, 3));
+      socket.simulateMessage(utteranceFinal("I think we should ship now.", 0, 3.4));
+      expect(completesOf(events).map((c) => c.text)).toEqual([
+        "Do not. I think we should ship now.",
+      ]);
+      provider.stop();
+    });
+
+    it("reads a restatement from its words' timing, however differently it was formatted", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      socket.simulateMessage(
+        chunkFinal(
+          "Set the timer for twenty five minutes.",
+          0,
+          2.4,
+          scoredWords(0.1, ["Set", 0.9], ["the", 0.9], ["timer", 0.9], ["for", 0.9])
+        )
+      );
+      socket.simulateMessage(
+        utteranceFinal(
+          "Set the timer for 25 minutes.",
+          0,
+          2.8,
+          scoredWords(0.1, ["Set", 0.9], ["the", 0.9], ["timer", 0.9], ["for", 0.9])
+        )
+      );
+      expect(completesOf(events).map((c) => c.text)).toEqual(["Set the timer for 25 minutes."]);
+      provider.stop();
+    });
+
+    it("keeps a chunk a timed final starts after, even when the final opens with its words", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      socket.simulateMessage(
+        chunkFinal("I think it works.", 0, 1.5, scoredWords(0.1, ["I", 0.9], ["think", 0.9]))
+      );
+      socket.simulateMessage(
+        utteranceFinal("I think it failed.", 0, 3.5, scoredWords(2, ["I", 0.9], ["think", 0.9]))
+      );
+      expect(completesOf(events).map((c) => c.text)).toEqual([
+        "I think it works. I think it failed.",
+      ]);
+      provider.stop();
+    });
+
+    it("keeps a locked chunk when an empty chunk final ends where it does", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      socket.simulateMessage(chunkFinal("Still here.", 0, 3));
+      socket.simulateMessage(chunkFinal("", 0, 3));
+      expect(deltasOf(events).at(-1)?.text).toBe("Still here.");
+      socket.simulateMessage(utteranceFinal("", 0, 3.2));
+      expect(completesOf(events).map((c) => c.text)).toEqual(["Still here."]);
+      provider.stop();
+    });
+
+    it("logs how many chunks a final left out, never their words", async () => {
+      const { provider } = setup();
+      const loggers = [logger.logDebug, logger.logInfo, logger.logWarn, logger.logError];
+      for (const log of loggers) vi.mocked(log).mockClear();
+      const socket = await bringSessionReady(provider);
+      socket.simulateMessage(chunkFinal("Zanzibar first.", 0, 2));
+      socket.simulateMessage(chunkFinal("Then Xylophone.", 0, 4));
+      socket.simulateMessage(chunkFinal("Quixotic last.", 0, 6));
+      socket.simulateMessage(utteranceFinal("Quixotic last, done.", 0, 7));
+
+      const warnings = vi.mocked(logger.logWarn).mock.calls;
+      const leftOut = warnings.filter(([message]) => String(message).includes("left out words"));
+      expect(leftOut.map(([, fields]) => fields)).toEqual([
+        { keptChunks: 2, lockedChunks: 3, resultLength: 20, resultTimed: false },
+      ]);
+      const logged = JSON.stringify(loggers.flatMap((log) => vi.mocked(log).mock.calls));
+      for (const word of ["Zanzibar", "Xylophone", "Quixotic"]) {
+        expect(logged).not.toContain(word);
+      }
+      provider.stop();
+    });
+
+    it("keeps the chunks when a final timed as restating them holds few of their words", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      socket.simulateMessage(
+        chunkFinal("one two three four", 0, 2, scoredWords(0.1, ["one", 0.9], ["two", 0.9]))
+      );
+      // Timed from where the chunk's words start, yet only new words.
+      socket.simulateMessage(
+        utteranceFinal("five six.", 0, 3, scoredWords(0.1, ["five", 0.9], ["six.", 0.9]))
+      );
+      expect(completesOf(events).map((c) => c.text)).toEqual(["one two three four five six."]);
+      provider.stop();
+    });
+
+    it("warns about nothing when the final restates every chunk", async () => {
+      const { provider } = setup();
+      vi.mocked(logger.logWarn).mockClear();
+      const socket = await bringSessionReady(provider);
+      socket.simulateMessage(chunkFinal("One two.", 0, 2));
+      socket.simulateMessage(chunkFinal("Three four.", 0, 4));
+      socket.simulateMessage(utteranceFinal("One two. Three four.", 0, 4.5));
+      expect(vi.mocked(logger.logWarn)).not.toHaveBeenCalled();
+      provider.stop();
+    });
+
+    it("keeps a chunk final's own ellipsis in the preview", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      socket.simulateMessage(chunkFinal("Wait...", 0, 1));
+      expect(deltasOf(events).at(-1)?.text).toBe("Wait...");
       provider.stop();
     });
 
@@ -884,25 +1111,18 @@ describe("GrokTranscriptionProvider", () => {
       provider.stop();
     });
 
-    it("scores a chunk final that restates an earlier one by its own words", async () => {
+    it("scores each chunk final by its own words", async () => {
       const { provider, events } = setup();
       const socket = await bringSessionReady(provider);
       socket.simulateMessage(
         chunkFinal("one two", 0, 2, scoredWords(0, ["one", 0.95], ["two", 0.3]))
       );
-      socket.simulateMessage(
-        chunkFinal(
-          "one two three",
-          0,
-          3,
-          scoredWords(0, ["one", 0.95], ["two", 0.9], ["three", 0.4])
-        )
-      );
+      socket.simulateMessage(chunkFinal("three", 0, 3, scoredWords(2, ["three", 0.4])));
       socket.simulateClose(1008);
 
       const [complete] = completesOf(events);
       expect(complete).toMatchObject({ text: "one two three", incomplete: true });
-      expect(complete.uncertain).toEqual([{ from: 8, to: 13 }]);
+      expect(unsureWords(complete)).toEqual(["two", "three"]);
     });
 
     it("keeps a carried chunk's flags across a drop", async () => {
@@ -1167,6 +1387,28 @@ describe("GrokTranscriptionProvider", () => {
       ]);
     });
 
+    it("keeps the locked chunks transcript.done's tail leaves out", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      socket.simulateMessage(chunkFinal("Every word I said", 0, 2));
+      socket.simulateMessage(chunkFinal("before the stop", 0, 4));
+      const stopPromise = provider.stopGracefully();
+      socket.simulateMessage({
+        type: "transcript.done",
+        words: [
+          { text: "still", start: 4.1, end: 4.4 },
+          { text: "lands.", start: 4.4, end: 4.8 },
+        ],
+      });
+      await stopPromise;
+      expect(completesOf(events)).toEqual([
+        expect.objectContaining({
+          text: "Every word I said before the stop still lands.",
+          endOfSpeech: true,
+        }),
+      ]);
+    });
+
     it("keeps a tail word that starts exactly where the last final ended", async () => {
       const { provider, events } = setup();
       const socket = await bringSessionReady(provider);
@@ -1414,6 +1656,26 @@ describe("GrokTranscriptionProvider", () => {
           itemId: [...itemIds][0],
           endOfSpeech: true,
         },
+      ]);
+      provider.stop();
+    });
+
+    it("carries every chunk final of the open utterance across a drop", async () => {
+      const { provider, events } = setup();
+      const first = await bringSessionReady(provider);
+      for (let i = 0; i < 50; i++) provider.sendAudioChunk(new ArrayBuffer(CHUNK_BYTES));
+      // Timed from the utterance's start, as Grok times them.
+      first.simulateMessage(chunkFinal("The first sentence.", 0, 2));
+      first.simulateMessage(chunkFinal("The second one.", 0, 4));
+      first.simulateClose(1006);
+
+      vi.advanceTimersToNextTimer();
+      const second = latestInstance();
+      second.simulateReady();
+      second.simulateMessage(utteranceFinal("And the third.", 0, 1));
+
+      expect(completesOf(events).map((c) => c.text)).toEqual([
+        "The first sentence. The second one. And the third.",
       ]);
       provider.stop();
     });
