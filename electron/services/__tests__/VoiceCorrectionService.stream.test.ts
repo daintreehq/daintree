@@ -297,4 +297,121 @@ describe("VoiceCorrectionService streaming", () => {
     );
     expect(JSON.stringify(vi.mocked(logWarn).mock.calls)).not.toContain("parser");
   });
+
+  describe("verdicts", () => {
+    /**
+     * A reply that streams `frames` and then stalls with the body open, until
+     * the request's signal aborts: the body then errors with its reason, as
+     * fetch's does.
+     */
+    function stallingFetch(frames: Frame[]) {
+      const bytes = new TextEncoder().encode(
+        frames.map((f) => `event: ${f.type}\ndata: ${JSON.stringify(f)}\n\n`).join("")
+      );
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockImplementation(async (_url: string, init: RequestInit) => {
+          const body = new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(bytes);
+              init.signal!.addEventListener("abort", () => controller.error(init.signal!.reason), {
+                once: true,
+              });
+            },
+          });
+          return new Response(body, {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+          });
+        })
+      );
+    }
+
+    // Far enough into the corrected text for some of it to have been reported.
+    const partial = () => replyFrames(reply("Fix the bug in the parser now."), null).slice(0, 12);
+
+    it("names a streamed cleanup that lands replaced, and one a guard refuses by its guard", async () => {
+      stubFetch(streamed(replyFrames(reply("Fix the parser now."))));
+      const replaced = await new VoiceCorrectionService().correct(
+        { rawText: "fix the parser now" },
+        SETTINGS,
+        undefined,
+        vi.fn()
+      );
+      expect(replaced.verdict).toBe("replaced");
+
+      stubFetch(streamed(replyFrames(reply("Fix the bug in the parser now.", "replace", "low"))));
+      const refused = await new VoiceCorrectionService().correct(
+        { rawText: "fix the bug in the parser now" },
+        SETTINGS,
+        undefined,
+        vi.fn()
+      );
+      expect(refused.verdict).toBe("rejected_low_confidence");
+    });
+
+    it("names a stream that errors, or ends or is cut off before its last event, failed", async () => {
+      const errored = partial();
+      errored.push({ type: "error", error: { code: "server_error" } });
+      const failedFrames = partial();
+      failedFrames.push({
+        type: "response.failed",
+        response: { status: "failed", error: { code: "server_error" } },
+      });
+      const json = reply("Fix the parser now.");
+      for (const frames of [
+        errored,
+        failedFrames,
+        replyFrames(json, null),
+        replyFrames(json, completed(json, "incomplete")),
+      ]) {
+        stubFetch(streamed(frames));
+        const result = await new VoiceCorrectionService().correct(
+          { rawText: "fix the parser now" },
+          SETTINGS,
+          undefined,
+          vi.fn()
+        );
+        expect(result).toMatchObject({ action: "no_change", failed: true, verdict: "failed" });
+      }
+    });
+
+    it("names a stream that runs out its deadline part-way timed_out", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        stallingFetch(partial());
+        const heard: string[] = [];
+        const pending = new VoiceCorrectionService().correct(
+          { rawText: "fix the bug in the parser now" },
+          SETTINGS,
+          undefined,
+          (text) => heard.push(text)
+        );
+        await vi.advanceTimersByTimeAsync(7_000);
+        const result = await pending;
+
+        expect(heard.length).toBeGreaterThan(0);
+        expect(result).toMatchObject({ action: "no_change", failed: true, verdict: "timed_out" });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("names a stream cancelled part-way failed", async () => {
+      stallingFetch(partial());
+      const controller = new AbortController();
+      const heard: string[] = [];
+      const pending = new VoiceCorrectionService().correct(
+        { rawText: "fix the bug in the parser now" },
+        SETTINGS,
+        controller.signal,
+        (text) => heard.push(text)
+      );
+      await vi.waitFor(() => expect(heard.length).toBeGreaterThan(0));
+      controller.abort();
+      const result = await pending;
+
+      expect(result).toMatchObject({ action: "no_change", failed: true, verdict: "failed" });
+    });
+  });
 });

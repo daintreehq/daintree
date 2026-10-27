@@ -945,6 +945,72 @@ describe("VoiceRecordingService — session summary (#14617)", () => {
     expect(summaries()[0]!.correctionPassages).toEqual({ ...NO_PASSAGES, sent: 1, dropped: 1 });
   });
 
+  // A stream that errors or runs out its deadline part-way comes back as
+  // main's verdict, after some of its text was already drawn.
+  it.each([
+    ["failed", "failed"],
+    ["timed_out", "timedOut"],
+  ] as const)(
+    "counts a streamed passage whose stream ended %s part-way under it",
+    async (verdict, field) => {
+      const harness = setupGlobals({ correctionEnabled: true });
+      const correction = deferred<Record<string, unknown>>();
+      let streamId = "";
+      harness.voiceInput.correct.mockImplementation((request: { streamId: string }) => {
+        streamId = request.streamId;
+        return correction.promise;
+      });
+      const { service, summaries } = await load();
+      const sessionId = await startLive(harness, service);
+      harness.emit("complete", { sessionId, text: DICTATED, itemId: "item-1" });
+      harness.paintFrames();
+      await service.stop("Dictation stopped.", { reason: "user" });
+
+      harness.emit("correctionProgress", { streamId, text: "Deploy the canopy" });
+      correction.resolve({
+        action: "no_change",
+        correctedText: DICTATED,
+        failed: true,
+        verdict,
+      });
+      await flushPromises();
+      harness.paintFrames();
+
+      expect(draftState.draft).toBe(DICTATED);
+      expect(summaries()).toMatchObject([{ correction: "failed" }]);
+      expect(summaries()[0]!.correctionPassages).toEqual({ ...NO_PASSAGES, sent: 1, [field]: 1 });
+    }
+  );
+
+  it("counts a streamed passage a send dropped part-way as dropped, late progress and all", async () => {
+    const harness = setupGlobals({ correctionEnabled: true });
+    const correction = deferred<{ action: string; correctedText: string; verdict: string }>();
+    let streamId = "";
+    harness.voiceInput.correct.mockImplementation((request: { streamId: string }) => {
+      streamId = request.streamId;
+      return correction.promise;
+    });
+    const { service, summaries } = await load();
+    const sessionId = await startLive(harness, service);
+    harness.emit("complete", { sessionId, text: DICTATED, itemId: "item-1" });
+    harness.paintFrames();
+    await service.stop("Dictation stopped.", { reason: "user" });
+
+    harness.emit("correctionProgress", { streamId, text: "Deploy the" });
+    service.discardPendingCorrections(TARGET.panelId);
+    harness.emit("correctionProgress", { streamId, text: "Deploy the canopy branch" });
+    correction.resolve({
+      action: "replace",
+      correctedText: "Deploy the canopy branch to staging.",
+      verdict: "replaced",
+    });
+    await flushPromises();
+    harness.paintFrames();
+
+    expect(summaries()).toMatchObject([{ correction: "discarded" }]);
+    expect(summaries()[0]!.correctionPassages).toEqual({ ...NO_PASSAGES, sent: 1, dropped: 1 });
+  });
+
   it("reports no passages for a session that ran no cleanup", async () => {
     const harness = setupGlobals();
     const { service, summaries } = await load();
