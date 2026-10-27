@@ -8,7 +8,7 @@
  * renderer can't take words back, so a segment whose meaning still depends on
  * what comes next is held here, its preview still showing, until the utterance
  * says what it was. A pause ends what was said, so break commands are read
- * there; only end of speech can carry a send.
+ * there; only end of speech, or a stop, can carry a send.
  */
 import {
   pendingCommandStart,
@@ -34,10 +34,15 @@ export interface UtteranceSegment {
 }
 
 export interface UtteranceBoundary {
-  /** The speaker went quiet after it: the only boundary a send may end on. */
+  /** The speaker went quiet after it: a send may end here. */
   endOfSpeech: boolean;
   /** The provider closed it at a pause, though the speaker may have gone on since. */
   endsAtPause: boolean;
+  /**
+   * Heard while a stop drains: the speaker has finished, so a pause may end in
+   * a send too (#14803). Its clause still runs on into what the drain has left.
+   */
+  stopping?: boolean;
 }
 
 export interface UtteranceOptions {
@@ -111,7 +116,7 @@ export class UtteranceCommands {
       return this.release(
         this.held.length,
         {
-          send: boundary.endOfSpeech,
+          send: boundary.endOfSpeech || boundary.stopping === true,
           breaks: true,
           endsUtterance: boundary.endOfSpeech,
         },
@@ -135,18 +140,19 @@ export class UtteranceCommands {
   }
 
   /**
-   * Lets go of everything held. A stop ends what was said, so break commands
-   * are read; a lost connection or failed provider keeps the words as said.
-   * Neither carries a send: only end of speech can.
+   * Lets go of everything held. A stop is end of speech, the surest there is,
+   * so break commands and a send are read (#14803); a lost connection or
+   * failed provider keeps the words as said.
    */
   flush(mode: "stop" | "literal", options: UtteranceOptions): UtteranceRelease | null {
     if (this.held.length === 0) {
       this.said = "";
       return null;
     }
+    const stop = mode === "stop";
     return this.release(
       this.held.length,
-      { send: false, breaks: mode === "stop", endsUtterance: true },
+      { send: stop, breaks: stop, endsUtterance: true },
       options
     );
   }

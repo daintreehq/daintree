@@ -35,6 +35,7 @@ const shared = vi.hoisted(() => ({
   transcriptionEventCallback: null as ((e: MockTranscriptionEvent) => void) | null,
   /** Deferred drain promise — resolve externally to control stopGracefully() timing. */
   drainResolve: null as (() => void) | null,
+  drainReject: null as ((error: Error) => void) | null,
   /** When true, stopGracefully uses a deferred promise instead of resolving immediately. */
   useDeferredDrain: false,
   correctionCalls: [] as Array<{ request: unknown; settings: unknown }>,
@@ -79,8 +80,9 @@ vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
     this.getSessionStats = () => null;
     this.stopGracefully = function () {
       if (shared.useDeferredDrain) {
-        return new Promise<void>((resolve) => {
+        return new Promise<void>((resolve, reject) => {
           shared.drainResolve = resolve;
+          shared.drainReject = reject;
         });
       }
       return Promise.resolve();
@@ -868,6 +870,7 @@ describe("voiceInput — spoken send on Deepgram's short endpoint", () => {
     vi.clearAllMocks();
     shared.transcriptionEventCallback = null;
     shared.drainResolve = null;
+    shared.drainReject = null;
     shared.useDeferredDrain = false;
 
     const { store } = await import("../../../store.js");
@@ -1034,7 +1037,7 @@ describe("voiceInput — spoken send on Deepgram's short endpoint", () => {
     expect(completes).toEqual([completion("Fix the login bug, send it.")]);
   });
 
-  it("strips the phrase and sends nothing when dictation stops inside the window", async () => {
+  it("sends when dictation stops inside the window", async () => {
     sentenceEndingInSend();
     vi.advanceTimersByTime(300);
 
@@ -1042,10 +1045,101 @@ describe("voiceInput — spoken send on Deepgram's short endpoint", () => {
     await (handleStop as SessionHandler)(fakeEvent, currentSessionId);
     vi.advanceTimersByTime(5000);
 
-    expect(toRenderer()).toEqual([completion("Fix the login bug")]);
+    expect(toRenderer()).toEqual([completion("Fix the login bug", { send: true })]);
   });
 
-  it("strips a held send, and sends nothing, when another view's dictation key stops it", async () => {
+  describe("once dictation stops inside the window", () => {
+    function stopDraining() {
+      shared.useDeferredDrain = true;
+      sentenceEndingInSend();
+      vi.advanceTimersByTime(300);
+      const handleStop = getHandler("voice-input:stop");
+      return (handleStop as SessionHandler)(fakeEvent, currentSessionId);
+    }
+
+    it("waits for the drain, not the settle window, to send", async () => {
+      const stopping = stopDraining();
+      vi.advanceTimersByTime(5000);
+      emitTranscriptionEvent({ type: "speech_started" });
+      vi.advanceTimersByTime(5000);
+      expect(toRenderer()).toEqual([]);
+
+      shared.drainResolve?.();
+      await stopping;
+
+      expect(toRenderer()).toEqual([completion("Fix the login bug", { send: true })]);
+    });
+
+    it("keeps 'send it' literal when the drain turns up the words the speaker went on with", async () => {
+      const stopping = stopDraining();
+      emitTranscriptionEvent({
+        type: "complete",
+        text: "to the API.",
+        itemId: "item-B",
+        endOfSpeech: true,
+      });
+      shared.drainResolve?.();
+      await stopping;
+
+      expect(toRenderer()).toEqual([
+        completion("Fix the login bug, send it."),
+        {
+          channel: "voice-input:transcription-complete",
+          payload: {
+            sessionId: currentSessionId,
+            text: "to the API.",
+            willCorrect: false,
+            itemId: "item-B",
+          },
+        },
+      ]);
+    });
+
+    it("sends once, ahead of the status, when the provider goes idle at the drain's end", async () => {
+      const stopping = stopDraining();
+      emitTranscriptionEvent({ type: "status", status: "idle" });
+      shared.drainResolve?.();
+      await stopping;
+
+      expect(toRenderer()).toEqual([
+        completion("Fix the login bug", { send: true }),
+        { channel: "voice-input:status", payload: { sessionId: currentSessionId, status: "idle" } },
+      ]);
+    });
+
+    it("lands the words, stripped and unsent, when the drain fails", async () => {
+      const stopping = stopDraining();
+      shared.drainReject?.(new Error("drain failed"));
+      await expect(stopping).rejects.toThrow("drain failed");
+
+      expect(toRenderer()).toEqual([completion("Fix the login bug")]);
+    });
+
+    it("lands the words, stripped and unsent, when the drain reports an error", async () => {
+      const stopping = stopDraining();
+      const error = { severity: "transient", code: "ws_transport_error", message: "dropped" };
+      emitTranscriptionEvent({ type: "error", error });
+      shared.drainResolve?.();
+      await stopping;
+
+      expect(toRenderer()).toEqual([
+        completion("Fix the login bug"),
+        { channel: "voice-input:error", payload: { sessionId: currentSessionId, error } },
+      ]);
+    });
+
+    it("drops the send, and lands nothing after the session ends, when Escape cancels the drain", async () => {
+      const stopping = stopDraining();
+      const handleCancel = getHandler("voice-input:cancel");
+      await (handleCancel as SessionHandler)(fakeEvent, currentSessionId);
+      shared.drainResolve?.();
+      await stopping;
+
+      expect(toRenderer()).toEqual([]);
+    });
+  });
+
+  it("sends a held send when another view's dictation key stops it", async () => {
     sentenceEndingInSend();
     vi.advanceTimersByTime(300);
     const otherView = {
@@ -1072,7 +1166,7 @@ describe("voiceInput — spoken send on Deepgram's short endpoint", () => {
     await (handleStop as SessionHandler)(fakeEvent, currentSessionId);
     vi.advanceTimersByTime(5000);
 
-    expect(toRenderer()).toEqual([stopRequested, completion("Fix the login bug")]);
+    expect(toRenderer()).toEqual([stopRequested, completion("Fix the login bug", { send: true })]);
   });
 
   it("drops a held send, and sends nothing, when Escape cancels inside the window", async () => {
@@ -1093,7 +1187,7 @@ describe("voiceInput — spoken send on Deepgram's short endpoint", () => {
     ]);
   });
 
-  it("retires a lone 'send it' with an empty completion when dictation stops", async () => {
+  it("sends a lone 'send it' as one empty completion when dictation stops", async () => {
     emitTranscriptionEvent({
       type: "complete",
       text: "Send it.",
@@ -1104,7 +1198,7 @@ describe("voiceInput — spoken send on Deepgram's short endpoint", () => {
     const handleStop = getHandler("voice-input:stop");
     await (handleStop as SessionHandler)(fakeEvent, currentSessionId);
 
-    expect(toRenderer()).toEqual([completion("")]);
+    expect(toRenderer()).toEqual([completion("", { send: true })]);
   });
 
   it("strips the phrase, ahead of the status, when the provider dies inside the window", () => {
@@ -1147,7 +1241,7 @@ describe("voiceInput — spoken send on Deepgram's short endpoint", () => {
     );
   });
 
-  it("strips a held send, and sends nothing, when another view's start drains it", async () => {
+  it("hands its owner the send, to refuse, when another view's start drains it", async () => {
     sentenceEndingInSend();
     const otherView = {
       sender: {
@@ -1175,20 +1269,38 @@ describe("voiceInput — spoken send on Deepgram's short endpoint", () => {
           text: "Fix the login bug",
           willCorrect: false,
           itemId: "item-A",
+          send: true,
         },
       },
     ]);
   });
 
-  it("does not hold a send heard while dictation is already stopping", async () => {
+  it("holds a send heard while dictation is already stopping until the drain ends", async () => {
     shared.useDeferredDrain = true;
     const handleStop = getHandler("voice-input:stop");
     const stopping = (handleStop as SessionHandler)(fakeEvent, currentSessionId);
     sentenceEndingInSend();
+    vi.advanceTimersByTime(5000);
+    expect(toRenderer()).toEqual([]);
 
-    expect(toRenderer()).toEqual([completion("Fix the login bug", { send: true })]);
     shared.drainResolve?.();
     await stopping;
+    expect(toRenderer()).toEqual([completion("Fix the login bug", { send: true })]);
+  });
+
+  it("keeps a send heard while stopping literal when the drain's next words follow it", async () => {
+    shared.useDeferredDrain = true;
+    const handleStop = getHandler("voice-input:stop");
+    const stopping = (handleStop as SessionHandler)(fakeEvent, currentSessionId);
+    sentenceEndingInSend();
+    emitTranscriptionEvent({ type: "delta", text: "to the API", itemId: "item-B", replace: true });
+    shared.drainResolve?.();
+    await stopping;
+
+    const completes = toRenderer().filter(
+      (m) => m.channel === "voice-input:transcription-complete"
+    );
+    expect(completes).toEqual([completion("Fix the login bug, send it.")]);
   });
 });
 
@@ -1427,6 +1539,141 @@ describe.each(["openai", "deepgram"] as const)(
 
       expect(landed()).toBe("Fix the bug, send it");
       expect(boundaries()).toBe(1);
+      expect(sends()).toBe(0);
+    });
+
+    it("sends a 'send it' a stop leaves waiting, split across segments", async () => {
+      emitTranscriptionEvent({ type: "complete", text: "Fix the login bug, send", itemId: "A" });
+      emitTranscriptionEvent({ type: "complete", text: "it.", itemId: "B" });
+      expect(completes()).toEqual([]);
+
+      const handleStop = getHandler("voice-input:stop");
+      await (handleStop as SessionHandler)(fakeEvent, currentSessionId);
+
+      expect(landed()).toBe("Fix the login bug");
+      expect(sends()).toBe(1);
+      expect(completes().at(-1)?.send).toBe(true);
+    });
+
+    describe("while the stop drains", () => {
+      function stopDraining() {
+        shared.useDeferredDrain = true;
+        const handleStop = getHandler("voice-input:stop");
+        return (handleStop as SessionHandler)(fakeEvent, currentSessionId);
+      }
+
+      it("sends a 'send it' the provider closed at a pause", async () => {
+        const stopping = stopDraining();
+        emitTranscriptionEvent({
+          type: "complete",
+          text: "Fix the login bug, send it.",
+          itemId: "A",
+          endsAtPause: true,
+        });
+        expect(completes()).toEqual([]);
+        shared.drainResolve?.();
+        await stopping;
+
+        expect(landed()).toBe("Fix the login bug");
+        expect(sends()).toBe(1);
+        expect(completes().at(-1)?.send).toBe(true);
+      });
+
+      it("keeps it literal when the drain's next segment carries on past it", async () => {
+        const stopping = stopDraining();
+        emitTranscriptionEvent({
+          type: "complete",
+          text: "then send it",
+          itemId: "A",
+          endsAtPause: true,
+        });
+        emitTranscriptionEvent({
+          type: "complete",
+          text: "to the API.",
+          itemId: "B",
+          endsAtPause: true,
+        });
+        shared.drainResolve?.();
+        await stopping;
+
+        expect(landed()).toBe("then send it to the API.");
+        expect(sends()).toBe(0);
+      });
+
+      it("never sends a 'send it' whose clause a pause left open", async () => {
+        const stopping = stopDraining();
+        emitTranscriptionEvent({
+          type: "complete",
+          text: "Where should the handler",
+          itemId: "A",
+          endsAtPause: true,
+        });
+        emitTranscriptionEvent({ type: "complete", text: "send it", itemId: "B" });
+        shared.drainResolve?.();
+        await stopping;
+
+        expect(landed()).toBe("Where should the handler send it");
+        expect(sends()).toBe(0);
+      });
+
+      it("lands held words as said, unsent, when the drain reports an error", async () => {
+        const stopping = stopDraining();
+        emitTranscriptionEvent({
+          type: "complete",
+          text: "Fix the login bug, send it",
+          itemId: "A",
+        });
+        expect(completes()).toEqual([]);
+        emitTranscriptionEvent({
+          type: "error",
+          error: { severity: "transient", code: "ws_transport_error", message: "dropped" },
+        });
+        shared.drainResolve?.();
+        await stopping;
+
+        expect(landed()).toBe("Fix the login bug, send it");
+        expect(sends()).toBe(0);
+        const channels = win.__sent.map((m) => m.channel);
+        expect(channels.indexOf("voice-input:transcription-complete")).toBeLessThan(
+          channels.indexOf("voice-input:error")
+        );
+      });
+
+      it("sends a split 'send it' once, ahead of the provider's idle", async () => {
+        const stopping = stopDraining();
+        emitTranscriptionEvent({ type: "complete", text: "Fix the login bug, send", itemId: "A" });
+        emitTranscriptionEvent({ type: "complete", text: "it.", itemId: "B" });
+        emitTranscriptionEvent({ type: "status", status: "idle" });
+        const beforeIdle = win.__sent.findIndex(
+          (m) =>
+            m.channel === "voice-input:status" &&
+            (m.payload as { status?: string }).status === "idle"
+        );
+        expect(sends()).toBe(1);
+        shared.drainResolve?.();
+        await stopping;
+
+        expect(landed()).toBe("Fix the login bug");
+        expect(sends()).toBe(1);
+        const sentAt = win.__sent.findIndex(
+          (m) => (m.payload as { send?: boolean } | undefined)?.send
+        );
+        expect(sentAt).toBeLessThan(beforeIdle);
+      });
+    });
+
+    it("keeps a 'send it' that belongs to the sentence as words when a stop ends it", async () => {
+      emitTranscriptionEvent({
+        type: "complete",
+        text: "Where should the handler send it",
+        itemId: "A",
+      });
+      expect(completes()).toEqual([]);
+
+      const handleStop = getHandler("voice-input:stop");
+      await (handleStop as SessionHandler)(fakeEvent, currentSessionId);
+
+      expect(landed()).toBe("Where should the handler send it");
       expect(sends()).toBe(0);
     });
 

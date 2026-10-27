@@ -13,6 +13,7 @@ import { getAgentConfig } from "../../../shared/config/agentRegistry.js";
 const CUT: UtteranceBoundary = { endOfSpeech: false, endsAtPause: false };
 const PAUSE: UtteranceBoundary = { endOfSpeech: false, endsAtPause: true };
 const END: UtteranceBoundary = { endOfSpeech: true, endsAtPause: false };
+const STOPPING_PAUSE: UtteranceBoundary = { ...PAUSE, stopping: true };
 
 const dictation: UtteranceOptions = { spokenCommands: true, vocabulary: null };
 const withCommands: UtteranceOptions = {
@@ -50,8 +51,9 @@ function written(releases: ReadonlyArray<UtteranceRelease | null>): string {
   return tokens.join(" ").replace(/ (?=[¶⏎])/g, "");
 }
 
-// Every way to cut `words` into segments mid-speech, the last ending speech.
-function segmentations(sentence: string): Segment[][] {
+// Every way to cut `words` into segments mid-speech, the last ending speech
+// unless a stop ends it instead.
+function segmentations(sentence: string, last = END): Segment[][] {
   const words = sentence.split(" ");
   const results: Segment[][] = [];
   for (let mask = 0; mask < 1 << (words.length - 1); mask++) {
@@ -66,7 +68,7 @@ function segmentations(sentence: string): Segment[][] {
       }
     }
     segments.push(current);
-    results.push(segments.map((text, i) => [text, i === segments.length - 1 ? END : CUT]));
+    results.push(segments.map((text, i) => [text, i === segments.length - 1 ? last : CUT]));
   }
   return results;
 }
@@ -98,6 +100,12 @@ describe("UtteranceCommands — however the provider cut the utterance", () => {
   ])("%s", (_, sentence, expected) => {
     for (const segments of segmentations(sentence)) {
       expect(written(feed(segments).releases), JSON.stringify(segments)).toBe(expected);
+    }
+    // A stop is end of speech too: nothing more is coming (#14803).
+    for (const segments of segmentations(sentence, CUT)) {
+      const { utterance, releases } = feed(segments);
+      const stopped = [...releases, utterance.flush("stop", dictation)];
+      expect(written(stopped), `stop: ${JSON.stringify(segments)}`).toBe(expected);
     }
   });
 });
@@ -187,20 +195,63 @@ describe("UtteranceCommands — holding and releasing", () => {
     expect(release?.send).toBe(true);
   });
 
-  it("reads break commands when a stop ends what was said, and sends nothing", () => {
+  it("reads break commands when a stop ends what was said, and sends nothing past them", () => {
     const { utterance } = feed([["Fix the bug, send it new line", CUT]]);
     const release = utterance.flush("stop", dictation);
     expect(shown(release?.emissions)).toEqual([{ itemId: "i0", text: "Fix the bug, send it\n" }]);
     expect(release?.send).toBe(false);
   });
 
-  it("keeps a trailing 'send it' as words when the utterance ends without end of speech", () => {
-    for (const mode of ["stop", "literal"] as const) {
-      const { utterance } = feed([["Fix the bug, send it", CUT]]);
-      const release = utterance.flush(mode, dictation);
-      expect(shown(release?.emissions)).toEqual([{ itemId: "i0", text: "Fix the bug, send it" }]);
-      expect(release?.send).toBe(false);
+  it("sends a trailing 'send it' when a stop ends what was said", () => {
+    const { utterance } = feed([
+      ["Fix the bug, send", CUT],
+      ["it.", CUT],
+    ]);
+    const release = utterance.flush("stop", dictation);
+    expect(shown(release?.emissions)).toEqual([
+      { itemId: "i1", text: "" },
+      { itemId: "i0", text: "Fix the bug" },
+    ]);
+    expect(release?.send).toBe(true);
+    expect(shown(release?.literal)).toEqual([
+      { itemId: "i0", text: "Fix the bug, send" },
+      { itemId: "i1", text: "it." },
+    ]);
+  });
+
+  it("keeps a 'send it' that belongs to the sentence as words at a stop", () => {
+    for (const sentence of [
+      "Where should the handler send it",
+      "Don't send it.",
+      "Let me review it before you send it",
+    ]) {
+      const { utterance } = feed([[sentence, CUT]]);
+      const release = utterance.flush("stop", dictation);
+      expect(shown(release?.emissions), sentence).toEqual([{ itemId: "i0", text: sentence }]);
+      expect(release?.send, sentence).toBe(false);
     }
+  });
+
+  it("sends at a pause heard while a stop drains", () => {
+    const { releases } = feed([["Fix the login bug, send it.", STOPPING_PAUSE]]);
+    expect(shown(releases[0]?.emissions)).toEqual([{ itemId: "i0", text: "Fix the login bug" }]);
+    expect(releases[0]?.send).toBe(true);
+  });
+
+  it("reads a send after a pause heard while stopping with the clause it carries on", () => {
+    const { utterance, releases } = feed([
+      ["Where should the handler", STOPPING_PAUSE],
+      ["send it", CUT],
+    ]);
+    const stopped = [...releases, utterance.flush("stop", dictation)];
+    expect(written(stopped)).toBe("Where should the handler send it");
+  });
+
+  it("keeps a trailing 'send it' as words when the connection is lost", () => {
+    const { utterance } = feed([["Fix the bug, send it", CUT]]);
+    const release = utterance.flush("literal", dictation);
+    expect(shown(release?.emissions)).toEqual([{ itemId: "i0", text: "Fix the bug, send it" }]);
+    expect(release?.send).toBe(false);
   });
 
   it("keeps held words as said when the connection is lost", () => {
