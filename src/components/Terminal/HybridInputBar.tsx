@@ -139,7 +139,11 @@ import { outsideWriteChange, takeLandedCorrection } from "@/services/voiceCorrec
 import { takeScratchLanded } from "@/services/voiceScratchCommand";
 import { registerComposerSelectionSource } from "@/services/voiceRewriteSelection";
 import type { VoiceDraftSend } from "@/services/voiceDraftSend";
-import { readComposerSelection, takePendingComposerSelection } from "@/lib/composerCaret";
+import {
+  readComposerSelection,
+  setPendingComposerSelection,
+  takePendingComposerSelection,
+} from "@/lib/composerCaret";
 import { isolatedComposerScope, makeDraftKey } from "@/lib/draftKey";
 import { DICTATION_OWNER_ATTR } from "@/services/canopyReplyDictation";
 import { useHostReparent } from "./hooks/useHostReparent";
@@ -1270,24 +1274,33 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       });
     };
 
+    const currentDraft = () =>
+      useTerminalInputStore.getState().getDraftInput(terminalId, latestRef.current?.projectId);
+
+    // The dictation key taking the person back puts the caret after the
+    // dictated words (#14791), once: a composer remounted since has forgotten
+    // its caret, and one left mid-draft shows it somewhere else. The offset is
+    // into the draft, so an editor still catching up with it gets the caret
+    // when it does.
+    const placeReturnCaret = (view: EditorView): boolean => {
+      const at = takeRequestedDictationCaret(terminalId);
+      const draft = currentDraft();
+      if (at === null || at > draft.length) return false;
+      if (view.state.doc.toString() === draft) {
+        view.dispatch({ selection: EditorSelection.cursor(at), scrollIntoView: true });
+      } else {
+        setPendingComposerSelection(draftKeyRef.current, draft, { from: at, to: at });
+      }
+      return true;
+    };
+
     // Dictation writes at the caret the composer last showed in this draft, or
     // at the end of a draft nobody focused. Focusing a composer that never had
     // focus would leave CodeMirror's caret at 0, which the caret tracker then
-    // publishes as the place to dictate (#14770). The dictation key taking the
-    // person back puts it after the dictated words instead (#14791): a composer
-    // remounted since has forgotten its caret, and one they left mid-draft
-    // shows it somewhere else.
+    // publishes as the place to dictate (#14770).
     const parkDictationCaret = (view: EditorView) => {
-      const draft = useTerminalInputStore
-        .getState()
-        .getDraftInput(terminalId, latestRef.current?.projectId);
-      const returnAt = takeRequestedDictationCaret(terminalId);
-      // Offsets into the draft, so only while the editor shows that draft.
-      if (returnAt !== null && returnAt <= draft.length && view.state.doc.toString() === draft) {
-        view.dispatch({ selection: EditorSelection.cursor(returnAt), scrollIntoView: true });
-        return;
-      }
-      if (readComposerSelection(draftKeyRef.current, draft) === null) caretToEnd(view);
+      if (placeReturnCaret(view)) return;
+      if (readComposerSelection(draftKeyRef.current, currentDraft()) === null) caretToEnd(view);
     };
 
     const focusEditor = () => {
@@ -1411,8 +1424,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           // draft from wherever the user just clicked (#11133). Ownership is read
           // from the DOM rather than `view.hasFocus`, which reports false whenever
           // the window itself is blurred even though the editor still holds the
-          // caret — a background state change would otherwise move it.
-          if (editorOwnsDomFocus(view)) return true;
+          // caret — a background state change would otherwise move it. Only the
+          // dictation key's return asks for one.
+          if (editorOwnsDomFocus(view)) {
+            placeReturnCaret(view);
+            return true;
+          }
           const gen = focusGenerationRef.current;
           const epoch = captureFocusEpoch();
           // A grab a caller asked for ends with the ask. The selection moving to
@@ -1431,8 +1448,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             if (asked !== null && requestedPaneSurface(terminalId) !== asked) return;
             if (!isHybridInputStillWanted()) return;
             if (!forDictation && isScratchpadElement(document.activeElement, terminalId)) return;
-            // The user can click into the draft between the call and this frame.
-            if (editorOwnsDomFocus(view)) return;
+            // The user can click into the draft between the call and this frame,
+            // which calls off the epoch; the bar's own claim can focus it too.
+            if (editorOwnsDomFocus(view)) {
+              placeReturnCaret(view);
+              return;
+            }
             if (forDictation) parkDictationCaret(view);
             else caretToEnd(view);
             view.focus();

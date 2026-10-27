@@ -12,8 +12,9 @@ const focusDictationComposer = vi.hoisted(() => vi.fn());
 // The real one reads the DOM, which these suites stub in part; its own suite
 // is voiceComposerFocus.test.tsx.
 const revealDictationComposer = vi.hoisted(() => vi.fn());
+type DictationReturn = import("@/services/voiceComposerFocus").DictationReturn;
 const beginDictationReturn = vi.hoisted(() =>
-  vi.fn<(panelId: string) => ((caret: () => number | null) => void) | null>(() => null)
+  vi.fn<(panelId: string, options: { pressedHere: boolean }) => DictationReturn | null>(() => null)
 );
 vi.mock("@/services/voiceComposerFocus", () => ({
   beginDictationReturn,
@@ -218,7 +219,9 @@ function buildElectronStub() {
       onStatus: vi.fn(() => () => {}),
       onSessionEnded: vi.fn(() => () => {}),
       onLiveSession: vi.fn((_callback: (update: VoiceLiveSessionUpdate) => void) => () => {}),
-      onStopRequested: vi.fn((_callback: (payload: { sessionId: string }) => void) => () => {}),
+      onStopRequested: vi.fn(
+        (_callback: (payload: { sessionId: string; returnToTarget?: boolean }) => void) => () => {}
+      ),
       onRevealRequested: vi.fn((_callback: (payload: VoiceRevealRequest) => void) => () => {}),
       getLiveSession: vi.fn().mockResolvedValue({ revision: 0, session: null }),
       getSettings: vi.fn().mockResolvedValue({
@@ -3455,8 +3458,9 @@ describe("VoiceRecordingService — a session another view owns (#14601)", () =>
       });
       Reflect.set(arranged.panelState, "activateTerminal", activateTerminal);
       const finish = vi.fn<(caret: () => number | null) => void>();
-      beginDictationReturn.mockReturnValue(finish);
-      return { ...arranged, activateTerminal, finish };
+      const isCurrent = vi.fn(() => true);
+      beginDictationReturn.mockReturnValue({ isCurrent, focus: finish });
+      return { ...arranged, activateTerminal, finish, isCurrent };
     }
 
     it("brings the pane forward and its composer back when its key stops it here", async () => {
@@ -3468,7 +3472,7 @@ describe("VoiceRecordingService — a session another view owns (#14601)", () =>
         preserveLiveText: true,
         reason: "user",
       });
-      expect(beginDictationReturn).toHaveBeenCalledWith("panel-a");
+      expect(beginDictationReturn).toHaveBeenCalledWith("panel-a", { pressedHere: true });
       // Where the keyboard was is read before the stop changes anything.
       expect(beginDictationReturn.mock.invocationCallOrder[0]).toBeLessThan(
         stopSpy.mock.invocationCallOrder[0]!
@@ -3525,7 +3529,9 @@ describe("VoiceRecordingService — a session another view owns (#14601)", () =>
     }
 
     it("goes back on the release of a held key", async () => {
-      const { windowListeners, stopSpy } = await holdKey();
+      const { windowListeners, panelState, stopSpy, activateTerminal, finish } = await holdKey();
+      // The person moved on to another pane while holding the key.
+      panelState.focusedId = "panel-c";
 
       for (const listener of windowListeners["keyup"] ?? []) listener({ code: "Period" });
 
@@ -3533,7 +3539,11 @@ describe("VoiceRecordingService — a session another view owns (#14601)", () =>
         "Dictation stopped.",
         expect.objectContaining({ reason: "key_release" })
       );
-      expect(beginDictationReturn).toHaveBeenCalledWith("panel-b");
+      expect(beginDictationReturn).toHaveBeenCalledWith("panel-b", { pressedHere: true });
+      await vi.waitFor(() => {
+        expect(finish).toHaveBeenCalledTimes(1);
+      });
+      expect(activateTerminal).toHaveBeenCalledWith("panel-b");
     });
 
     it("stays put when a held key ends because the window lost focus", async () => {
@@ -3569,6 +3579,8 @@ describe("VoiceRecordingService — a session another view owns (#14601)", () =>
 
       stopRequested({ sessionId: "own", returnToTarget: true });
       expect(stopSpy).toHaveBeenCalledTimes(1);
+      // The key was pressed in another view, so this one's DOM focus says nothing.
+      expect(beginDictationReturn).toHaveBeenCalledWith("panel-a", { pressedHere: false });
       // The stop finishes and clears the target before the view is shown.
       voiceState.status = "idle";
       voiceState.activeTarget = null;
@@ -3598,8 +3610,19 @@ describe("VoiceRecordingService — a session another view owns (#14601)", () =>
     it("puts the caret after the words the session dictated, where its next ones would go while it runs", async () => {
       const { voiceRecordingService, voiceState, finish } = await arrangeOwner();
       const { useDictationRangeStore } = await import("@/store/dictationRangeStore");
+      const ranges = useDictationRangeStore.getState();
       const draftTarget = { sessionId: "dictation-1", panelId: "panel-a" };
       Reflect.set(voiceState, "panelBuffers", { "panel-a": { dictationSessionId: "dictation-1" } });
+      // An earlier session's words further on in the same draft, and this
+      // session's id on the same pane in another project's draft.
+      ranges.recordUtterance(
+        { sessionId: "dictation-0", panelId: "panel-a" },
+        { insertion: { from: 30, to: 40 }, words: { from: 30, to: 40 } }
+      );
+      ranges.recordUtterance(
+        { ...draftTarget, projectId: "other" },
+        { insertion: { from: 50, to: 60 }, words: { from: 50, to: 60 } }
+      );
 
       await voiceRecordingService.toggleFocusedPanel({ returnToTarget: true });
       await vi.waitFor(() => {
@@ -3609,13 +3632,53 @@ describe("VoiceRecordingService — a session another view owns (#14601)", () =>
 
       // Nothing dictated yet: the composer's own caret rules.
       expect(caret()).toBeNull();
-      useDictationRangeStore.getState().recordUtterance(draftTarget, {
+      ranges.recordUtterance(draftTarget, {
         insertion: { from: 4, to: 17 },
         words: { from: 4, to: 17 },
       });
       expect(caret()).toBe(17);
       useDictationRangeStore.getState().setAnchor(draftTarget, { from: 20, to: 20 });
       expect(caret()).toBe(20);
+    });
+
+    it("leaves the caret to the composer for a start that never began its session", async () => {
+      const { voiceRecordingService, voiceState, finish } = await arrangeOwner({
+        status: "arming",
+      });
+      const { useDictationRangeStore } = await import("@/store/dictationRangeStore");
+      // The pane's buffer still names the session before this start.
+      Reflect.set(voiceState, "panelBuffers", { "panel-a": { dictationSessionId: "dictation-0" } });
+      useDictationRangeStore
+        .getState()
+        .recordUtterance(
+          { sessionId: "dictation-0", panelId: "panel-a" },
+          { insertion: { from: 4, to: 17 }, words: { from: 4, to: 17 } }
+        );
+
+      await voiceRecordingService.toggleFocusedPanel({ returnToTarget: true });
+      await vi.waitFor(() => {
+        expect(finish).toHaveBeenCalledTimes(1);
+      });
+
+      expect(finish.mock.calls[0]![0]()).toBeNull();
+    });
+
+    it("brings nothing forward once the person has moved on during the wait", async () => {
+      const { voiceRecordingService, electron, activateTerminal, finish, isCurrent } =
+        await arrangeOwner();
+      Reflect.set(voiceRecordingService, "sessionId", "own");
+      viewLifecycle.cached = true;
+
+      electron.voiceInput.onStopRequested.mock.calls[0]![0]({
+        sessionId: "own",
+        returnToTarget: true,
+      });
+      isCurrent.mockReturnValue(false);
+      for (const listener of [...viewLifecycle.listeners]) listener("revealed");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(activateTerminal).not.toHaveBeenCalled();
+      expect(finish).not.toHaveBeenCalled();
     });
   });
 });

@@ -7,6 +7,7 @@ import {
 import { findPanelIdForElement, hasBlockingOverlay, hasUsefulFocus } from "@/lib/typeAnywhere";
 import { usePanelStore } from "@/store/panelStore";
 import { selectSlotForTerminal, useHelpPanelStore } from "@/store/helpPanelStore";
+import { useTerminalInputStore } from "@/store/terminalInputStore";
 
 /**
  * Dictation writes into a pane's composer, so starting it takes the keyboard
@@ -46,23 +47,39 @@ export function revealDictationComposer(panelId: string, caret?: () => number | 
   requestPaneFocus(panelId, "hybridInput", { forDictation: true, ...(caret ? { caret } : {}) });
 }
 
+/** The dictation key's way back to its pane (#14791), from {@link beginDictationReturn}. */
+export interface DictationReturn {
+  /** False once a press, or a newer request for a pane's keyboard, has called it off. */
+  isCurrent: () => boolean;
+  /** Puts the keyboard in the pane's composer, its caret where `caret` says when it lands. */
+  focus: (caret: () => number | null) => void;
+}
+
 /**
  * The dictation key is stopping this pane's dictation and taking the person
  * back to it (#14791). Called as the key stops it, before the pane comes
- * forward: the call it returns then reveals the composer, caret wherever
- * `caret` says. Null when there is nothing to do: the keyboard is in that
- * composer already, or a modal holds it. The assistant's input isn't a pane, so
- * a dictation there has none to go back to. A press, or any newer request for
- * a pane's keyboard, before the pane is ready calls it off.
+ * forward. Null when there is nothing to do: the key was pressed with the
+ * keyboard in that composer already, or a modal holds it. Pressed in another
+ * view, the composer this view last focused kept only the DOM's focus, so it
+ * goes back all the same. The assistant's input isn't a pane, so a dictation
+ * there has none to go back to.
  */
 export function beginDictationReturn(
-  panelId: string
-): ((caret: () => number | null) => void) | null {
+  panelId: string,
+  { pressedHere }: { pressedHere: boolean }
+): DictationReturn | null {
   if (selectSlotForTerminal(useHelpPanelStore.getState(), panelId) !== null) return null;
   if (hasBlockingOverlay()) return null;
-  if (paneSurfaceHoldingFocus(panelId) === "hybridInput") return null;
+  if (pressedHere && paneSurfaceHoldingFocus(panelId) === "hybridInput") return null;
   const epoch = captureFocusEpoch();
-  return (caret) => {
-    if (isFocusEpochCurrent(epoch)) revealDictationComposer(panelId, caret);
+  const isCurrent = () => isFocusEpochCurrent(epoch);
+  return {
+    isCurrent,
+    focus: (caret) => {
+      if (!isCurrent()) return;
+      // A dictated send already under way owns the keyboard, its hand-back included.
+      if (useTerminalInputStore.getState().voiceSubmittingPanels.has(panelId)) return;
+      revealDictationComposer(panelId, caret);
+    },
   };
 }

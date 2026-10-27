@@ -449,15 +449,14 @@ function findDictation(
 }
 
 /**
- * Just after the words the target's latest dictation wrote, as its draft
+ * Just after the words the session dictated into the target's draft, as it
  * stands now: where its next words go while it still runs, else the end of
  * what it wrote. Null when it wrote nothing.
  */
-function afterDictatedWords(target: VoiceRecordingTarget): number | null {
-  const { panelId, projectId } = target;
-  const sessionId = useVoiceRecordingStore.getState().panelBuffers[panelId]?.dictationSessionId;
-  const record = findDictation(target, sessionId ?? null);
+function afterDictatedWords(target: VoiceRecordingTarget, sessionId: string | null): number | null {
+  const record = findDictation(target, sessionId);
   if (!record) return null;
+  const { panelId, projectId } = target;
   const anchor = useDictationRangeStore
     .getState()
     .getAnchor({ sessionId: record.sessionId, panelId, projectId });
@@ -1171,7 +1170,7 @@ class VoiceRecordingService {
           // A press still down here belongs to the session ending now, so its
           // release mustn't act on whatever runs by then.
           this.dropHeldPress();
-          void this.stopAnySession(returnToTarget === true);
+          void this.stopAnySession(returnToTarget === true ? { pressedHere: false } : undefined);
           return;
         }
         // Started here before a reload: nothing in this view holds its
@@ -1706,13 +1705,25 @@ class VoiceRecordingService {
    * composer and the caret after the words dictated. What it goes back to is
    * read first, since the stop clears it.
    */
-  private stopWithKey(reason: VoiceStopReason = "user"): Promise<void> {
-    const { activeTarget, pendingTarget } = useVoiceRecordingStore.getState();
-    const target = this.liveStartup()?.target ?? activeTarget ?? pendingTarget;
-    const focusComposer = target ? beginDictationReturn(target.panelId) : null;
+  private stopWithKey(reason: VoiceStopReason, pressedHere: boolean): Promise<void> {
+    const { activeTarget, pendingTarget, status, panelBuffers } = useVoiceRecordingStore.getState();
+    const startup = this.liveStartup();
+    const target = startup?.target ?? activeTarget ?? pendingTarget;
+    // Only a session that has begun has words to go after: a start's buffer
+    // still names the last session's, and parking the caret there would move
+    // where its queued words land.
+    const sessionId =
+      !startup && activeTarget && target === activeTarget && isActiveVoiceSession(status)
+        ? (panelBuffers[activeTarget.panelId]?.dictationSessionId ?? null)
+        : null;
+    const back = target ? beginDictationReturn(target.panelId, { pressedHere }) : null;
     const stopping = this.requestUserStop(reason);
-    if (target && focusComposer) {
-      this.revealTarget(target, (panelId) => focusComposer(() => afterDictatedWords(target)));
+    if (target && back) {
+      this.revealTarget(
+        () => target,
+        () => back.focus(() => afterDictatedWords(target, sessionId)),
+        back.isCurrent
+      );
     }
     return stopping;
   }
@@ -1755,7 +1766,7 @@ class VoiceRecordingService {
       return;
     }
     // Letting go of the key is a stop made with it; a window losing focus isn't.
-    void (reason === "key_release" ? this.stopWithKey(reason) : this.requestUserStop(reason));
+    void (reason === "key_release" ? this.stopWithKey(reason, true) : this.requestUserStop(reason));
   }
 
   private liveStartup(): StartupAttempt | null {
@@ -3815,7 +3826,7 @@ class VoiceRecordingService {
     // The shortcut is a global stop: a running session ends wherever it is,
     // before focus or the lock is consulted, so the press can never move the
     // recording to whichever panel happens to own focus (#12832).
-    const stopping = this.stopAnySession(returnToTarget);
+    const stopping = this.stopAnySession(returnToTarget ? { pressedHere: true } : undefined);
     if (stopping) {
       await stopping;
       return;
@@ -3916,14 +3927,14 @@ class VoiceRecordingService {
    * retargeting mid-session re-enters arming before tearing the old session
    * down), a full stop() is needed to release it.
    */
-  private stopAnySession(withKey = false): Promise<void> | null {
+  private stopAnySession(withKey?: { pressedHere: boolean }): Promise<void> | null {
     const { status, pendingTarget } = useVoiceRecordingStore.getState();
     const startup = this.liveStartup();
     // Already stopped by the user and only sending its queue: the press either
     // resumes it or starts the next session.
     if (startup?.stopAfterStart) return null;
     if (startup || pendingTarget || status === "arming" || this.isStoppableSession(status)) {
-      return withKey ? this.stopWithKey() : this.requestUserStop();
+      return withKey ? this.stopWithKey("user", withKey.pressedHere) : this.requestUserStop();
     }
     return null;
   }
@@ -4190,27 +4201,37 @@ class VoiceRecordingService {
    * coming back to it, from another project or another host.
    */
   private revealOwnTarget(): void {
-    const { pendingTarget, activeTarget } = useVoiceRecordingStore.getState();
-    const target = pendingTarget ?? activeTarget;
-    if (target) this.revealTarget(target, (panelId) => revealDictationComposer(panelId));
+    // Whatever the toolbar names once the view is shown: a start may have
+    // replaced the session meanwhile.
+    this.revealTarget(
+      () => {
+        const { pendingTarget, activeTarget } = useVoiceRecordingStore.getState();
+        return pendingTarget ?? activeTarget;
+      },
+      (target) => revealDictationComposer(target.panelId)
+    );
   }
 
   /**
-   * Once this view is on screen, `target` comes forward and `focusComposer`
-   * puts the keyboard in its composer (#14770): for the indicator's "go there"
-   * (#14773), or the dictation key that stopped it (#14791). A cached view
-   * waits to be shown, and gives up if it isn't.
+   * Once this view is on screen, the target `resolve` names comes forward and
+   * `focusComposer` puts the keyboard in its composer (#14770): for the
+   * indicator's "go there" (#14773), or the dictation key that stopped it
+   * (#14791), which `isCurrent` calls off once the person has moved on. A
+   * cached view waits to be shown, and gives up if it isn't.
    */
   private revealTarget(
-    target: VoiceRecordingTarget,
-    focusComposer: (panelId: string) => void
+    resolve: () => VoiceRecordingTarget | null,
+    focusComposer: (target: VoiceRecordingTarget) => void,
+    isCurrent: () => boolean = () => true
   ): void {
     this.cancelRevealWait?.();
     this.cancelRevealWait = null;
     const reveal = () => {
+      const target = resolve();
+      if (!target || !isCurrent()) return;
       void this.focusActiveTarget(target).then((found) => {
         // A Canopy reply put the keyboard in itself.
-        if (found && !isCanopyReplyTarget(target)) focusComposer(target.panelId);
+        if (found && !isCanopyReplyTarget(target)) focusComposer(target);
       });
     };
     if (!isProjectViewCached()) {
