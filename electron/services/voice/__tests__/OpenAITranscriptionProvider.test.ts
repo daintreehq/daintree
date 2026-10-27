@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VoiceInputSettings } from "../../../../shared/types/ipc/api.js";
+import { TRANSCRIPTION_ITEM_FAILED_CODE } from "../../../../shared/types/voice.js";
 
 // ── Mock the `ws` package ────────────────────────────────────────────────────
 //
@@ -3315,6 +3316,95 @@ describe("OpenAITranscriptionProvider — item identity and ordering (#13109)", 
       { text: "second", itemId: "item-B" },
     ]);
     expect(loggedText()).not.toContain("boom");
+  });
+
+  it("settles a failed item with its interim text and tells the renderer", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+
+    const { socket } = await bringSessionReady(service);
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-B" });
+    socket.simulateMessage("conversation.item.done", done("item-B", "second"));
+    socket.simulateMessage("conversation.item.input_audio_transcription.delta", {
+      item_id: "item-A",
+      delta: "partial first",
+    });
+    socket.simulateMessage("conversation.item.input_audio_transcription.failed", {
+      item_id: "item-A",
+      error: { code: "transcription_failed", message: "boom" },
+    });
+    // A repeated failure frame neither re-emits nor re-warns.
+    socket.simulateMessage("conversation.item.input_audio_transcription.failed", {
+      item_id: "item-A",
+    });
+
+    expect(completions(events)).toEqual([
+      { text: "partial first", itemId: "item-A" },
+      { text: "second", itemId: "item-B" },
+    ]);
+    const failures = events.filter(
+      (e) => e.type === "error" && e.error.code === TRANSCRIPTION_ITEM_FAILED_CODE
+    );
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatchObject({ error: { severity: "transient" } });
+    expect(loggedText()).not.toContain("boom");
+    expect(loggedText()).not.toContain("partial first");
+  });
+
+  it("retires a failed item that had no preview and still tells the renderer", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+
+    const { socket } = await bringSessionReady(service);
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    socket.simulateMessage("conversation.item.input_audio_transcription.failed", {
+      item_id: "item-A",
+    });
+
+    expect(completions(events)).toEqual([{ text: "", itemId: "item-A" }]);
+    expect(
+      events.filter((e) => e.type === "error" && e.error.code === TRANSCRIPTION_ITEM_FAILED_CODE)
+    ).toHaveLength(1);
+  });
+
+  it("does not warn when a failure frame follows the item's real completion", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+
+    const { socket } = await bringSessionReady(service);
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    socket.simulateMessage("conversation.item.done", done("item-A", "first"));
+    socket.simulateMessage("conversation.item.input_audio_transcription.failed", {
+      item_id: "item-A",
+    });
+
+    expect(completions(events)).toEqual([{ text: "first", itemId: "item-A" }]);
+    expect(events.some((e) => e.type === "error")).toBe(false);
+  });
+
+  it("never marks a failed item's interim text as the end of speech", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+
+    const { socket } = await bringSessionReady(service);
+    vadCommitSegment(service, latestVadWorker());
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    socket.simulateMessage("conversation.item.input_audio_transcription.delta", {
+      item_id: "item-A",
+      delta: "send it",
+    });
+    socket.simulateMessage("conversation.item.input_audio_transcription.failed", {
+      item_id: "item-A",
+    });
+
+    expect(completions(events)).toEqual([{ text: "send it", itemId: "item-A" }]);
+    expect(endsOfSpeech(events)).toEqual([false]);
+    service.stop();
   });
 
   it("ignores an id-less transcription.failed on the ordered path", async () => {
