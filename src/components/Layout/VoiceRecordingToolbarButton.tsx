@@ -277,7 +277,8 @@ function VoiceWave({ mode }: { mode: VoiceWaveMode }) {
             barRefs.current[i] = el;
           }}
           className={cn(
-            "h-full w-0.5 rounded-full",
+            // Forced colours paints backgrounds as Canvas; the bars take text ink.
+            "h-full w-0.5 rounded-full forced-colors:bg-[CanvasText]",
             mode === "level" ? "bg-accent-primary" : "bg-text-secondary",
             mode === "waiting" && "animate-voice-wave-wait motion-reduce:animate-none"
           )}
