@@ -542,32 +542,6 @@ describe("AppError details allowlist", () => {
     expect(pickAppErrorDetails(["PLUGIN_NOT_ON_HOST"])).toBeUndefined();
   });
 
-  it("rebuilds host agent limit details, dropping extra fields and non-count numbers", () => {
-    const serialized = serializeError(
-      Object.assign(new Error("x"), {
-        details: {
-          code: "HOST_AGENT_LIMIT_REACHED",
-          host: "studio",
-          count: 12,
-          limit: 10,
-          path: "/Users/me",
-        },
-      })
-    );
-    expect(serialized.details).toEqual({
-      code: "HOST_AGENT_LIMIT_REACHED",
-      host: "studio",
-      count: 12,
-      limit: 10,
-    });
-
-    const base = { code: "HOST_AGENT_LIMIT_REACHED", host: "studio", count: 1, limit: 2 };
-    expect(pickAppErrorDetails({ ...base, host: 7 })).toBeUndefined();
-    expect(pickAppErrorDetails({ ...base, count: -1 })).toBeUndefined();
-    expect(pickAppErrorDetails({ ...base, limit: 2.5 })).toBeUndefined();
-    expect(pickAppErrorDetails({ ...base, count: "3" })).toBeUndefined();
-  });
-
   it("revalidates details on deserialization", () => {
     const error = deserializeError({
       name: "Error",

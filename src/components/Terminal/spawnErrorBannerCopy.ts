@@ -1,7 +1,6 @@
 import type { SpawnError, SpawnErrorCode } from "@shared/types/pty-host";
 import { boundedErrorText } from "@/utils/errorText";
 import { requiredPluginToolsReason } from "@shared/utils/requiredPluginTools";
-import { describeHostAgentLimit } from "@shared/utils/hostAgentLimit";
 
 export interface SpawnErrorBannerCopy {
   title: string;
@@ -90,13 +89,6 @@ export const SPAWN_ERROR_BANNER_COPY = {
         ? boundedErrorText(`This agent needs them to start. ${missing.join("; ")}.`)
         : boundedErrorText(error.message);
     },
-  },
-  HOST_AGENT_LIMIT: {
-    title: "Host agent limit reached",
-    description: (error) =>
-      boundedErrorText(
-        error.hostAgentLimit ? describeHostAgentLimit(error.hostAgentLimit) : error.message
-      ),
   },
   UNKNOWN: {
     title: "Couldn't start terminal",

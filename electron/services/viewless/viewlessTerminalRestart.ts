@@ -13,7 +13,7 @@ import type { ViewlessDeps } from "./ViewlessActionExecutor.js";
 
 /** Why a restart with no view did not run, or that it did. */
 export type ViewlessRestartOutcome =
-  "restarted" | "gone" | "unsupported" | "stale" | "waiting" | "host-full" | "failed";
+  "restarted" | "gone" | "unsupported" | "stale" | "waiting" | "failed";
 
 /**
  * Restart one terminal of a project no frontend is attached to (#14703): the
@@ -25,10 +25,8 @@ export type ViewlessRestartOutcome =
  * the captured conversation when the agent can, and starting it fresh with the
  * saved launch otherwise. A pane the view would refuse to restart is left as it
  * is: one waiting for input, one held for recovery, and an agent that already
- * quit to its shell. An agent is also left running while the host is at its
- * agent ceiling (#14704), since the relaunch would be refused once it had quit.
- * An input lock is a view's own preference, kept in that view, so with no view
- * there is none to honour.
+ * quit to its shell. An input lock is a view's own preference, kept in that
+ * view, so with no view there is none to honour.
  */
 export async function restartTerminalWithoutView(
   projectId: string,
@@ -57,18 +55,6 @@ export async function restartTerminalWithoutView(
   // The reads above wait on the pty-host and the disk; the terminal may have
   // been relaunched meanwhile, and its successor isn't the one that leaked.
   if (!isCurrent()) return "stale";
-
-  // The relaunch is counted against the host's agent ceiling with this pane
-  // left out, as it is here, so a host already at it would refuse the relaunch
-  // after the quit. The slot isn't held across the restart, though: a Shell or
-  // MCP launch during the awaits below can still take it, and that refusal is
-  // the spawn failure further down, which keeps the conversation for the pane.
-  if (agentId !== undefined) {
-    const hostAgentLimit = deps.readHostAgentLimit(terminalId);
-    if (hostAgentLimit !== null && hostAgentLimit.count >= hostAgentLimit.limit) {
-      return "host-full";
-    }
-  }
 
   let capturedSessionId: string | null = null;
   try {
@@ -178,9 +164,9 @@ export async function restartTerminalWithoutView(
       `[MemoryLeak] Couldn't relaunch terminal ${terminalId.slice(0, 8)} after stopping it:`,
       formatErrorMessage(err, "unknown")
     );
-    // The agent has quit and nothing replaced it, a refusal at the host's
-    // ceiling included: the pane's next restore resumes the conversation the
-    // quit captured, as a view's failed restart keeps it for a retry.
+    // The agent has quit and nothing replaced it: the pane's next restore
+    // resumes the conversation the quit captured, as a view's failed restart
+    // keeps it for a retry.
     if (sessionId !== undefined) {
       await recordAgentSession(deps, projectId, terminalId, sessionId);
     }

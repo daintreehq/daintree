@@ -52,8 +52,6 @@ import {
 } from "../../../shared/utils/terminalLaunchOptions.js";
 import type { ViewlessActionRequest, ViewlessDeps } from "./ViewlessActionExecutor.js";
 import { recordViewlessTerminal } from "./projectStateAuthoring.js";
-import type { AppErrorDetails } from "../../../shared/types/appError.js";
-import type { HostAgentLimitSnapshot } from "../../../shared/utils/hostAgentLimit.js";
 import { countProjectPanels } from "./viewlessTerminals.js";
 import { readProjectWorktrees } from "./viewlessWorktrees.js";
 import { AgentListModelsArgsSchema, AgentListPresetsArgsSchema } from "./viewlessArgsSchemas.js";
@@ -96,10 +94,9 @@ const PANEL_LAUNCH_IDS: ReadonlySet<string> = new Set(["browser", "dev-preview"]
 
 /** A launch that started nothing, in the shape the action's output schema requires. */
 function declined(
-  spawnStatus: "missing-cli" | "panel-limit" | "host-agent-limit" | "spawn-failed",
+  spawnStatus: "missing-cli" | "panel-limit" | "spawn-failed",
   panelLimit: ReturnType<typeof buildPanelLimitSnapshot> | null = null,
-  identity?: ReturnType<typeof buildLaunchIdentity>,
-  hostAgentLimit: HostAgentLimitSnapshot | null = null
+  identity?: ReturnType<typeof buildLaunchIdentity>
 ): ActionDispatchResult {
   return success({
     launched: false,
@@ -112,19 +109,8 @@ function declined(
     cwd: identity?.cwd ?? null,
     cwdOutsideWorktree: identity?.cwdOutsideWorktree ?? null,
     panelLimit,
-    hostAgentLimit,
     reply: null,
   });
-}
-
-/**
- * The host's refusal of a spawn at its agent ceiling, as the handler judged it,
- * off the `details` a `ViewlessInvokeError` carries.
- */
-function hostAgentLimitRefusal(err: unknown): HostAgentLimitSnapshot | null {
-  const details = (err as { details?: AppErrorDetails } | null)?.details;
-  if (details?.code !== "HOST_AGENT_LIMIT_REACHED") return null;
-  return { host: details.host, count: details.count, limit: details.limit };
 }
 
 /** One agent's bucket of a by-agent preset map, own keys only, so `__proto__` is no agent. */
@@ -374,15 +360,6 @@ export async function runAgentLaunch(
     return declined("missing-cli", null, identity);
   }
 
-  // Asked up front so a full host says so without starting anything; the spawn
-  // handler counts again where it registers the PTY, which is what holds.
-  if (isAgent) {
-    const hostAgentLimit = deps.readHostAgentLimit(args.requestedId);
-    if (hostAgentLimit !== null && hostAgentLimit.count >= hostAgentLimit.limit) {
-      return declined("host-agent-limit", null, identity, hostAgentLimit);
-    }
-  }
-
   const id = args.requestedId || `terminal-${randomUUID()}`;
   const location =
     args.location === "dock" ? "dock" : args.location === "background" ? "background" : "grid";
@@ -438,9 +415,6 @@ export async function runAgentLaunch(
       },
     ]);
   } catch (err) {
-    const hostAgentLimit = hostAgentLimitRefusal(err);
-    if (hostAgentLimit !== null)
-      return declined("host-agent-limit", null, identity, hostAgentLimit);
     console.warn("[Viewless] Agent launch failed:", formatErrorMessage(err, "unknown"));
     return declined("spawn-failed", null, identity);
   }
@@ -491,7 +465,6 @@ export async function runAgentLaunch(
     spawnStatus: null,
     ...identity,
     panelLimit: null,
-    hostAgentLimit: null,
     reply: null,
   });
 }

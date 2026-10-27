@@ -30,7 +30,6 @@ async function loadLiveDeps(): Promise<ViewlessDeps> {
     { store },
     { CcrConfigService },
     { handleTerminalGetStatusViewless },
-    { readHostAgentLimit },
     os,
   ] = await Promise.all([
     import("../ProjectStore.js"),
@@ -39,7 +38,6 @@ async function loadLiveDeps(): Promise<ViewlessDeps> {
     import("../../store.js"),
     import("../CcrConfigService.js"),
     import("../mcp-server/terminalStatus.js"),
-    import("../hostAgentLimit.js"),
     import("node:os"),
   ]);
 
@@ -108,10 +106,6 @@ async function loadLiveDeps(): Promise<ViewlessDeps> {
       shellDialect: process.platform === "win32" ? "windows" : "posix",
       tmpDir: os.tmpdir(),
       totalMemoryBytes: os.totalmem(),
-    },
-    readHostAgentLimit: (excludeTerminalId) => {
-      const ptyClient = getPtyClient();
-      return ptyClient ? readHostAgentLimit(ptyClient, excludeTerminalId) : null;
     },
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     collectWorktreeDeleteNotes: async (projectId, worktreeId) => {

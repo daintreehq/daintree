@@ -4,7 +4,6 @@ import type { TerminalSpawnSource, AddPanelFocusPolicy } from "@shared/types/pan
 import type { SettingsNavTarget } from "@/components/Settings";
 import type { AddPanelOptions } from "@/store";
 import type { PanelLimitSnapshot } from "@/store/panelLimitStore";
-import type { HostAgentLimitSnapshot } from "@shared/utils/hostAgentLimit";
 
 type AddTerminalOptions = AddPanelOptions;
 
@@ -40,11 +39,9 @@ export type NavigationDirection = "up" | "down" | "left" | "right";
  * depends on the renderer hook (#11547).
  */
 export interface LaunchDecline {
-  reason: "panel-limit" | "host-agent-limit" | "already-launching" | "spawn-failed" | "unavailable";
+  reason: "panel-limit" | "already-launching" | "spawn-failed" | "unavailable";
   /** The count and limits the refusal was judged on; set only for `panel-limit`. */
   panelLimit: PanelLimitSnapshot | null;
-  /** The host and count the refusal was judged on; set only for `host-agent-limit`. */
-  hostAgentLimit?: HostAgentLimitSnapshot | null;
 }
 
 export interface ActionCallbacks {
@@ -108,11 +105,6 @@ export interface ActionCallbacks {
     branch: string | null;
     cwd: string | null;
     cwdOutsideWorktree: boolean | null;
-    /**
-     * The host's agent count and ceiling when it holds this launch to one
-     * (#14704); the pane's spawn answer says whether it was admitted.
-     */
-    hostAgentLimit?: HostAgentLimitSnapshot;
   } | null>;
   onInject: (worktreeId: string, terminalId?: string) => void;
   getDefaultCwd: () => string;
