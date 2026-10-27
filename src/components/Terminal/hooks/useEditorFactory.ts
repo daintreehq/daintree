@@ -82,6 +82,7 @@ interface UseEditorFactoryParams {
   contextUpdateRef: React.RefObject<(update: import("@codemirror/view").ViewUpdate) => void>;
   keymapHandlersRef: React.RefObject<{
     onEnter: () => boolean;
+    onModEnter: () => boolean;
     onEscape: () => boolean;
     onArrowUp: () => boolean;
     onArrowDown: () => boolean;
@@ -202,6 +203,7 @@ export function useEditorFactory({
         keymapCompartmentRef.current.of(
           createCustomKeymap({
             onEnter: () => keymapHandlersRef.current?.onEnter() ?? false,
+            onModEnter: () => keymapHandlersRef.current?.onModEnter() ?? false,
             onEscape: () => keymapHandlersRef.current?.onEscape() ?? false,
             onArrowUp: () => keymapHandlersRef.current?.onArrowUp() ?? false,
             onArrowDown: () => keymapHandlersRef.current?.onArrowDown() ?? false,

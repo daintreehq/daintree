@@ -25,6 +25,8 @@ interface LatestRefShape {
   onSendKey?: (key: string) => void;
   isVoiceActiveForPanel: boolean;
   isExpanded: boolean;
+  /** ⌘↩ sends as Enter does (`HybridInputBarProps.modEnterSends`). */
+  modEnterSends?: boolean;
 }
 
 interface UseEditorKeymapParams {
@@ -53,6 +55,7 @@ interface UseEditorKeymapParams {
 
 interface KeymapHandlers {
   onEnter: () => boolean;
+  onModEnter: () => boolean;
   onEscape: () => boolean;
   onArrowUp: () => boolean;
   onArrowDown: () => boolean;
@@ -148,6 +151,12 @@ export function useEditorKeymap({
 
       sendFromEditor();
       return true;
+    },
+    // The same send as Enter, for a host that tells the two apart; anywhere
+    // else the chord is left alone.
+    onModEnter: () => {
+      if (!latestRef.current?.modEnterSends) return false;
+      return handlersRef.current?.onEnter() ?? false;
     },
     onEscape: () => {
       const latest = latestRef.current;

@@ -499,7 +499,7 @@ describe("createAutoSize integration", () => {
 });
 
 describe("createCustomKeymap", () => {
-  function makeView(onEnter: () => boolean) {
+  function makeView(onEnter: () => boolean, onModEnter: () => boolean = () => false) {
     const parent = document.createElement("div");
     document.body.appendChild(parent);
     return new EditorView({
@@ -509,6 +509,7 @@ describe("createCustomKeymap", () => {
         extensions: [
           createCustomKeymap({
             onEnter,
+            onModEnter,
             onEscape: () => false,
             onArrowUp: () => false,
             onArrowDown: () => false,
@@ -560,6 +561,26 @@ describe("createCustomKeymap", () => {
 
     expect(onEnter).not.toHaveBeenCalled();
     expect(view.state.doc.toString()).toContain("\n");
+    view.destroy();
+  });
+
+  it("hands Mod+Enter to onModEnter, apart from Enter, and lets it pass when unhandled", () => {
+    const onEnter = vi.fn(() => true);
+    const onModEnter = vi.fn(() => false);
+    const view = makeView(onEnter, onModEnter);
+    // CodeMirror's Mod is Cmd on a Mac and Ctrl elsewhere, read from the platform.
+    const mod = /Mac/.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true };
+
+    const handled = runScopeHandlers(
+      view,
+      new KeyboardEvent("keydown", { key: "Enter", ...mod }),
+      "editor"
+    );
+
+    expect(onModEnter).toHaveBeenCalledOnce();
+    expect(onEnter).not.toHaveBeenCalled();
+    expect(handled).toBe(false);
+    expect(view.state.doc.toString()).toBe("hello");
     view.destroy();
   });
 });

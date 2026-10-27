@@ -164,6 +164,40 @@ describe("useEditorKeymap", () => {
     });
   });
 
+  describe("Mod+Enter", () => {
+    it("is left alone unless the composer sends on it", () => {
+      const { handlers } = renderKeymap(
+        makeLatest({ isAutocompleteOpen: false, autocompleteItems: [], value: "hello" })
+      );
+      expect(handlers.onModEnter()).toBe(false);
+      expect(sendFromEditor).not.toHaveBeenCalled();
+    });
+
+    it("sends as Enter does when the composer sends on it, dictation wait included", () => {
+      const onSendKey = vi.fn<(key: string) => void>();
+      const latest = makeLatest({
+        isAutocompleteOpen: false,
+        autocompleteItems: [],
+        value: "hello",
+        onSendKey,
+        modEnterSends: true,
+      });
+      const { handlers } = renderKeymap(latest);
+      expect(handlers.onModEnter()).toBe(true);
+      expect(sendFromEditor).toHaveBeenCalledTimes(1);
+
+      latest.value = "";
+      expect(handlers.onModEnter()).toBe(true);
+      expect(onSendKey).toHaveBeenCalledWith("enter");
+
+      latest.value = "still talking";
+      latest.isVoiceActiveForPanel = true;
+      expect(handlers.onModEnter()).toBe(true);
+      expect(startVoiceWaitSubmit).toHaveBeenCalledTimes(1);
+      expect(sendFromEditor).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe("Tab", () => {
     it("completes the selected item when fresh", () => {
       const second: AutocompleteItem = { ...fileItem, key: "src/b.ts", insertText: "src/b.ts" };

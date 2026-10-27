@@ -19,6 +19,7 @@ import {
   entryShelved,
   isWorkerEntry,
   nextAfterEntry,
+  nextBelowEntry,
   projectCanopyInbox,
   stepEntry,
   type CanopyInboxEntry,
@@ -566,5 +567,56 @@ describe("nextAfterEntry", () => {
     expect(nextAfterEntry(order, null)).toBeUndefined();
     const asks = project(workers([{ host: OWN, run: run("ask", approval) }]), []).navigation;
     expect(nextAfterEntry(asks, "missing")).toBe(asks[0]);
+  });
+});
+
+describe("nextBelowEntry", () => {
+  const unread = (runId: string): { host: string; mark: CanopyReadMark } => ({
+    host: OWN,
+    mark: { runId, spawnedAt: SPAWNED, turn: 2, readTurn: 1, markedUnreadAt: null, version: 1 },
+  });
+  const idle = { agentState: "idle", since: NOW - 10_000 } as const;
+
+  it("goes down to the next run that needs you or is unread, past idle, parked and snoozed ones", () => {
+    const items = workers(
+      [
+        { host: OWN, run: run("replied", approval) },
+        { host: OWN, run: run("idle", idle) },
+        { host: OWN, run: run("parked", { ...approval, park: { parkedAt: NOW } }) },
+        { host: OWN, run: run("snoozed", { ...idle, snooze: { snoozedAt: NOW } }) },
+        { host: OTHER, run: run("fresh", idle) },
+      ],
+      [],
+      [unread("snoozed"), { ...unread("fresh"), host: OTHER }]
+    );
+    const order = project(items, [], {
+      listedWorkers: inOrder(items, ["replied", "idle", "parked", "snoozed", "fresh"]),
+    }).navigation;
+
+    expect(order.map(entryShelved)).toEqual([false, false, true, true, false]);
+    expect(nextBelowEntry(order, order[0]!.key)).toBe(order[4]);
+  });
+
+  it("never goes back up the list, where moving on after an archive would", () => {
+    const order = project(
+      workers([
+        { host: OWN, run: run("first", { ...approval, since: NOW - 9_000 }) },
+        { host: OWN, run: run("last", { ...approval, since: NOW - 7_000 }) },
+        { host: OWN, run: run("idle", idle) },
+      ]),
+      []
+    ).navigation;
+    const keyOf = (id: string) => JSON.stringify(["worker", OWN, id]);
+
+    expect(nextBelowEntry(order, keyOf("first"))!.key).toBe(keyOf("last"));
+    expect(nextBelowEntry(order, keyOf("last"))).toBeUndefined();
+    expect(nextAfterEntry(order, keyOf("last"))!.key).toBe(keyOf("first"));
+  });
+
+  it("has nowhere to go from a run not in the list", () => {
+    const order = project(workers([{ host: OWN, run: run("ask", approval) }]), []).navigation;
+
+    expect(nextBelowEntry(order, null)).toBeUndefined();
+    expect(nextBelowEntry(order, "missing")).toBeUndefined();
   });
 });

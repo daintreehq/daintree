@@ -253,6 +253,12 @@ export interface HybridInputBarProps {
    * composer's own draft. Without it an isolated composer takes none.
    */
   voiceTarget?: VoiceRecordingTarget;
+  /**
+   * ⌘↩ (Ctrl+Enter off the Mac) sends as Enter does, for a host that tells
+   * the two apart by the key it saw (Canopy's reply moves on after ⌘↩).
+   * Without it the chord does nothing here.
+   */
+  modEnterSends?: boolean;
 }
 
 interface LatestState {
@@ -283,6 +289,7 @@ interface LatestState {
   ) => string | null;
   isVoiceActiveForPanel: boolean;
   isExpanded: boolean;
+  modEnterSends: boolean;
 }
 
 interface HybridInputE2EController {
@@ -368,6 +375,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       submitText,
       selected,
       voiceTarget,
+      modEnterSends = false,
     },
     ref
   ) => {
@@ -890,6 +898,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         navigateHistory,
         isVoiceActiveForPanel,
         isExpanded,
+        modEnterSends,
       };
     });
 
