@@ -219,6 +219,59 @@ describe("VoiceInputSettingsTab correction prerequisites", () => {
     expect(container.textContent).toContain("Add an OpenAI API key");
   });
 
+  it("asks for the OpenAI key in the cleanup section while another provider transcribes", async () => {
+    install({ transcriptionProvider: "deepgram", deepgramApiKey: "dg_1", correctionEnabled: true });
+    const { container } = render(<VoiceInputSettingsTab />);
+
+    await screen.findByRole("switch", { name: "Resolve file references" });
+    const cleanup = container.querySelector("#voice-ai-correction") as HTMLElement;
+    expect(cleanup.querySelector("#voice-stt-openai-key")).toBeTruthy();
+    const stt = container.querySelector("#voice-speech-to-text") as HTMLElement;
+    expect(stt.textContent).toContain("Deepgram API key");
+    expect(stt.textContent).not.toContain("OpenAI API key");
+    expect(cleanup.textContent).not.toMatch(/Deepgram/);
+  });
+
+  it("saves the cleanup key and turns cleanup's options on while another provider transcribes", async () => {
+    const setSettings = vi.fn().mockResolvedValue(undefined);
+    install(
+      { transcriptionProvider: "deepgram", deepgramApiKey: "dg_1", correctionEnabled: true },
+      { setSettings }
+    );
+    const { container } = render(<VoiceInputSettingsTab />);
+
+    const fileRefs = await screen.findByRole("switch", { name: "Resolve file references" });
+    expect(fileRefs.hasAttribute("disabled")).toBe(true);
+    const input = await waitFor(() => {
+      const el = container.querySelector<HTMLInputElement>(
+        "#voice-ai-correction #voice-stt-openai-key input"
+      );
+      if (!el) throw new Error("no cleanup key input yet");
+      return el;
+    });
+    expect(input.hasAttribute("disabled")).toBe(false);
+    fireEvent.change(input, { target: { value: "sk-proj-cleanupkey123" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() =>
+      expect(setSettings).toHaveBeenCalledWith({ openaiApiKey: "sk-proj-cleanupkey123" })
+    );
+    await waitFor(() => expect(fileRefs.hasAttribute("disabled")).toBe(false));
+  });
+
+  it("says one OpenAI key covers both sections when OpenAI transcribes", async () => {
+    install({ openaiApiKey: "sk-proj-abc1234", correctionEnabled: true });
+    const { container } = render(<VoiceInputSettingsTab />);
+
+    await screen.findByRole("switch", { name: "Resolve file references" });
+    const stt = container.querySelector("#voice-speech-to-text") as HTMLElement;
+    const cleanup = container.querySelector("#voice-ai-correction") as HTMLElement;
+    expect(stt.querySelectorAll("#voice-stt-openai-key")).toHaveLength(1);
+    expect(cleanup.querySelector("#voice-stt-openai-key")).toBeNull();
+    expect(stt.textContent).toContain("covers transcription and text cleanup");
+    expect(cleanup.textContent).toContain("covers transcription and cleanup");
+  });
+
   it("enables them once an OpenAI key is stored", async () => {
     install({ openaiApiKey: "sk-proj-abc1234", correctionEnabled: true });
     render(<VoiceInputSettingsTab />);

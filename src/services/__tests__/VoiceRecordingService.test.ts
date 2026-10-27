@@ -2243,6 +2243,33 @@ describe("VoiceRecordingService — provider configuration gating", () => {
     await expect(voiceRecordingService.refreshConfiguration()).resolves.toBe(false);
   });
 
+  it("keeps a Deepgram user configured while cleanup stays off without an OpenAI key", async () => {
+    const electron = buildElectronStub();
+    electron.voiceInput.getSettings.mockResolvedValue({
+      enabled: true,
+      openaiApiKey: "",
+      deepgramApiKey: "dg-test",
+      transcriptionProvider: "deepgram",
+      correctionEnabled: true,
+    });
+    setupGlobals(electron);
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const { useVoiceRecordingStore } = await import("@/store/voiceRecordingStore");
+    await expect(voiceRecordingService.refreshConfiguration()).resolves.toBe(true);
+    expect(useVoiceRecordingStore.getState().setCorrectionEnabled).toHaveBeenLastCalledWith(false);
+
+    electron.voiceInput.getSettings.mockResolvedValue({
+      enabled: true,
+      openaiApiKey: "sk-key",
+      deepgramApiKey: "dg-test",
+      transcriptionProvider: "deepgram",
+      correctionEnabled: true,
+    });
+    await voiceRecordingService.refreshConfiguration();
+    expect(useVoiceRecordingStore.getState().setCorrectionEnabled).toHaveBeenLastCalledWith(true);
+  });
+
   it("treats an OpenAI user with an OpenAI key as configured", async () => {
     const electron = buildElectronStub();
     electron.voiceInput.getSettings.mockResolvedValue({

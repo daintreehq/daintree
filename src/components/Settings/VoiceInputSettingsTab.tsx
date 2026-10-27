@@ -35,6 +35,14 @@ import { KbdChord } from "@/components/ui/Kbd";
 import { voiceErrorLogFields } from "@shared/utils/voiceLogFields";
 import { VOICE_LANGUAGES } from "@shared/config/voiceLanguages";
 import { CORE_CORRECTION_PROMPT, VOICE_DICTATION_AI_MODEL } from "@shared/config/voiceCorrection";
+import {
+  VOICE_CLEANUP_KEY_FIELD,
+  hasCleanupKey,
+  hasTranscriptionKey,
+  transcriptionKeyField,
+  transcriptionProviderName,
+  type VoiceApiKeyField,
+} from "@shared/config/voiceProviders";
 import type {
   VoiceInputSettings,
   VoiceInputSettingsPatch,
@@ -45,11 +53,6 @@ import type {
   VoiceTranscriptionProvider,
   VoiceRecordingMode,
 } from "@shared/types";
-
-const PROVIDER_NAME: Record<VoiceTranscriptionProvider, string> = {
-  openai: "OpenAI",
-  deepgram: "Deepgram",
-};
 
 const PROVIDER_OPTIONS = [
   { value: "openai" as const, label: "OpenAI", icon: CodexIcon },
@@ -189,13 +192,13 @@ export function maskApiKey(key: string): string {
  * key that is present is not claimed to work.
  */
 export function dictationBlockers(
-  settings: Pick<VoiceInputSettings, "transcriptionProvider" | "openaiApiKey" | "deepgramApiKey">,
+  settings: Pick<VoiceInputSettings, "transcriptionProvider" | VoiceApiKeyField>,
   micPermission: MicPermissionStatus
 ): string[] {
   const blockers: string[] = [];
-  const key =
-    settings.transcriptionProvider === "deepgram" ? settings.deepgramApiKey : settings.openaiApiKey;
-  if (!key) blockers.push(`add your ${PROVIDER_NAME[settings.transcriptionProvider]} API key`);
+  if (!hasTranscriptionKey(settings)) {
+    blockers.push(`add your ${transcriptionProviderName(settings.transcriptionProvider)} API key`);
+  }
   if (micPermission === "denied" || micPermission === "restricted") {
     blockers.push("allow microphone access");
   }
@@ -437,7 +440,7 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
       ? `Can't start yet: ${blockers.join(" and ")}`
       : "Dictate into terminals and inputs using your microphone";
   const isLegacyKey = !!settings.openaiApiKey && !settings.openaiApiKey.startsWith("sk-proj-");
-  const hasOpenAiKey = !!settings.openaiApiKey;
+  const hasOpenAiKey = hasCleanupKey(settings);
   const spokenCommandsAvailable = settings.language === "en";
   const paragraphing = settings.paragraphingStrategy ?? "spoken-command";
   const effectiveParagraphing: VoiceParagraphingStrategy = spokenCommandsAvailable
@@ -448,34 +451,58 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
   const dictationCombo = useEffectiveCombo("voiceInput.toggle");
   const pauseCombo = useEffectiveCombo("voiceInput.togglePause");
 
-  const openAiKeyRow = (
-    <ApiKeyRow
-      key="openai"
-      id="voice-stt-openai-key"
-      label="OpenAI API key"
-      value={settings.openaiApiKey}
-      placeholder="Paste an OpenAI API key"
-      onSave={(key) => update({ openaiApiKey: key })}
-      onValidate={(key) => window.electron?.voiceInput?.validateApiKey(key)}
-      helpUrl="https://platform.openai.com/api-keys"
-      description={
-        isLegacyKey ? (
+  const coversCleanup = provider === "openai" && settings.correctionEnabled;
+
+  // Exhaustive over the key fields, so a new provider's key can't fall into another's row.
+  const keyRows: Record<VoiceApiKeyField, () => ReactNode> = {
+    deepgramApiKey: () => (
+      <ApiKeyRow
+        key="deepgramApiKey"
+        label="Deepgram API key"
+        value={settings.deepgramApiKey}
+        placeholder="Paste a Deepgram API key"
+        onSave={(key) => update({ deepgramApiKey: key })}
+        helpUrl="https://console.deepgram.com/"
+        description={
+          settings.deepgramApiKey
+            ? "Stored locally in plain text. Set usage limits on your Deepgram account to cap exposure."
+            : "Create one in the Deepgram console. Keys are stored locally in plain text."
+        }
+      />
+    ),
+    openaiApiKey: () => (
+      <ApiKeyRow
+        key="openaiApiKey"
+        id="voice-stt-openai-key"
+        label="OpenAI API key"
+        value={settings.openaiApiKey}
+        placeholder="Paste an OpenAI API key"
+        onSave={(key) => update({ openaiApiKey: key })}
+        onValidate={(key) => window.electron?.voiceInput?.validateApiKey(key)}
+        helpUrl="https://platform.openai.com/api-keys"
+        description={
           <>
-            This is a legacy user key. A Project API key (starts with{" "}
-            <code className="font-mono">sk-proj-</code>) is scoped more tightly. Keys are stored
-            locally in plain text, so set billing limits on your OpenAI account.
+            {coversCleanup && "This one key covers transcription and text cleanup. "}
+            {isLegacyKey ? (
+              <>
+                This is a legacy user key. A Project API key (starts with{" "}
+                <code className="font-mono">sk-proj-</code>) is scoped more tightly. Keys are stored
+                locally in plain text, so set billing limits on your OpenAI account.
+              </>
+            ) : settings.openaiApiKey ? (
+              "Stored locally in plain text. Set billing limits on your OpenAI account to cap exposure."
+            ) : (
+              <>
+                Use a Project API key (starts with <code className="font-mono">sk-proj-</code>) for
+                the best security. Keys are stored locally in plain text.
+              </>
+            )}
           </>
-        ) : settings.openaiApiKey ? (
-          "Stored locally in plain text. Set billing limits on your OpenAI account to cap exposure."
-        ) : (
-          <>
-            Use a Project API key (starts with <code className="font-mono">sk-proj-</code>) for the
-            best security. Keys are stored locally in plain text.
-          </>
-        )
-      }
-    />
-  );
+        }
+      />
+    ),
+  };
+  const keyRow = (field: VoiceApiKeyField) => keyRows[field]();
 
   if (dictionaryOpen) {
     return (
@@ -538,23 +565,7 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
                 }
               />
 
-              {provider === "deepgram" ? (
-                <ApiKeyRow
-                  key="deepgram"
-                  label="Deepgram API key"
-                  value={settings.deepgramApiKey}
-                  placeholder="Paste a Deepgram API key"
-                  onSave={(key) => update({ deepgramApiKey: key })}
-                  helpUrl="https://console.deepgram.com/"
-                  description={
-                    settings.deepgramApiKey
-                      ? "Stored locally in plain text. Set usage limits on your Deepgram account to cap exposure."
-                      : "Create one in the Deepgram console. Keys are stored locally in plain text."
-                  }
-                />
-              ) : (
-                openAiKeyRow
-              )}
+              {keyRow(transcriptionKeyField(provider))}
 
               {provider === "openai" && isLegacyKey && (
                 <>
@@ -760,8 +771,17 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
               onReset={() => void update({ correctionEnabled: DEFAULT_SETTINGS.correctionEnabled })}
             />
 
-            {settings.correctionEnabled && provider === "deepgram" && (
-              <SettingsDependents>{openAiKeyRow}</SettingsDependents>
+            {settings.correctionEnabled && (
+              <SettingsDependents>
+                {coversCleanup ? (
+                  <SettingsRow
+                    label="OpenAI API key"
+                    description="The key under Speech-to-text covers transcription and cleanup. There's nothing more to add."
+                  />
+                ) : (
+                  keyRow(VOICE_CLEANUP_KEY_FIELD)
+                )}
+              </SettingsDependents>
             )}
 
             {settings.correctionEnabled && (
@@ -769,8 +789,8 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
                 disabled={!hasOpenAiKey}
                 reason={
                   provider === "openai"
-                    ? "Correction runs on OpenAI. Add the OpenAI API key above to use it."
-                    : "Correction runs on OpenAI even while Deepgram transcribes. Add an OpenAI API key to use it."
+                    ? "Cleanup runs on OpenAI. Add the OpenAI API key under Speech-to-text to use it."
+                    : "Cleanup runs on OpenAI. Add an OpenAI API key above to use it."
                 }
               >
                 <SettingsSwitchCard
