@@ -4055,7 +4055,7 @@ export interface GeneratedIpcInvokeMap {
     result: { rawText: string | null };
   };
   "voice-input:stop-live": {
-    args: [sessionId: string];
+    args: [request: import("../voice.js").VoiceStopRequest];
     result: boolean;
   };
   "watchdog:restart": {

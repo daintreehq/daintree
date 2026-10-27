@@ -102,6 +102,7 @@ import {
   requestPaneFocus,
   requestedForDictation,
   requestedPaneSurface,
+  takeRequestedDictationCaret,
 } from "./paneFocusRequest";
 import { isRemoteWindow, useHostPlatform } from "@/hooks/useHostPlatform";
 import { isMac } from "@/lib/platform";
@@ -1272,18 +1273,27 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // Dictation writes at the caret the composer last showed in this draft, or
     // at the end of a draft nobody focused. Focusing a composer that never had
     // focus would leave CodeMirror's caret at 0, which the caret tracker then
-    // publishes as the place to dictate (#14770).
-    const parkUnchosenCaret = (view: EditorView) => {
+    // publishes as the place to dictate (#14770). The dictation key taking the
+    // person back puts it after the dictated words instead (#14791): a composer
+    // remounted since has forgotten its caret, and one they left mid-draft
+    // shows it somewhere else.
+    const parkDictationCaret = (view: EditorView) => {
       const draft = useTerminalInputStore
         .getState()
         .getDraftInput(terminalId, latestRef.current?.projectId);
+      const returnAt = takeRequestedDictationCaret(terminalId);
+      // Offsets into the draft, so only while the editor shows that draft.
+      if (returnAt !== null && returnAt <= draft.length && view.state.doc.toString() === draft) {
+        view.dispatch({ selection: EditorSelection.cursor(returnAt), scrollIntoView: true });
+        return;
+      }
       if (readComposerSelection(draftKeyRef.current, draft) === null) caretToEnd(view);
     };
 
     const focusEditor = () => {
       const view = editorViewRef.current;
       if (!view) return;
-      if (requestedForDictation(terminalId) && !editorOwnsDomFocus(view)) parkUnchosenCaret(view);
+      if (requestedForDictation(terminalId) && !editorOwnsDomFocus(view)) parkDictationCaret(view);
       view.focus();
       // The second look a frame later wins focus back from the grid pane's own
       // focus pass. An isolated composer has no pane behind it, and a late
@@ -1388,7 +1398,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         focusForDictation: () => {
           const view = editorViewRef.current;
           if (!view) return;
-          if (!editorOwnsDomFocus(view)) parkUnchosenCaret(view);
+          if (!editorOwnsDomFocus(view)) parkDictationCaret(view);
           view.focus();
         },
         focusWithCursorAtEnd: () => {
@@ -1423,7 +1433,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             if (!forDictation && isScratchpadElement(document.activeElement, terminalId)) return;
             // The user can click into the draft between the call and this frame.
             if (editorOwnsDomFocus(view)) return;
-            if (forDictation) parkUnchosenCaret(view);
+            if (forDictation) parkDictationCaret(view);
             else caretToEnd(view);
             view.focus();
           });

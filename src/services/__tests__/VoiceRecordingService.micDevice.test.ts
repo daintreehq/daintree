@@ -19,6 +19,14 @@ vi.mock("@/store/terminalInputStore", () => {
   };
 });
 
+// Its DOM reads need a real document, which this suite stubs in part; the
+// suite that runs it for real is voiceComposerFocus.test.tsx.
+vi.mock("@/services/voiceComposerFocus", () => ({
+  beginDictationReturn: vi.fn(() => null),
+  focusDictationComposer: vi.fn(),
+  revealDictationComposer: vi.fn(),
+}));
+
 vi.mock("@/store/panelStore", () => {
   const state = { panelsById: {}, panelIds: [], focusedId: null };
   const getState = () => state;

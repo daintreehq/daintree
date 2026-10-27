@@ -51,8 +51,11 @@ export function registerVoiceActions(actions: ActionRegistry): void {
     danger: "safe",
     scope: "renderer",
     keywords: ["dictate", "mic", "speech"],
-    run: async () => {
-      await voiceRecordingService.toggleFocusedPanel();
+    run: async (_args: unknown, ctx) => {
+      // Only the key itself takes the person back to a dictation it stops (#14791).
+      await voiceRecordingService.toggleFocusedPanel({
+        returnToTarget: ctx?.dispatchSource === "keybinding",
+      });
     },
   }));
 

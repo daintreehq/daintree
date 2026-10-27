@@ -772,6 +772,12 @@ export const DiffMediaReadFileVersionsPayloadSchema = z.object({
 // Renderer-minted (a UUID); bounded so a malformed id can't be stored or logged.
 export const VoiceSessionIdSchema = z.string().min(1).max(64);
 
+// Another view's dictation key, stopping the live session (#14791).
+export const VoiceStopLiveRequestSchema = z.object({
+  sessionId: VoiceSessionIdSchema,
+  returnToTarget: z.boolean().optional(),
+});
+
 // The terminal being dictated into: keyterms are read from it alone.
 export const VoiceInputStartOptionsSchema = z
   .object({

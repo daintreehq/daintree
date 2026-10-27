@@ -6,6 +6,7 @@ import type {
   VoiceLiveSessionUpdate,
   VoiceRevealRequest,
   VoiceSessionEndReason,
+  VoiceStopRequest,
 } from "../voice.js";
 import type {
   VoiceCorrectionTiming,
@@ -2115,8 +2116,8 @@ export interface IpcEventMap {
   // To every view whenever the live session changes. Not keyed to a session:
   // it names the one live elsewhere, or none.
   "voice-input:live-session": VoiceLiveSessionUpdate;
-  // To the owner: another view's dictation key asked it to stop.
-  "voice-input:stop-requested": { sessionId: string };
+  // To the owner: another view's dictation key, or a page's, asked it to stop.
+  "voice-input:stop-requested": VoiceStopRequest;
   // Another view's indicator, to the owner and to the view on screen in the
   // owner's window, which goes to the owner's workspace on the owner's host.
   "voice-input:reveal-requested": VoiceRevealRequest;

@@ -1160,7 +1160,12 @@ describe.each(["deepgram", "grok"] as const)("voiceInput — spoken send on %s",
     };
 
     const handleStopLive = getHandler("voice-input:stop-live");
-    expect(await (handleStopLive as SessionHandler)(otherView, currentSessionId)).toBe(true);
+    expect(
+      await (handleStopLive as unknown as (event: unknown, request: unknown) => Promise<unknown>)(
+        otherView,
+        { sessionId: currentSessionId }
+      )
+    ).toBe(true);
     // The request only asks the owner to stop; the held send is still pending.
     expect(toRenderer()).toEqual([stopRequested]);
 
