@@ -430,6 +430,12 @@ export const REGISTRY: Record<string, Command> = {
     kind: "diagnostic",
     runner: tsxScript("voice-replay-compare.ts"),
   },
+  "voice-cleanup": {
+    summary:
+      "Dictated passages through the real cleanup per model and effort: fixes, meaning kept, guard rejections, latency, cost (needs OPENAI_API_KEY)",
+    kind: "diagnostic",
+    runner: tsxScript("voice-cleanup.ts"),
+  },
   analyze: {
     summary: "Bundle-size visualizer build (ANALYZE=true vite build)",
     kind: "diagnostic",
