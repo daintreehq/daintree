@@ -3557,7 +3557,7 @@ class VoiceRecordingService {
       edits.push({ ...span, text: corrected, passage });
     });
 
-    let swapped: Omit<LandedCorrection, "baseline"> | null = null;
+    let swapped: Omit<LandedCorrection, "baseline" | "sessionId"> | null = null;
     if (edits.length > 0) {
       const before = inputStore.getDraftInput(panelId, projectId);
       const changes = draftChanges(before, edits);
@@ -3620,7 +3620,13 @@ class VoiceRecordingService {
       this.foldIntoBaseline(cleanup, new Map(edits.map(({ passage, text }) => [passage, text]))) ??
       this.chunkBaseline(correction, edits);
     this.releaseBaseline(cleanup);
-    if (swapped) recordCorrectionLanded(panelId, projectId, { ...swapped, baseline });
+    if (swapped) {
+      recordCorrectionLanded(panelId, projectId, {
+        ...swapped,
+        baseline,
+        sessionId: cleanup.sessionId,
+      });
+    }
 
     this.syncCorrectionRange(panelId);
     inputStore.bumpExternalDraftRevision({ keepsSelection: true });

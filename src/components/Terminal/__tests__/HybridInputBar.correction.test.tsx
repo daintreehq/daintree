@@ -72,7 +72,7 @@ beforeEach(() => {
     focusedId: panel.id,
   });
   useTerminalInputStore.setState({ draftInputs: new Map() });
-  useVoiceRecordingStore.setState({ panelBuffers: {} });
+  useVoiceRecordingStore.setState({ panelBuffers: {}, activeTarget: null, status: "idle" });
   takeLandedCorrection("term-1", undefined, "");
   takeScratchLanded("term-1", undefined, "");
 });
@@ -117,19 +117,29 @@ async function undo(view: EditorView): Promise<void> {
   });
 }
 
+const restoreControl = (view: EditorView) =>
+  view.contentDOM.querySelector<HTMLElement>(".cm-voice-restore");
+
+async function beginDictation(sessionId: string): Promise<void> {
+  await act(async () => {
+    useVoiceRecordingStore.getState().beginSession({ panelId: "term-1" }, sessionId);
+  });
+}
+
 const RAW = "Intro. um open the zoo stand store";
 const CORRECTED = "Intro. Open the Zustand store.";
 const FROM = "Intro. ".length;
 
-async function landCorrection(): Promise<void> {
+async function landCorrection(sessionId = "session-1"): Promise<void> {
   await act(async () => {
     const inputs = useTerminalInputStore.getState();
-    inputs.setDraftInput("term-1", CORRECTED);
+    inputs.setDraftInput("term-1", CORRECTED + draft().slice(RAW.length));
     recordCorrectionLanded("term-1", undefined, {
       from: FROM,
       rawText: RAW.slice(FROM),
       correctedText: CORRECTED.slice(FROM),
       baseline: { raw: RAW.slice(FROM), corrected: CORRECTED.slice(FROM) },
+      sessionId,
     });
     useVoiceRecordingStore.getState().setSessionCorrectedText("term-1", CORRECTED.slice(FROM));
     inputs.bumpExternalDraftRevision();
@@ -209,22 +219,115 @@ describe("HybridInputBar after an AI correction lands", () => {
     expect(draft()).toBe("");
   });
 
-  it("shows a correction that landed before the composer mounted, and undoes it", async () => {
+  it("ends the review as the next dictation begins, and keeps the correction in undo (#14875)", async () => {
+    const { view } = await mount();
+    await beginDictation("session-1");
+    await writeDraft(RAW);
+    await landCorrection("session-1");
+    expect(restoreControl(view)).not.toBeNull();
+
+    await beginDictation("session-2");
+    expect(restoreControl(view)).toBeNull();
+    expect(view.contentDOM.querySelectorAll(".cm-voice-corrected")).toHaveLength(0);
+
+    await writeDraft(CORRECTED + " And the next part.");
+    expect(restoreControl(view)).toBeNull();
+    await undo(view);
+    expect(view.state.doc.toString()).toBe(CORRECTED);
+    await undo(view);
+    expect(view.state.doc.toString()).toBe(RAW);
+  });
+
+  it("keeps a chunk's review while its own dictation carries on (#14772)", async () => {
+    const { view } = await mount();
+    await beginDictation("session-1");
+    await act(async () => useVoiceRecordingStore.getState().setStatus("recording"));
+    await writeDraft(RAW);
+    await landCorrection("session-1");
+    await act(async () => useVoiceRecordingStore.getState().appendDelta("And the", "item-2"));
+    await writeDraft(CORRECTED + " And the next part.");
+
+    expect(restoreControl(view)).not.toBeNull();
+    expect(view.contentDOM.querySelectorAll(".cm-voice-corrected")).not.toHaveLength(0);
+  });
+
+  it("keeps its review when a dictation begins on another panel", async () => {
+    const { view } = await mount();
+    await beginDictation("session-1");
+    await writeDraft(RAW);
+    await landCorrection("session-1");
+
+    await act(async () => {
+      useVoiceRecordingStore.getState().beginSession({ panelId: "term-2" }, "session-2");
+    });
+
+    expect(restoreControl(view)).not.toBeNull();
+    expect(view.contentDOM.querySelectorAll(".cm-voice-corrected")).not.toHaveLength(0);
+  });
+
+  it("lands a correction a newer dictation overtook without a review, still undoable", async () => {
+    const { view } = await mount();
+    await beginDictation("session-1");
+    await writeDraft(RAW);
+    await beginDictation("session-2");
+    await writeDraft(RAW + " And the next part.");
+    // The newer one may have stopped by the time the old cleanup lands.
+    await act(async () => useVoiceRecordingStore.getState().finishSession());
+
+    await landCorrection("session-1");
+    expect(view.state.doc.toString()).toBe(CORRECTED + " And the next part.");
+    expect(restoreControl(view)).toBeNull();
+    expect(view.contentDOM.querySelectorAll(".cm-voice-corrected")).toHaveLength(0);
+
+    await undo(view);
+    expect(view.state.doc.toString()).toBe(RAW + " And the next part.");
+    expect(draft()).toBe(RAW + " And the next part.");
+  });
+
+  it("gives the new dictation's own correction its review", async () => {
+    const { view } = await mount();
+    await beginDictation("session-1");
+    await writeDraft("Before. ");
+    await beginDictation("session-2");
+    await writeDraft(RAW);
+    await landCorrection("session-2");
+
+    expect(restoreControl(view)).not.toBeNull();
+  });
+
+  function landBeforeMount(): void {
     useTerminalInputStore.getState().setDraftInput("term-1", CORRECTED);
     recordCorrectionLanded("term-1", undefined, {
       from: FROM,
       rawText: RAW.slice(FROM),
       correctedText: CORRECTED.slice(FROM),
       baseline: { raw: RAW.slice(FROM), corrected: CORRECTED.slice(FROM) },
+      sessionId: "session-1",
     });
     useTerminalInputStore.getState().bumpExternalDraftRevision();
+  }
+
+  it("shows a correction that landed before the composer mounted, and undoes it", async () => {
+    landBeforeMount();
 
     const { view } = await mount();
 
-    expect(view.contentDOM.querySelector(".cm-voice-restore")).not.toBeNull();
+    expect(restoreControl(view)).not.toBeNull();
     await undo(view);
     expect(view.state.doc.toString()).toBe(RAW);
     expect(draft()).toBe(RAW);
+  });
+
+  it("replays one a newer dictation overtook before the composer mounted without a review", async () => {
+    landBeforeMount();
+    useVoiceRecordingStore.getState().beginSession({ panelId: "term-1" }, "session-2");
+
+    const { view } = await mount();
+
+    expect(view.state.doc.toString()).toBe(CORRECTED);
+    expect(restoreControl(view)).toBeNull();
+    await undo(view);
+    expect(view.state.doc.toString()).toBe(RAW);
   });
 });
 
@@ -265,6 +368,7 @@ describe("HybridInputBar after a correction over several passages lands", () => 
         rawText: BEFORE,
         correctedText: AFTER,
         baseline: null,
+        sessionId: "session-1",
         write: {
           before: BEFORE,
           after: AFTER,

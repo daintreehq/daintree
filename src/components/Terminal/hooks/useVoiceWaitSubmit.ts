@@ -6,7 +6,11 @@ import { useVoiceRecordingStore } from "@/store";
 import type { VoiceRecordingTarget } from "@/store/voiceRecordingStore";
 import { useProjectStore } from "@/store/projectStore";
 import { usePanelStore } from "@/store/panelStore";
-import { outsideWriteChange, takeLandedCorrection } from "@/services/voiceCorrectionLanding";
+import {
+  isLatestDictation,
+  outsideWriteChange,
+  takeLandedCorrection,
+} from "@/services/voiceCorrectionLanding";
 import {
   outsideDraftWrite,
   selectionAfterOutsideWrite,
@@ -345,6 +349,7 @@ export function useVoiceWaitSubmit({
             // The same outside write the sync effect would make, correction
             // included, so a send held back afterwards leaves it undoable.
             const landed = takeLandedCorrection(terminalId, projectId, draft);
+            const reviewed = landed !== null && isLatestDictation(voiceId, landed);
             // The caret stays where dictation left it, so a send that's held
             // back doesn't strand it at the end.
             const pending = takePendingComposerSelection(
@@ -359,9 +364,9 @@ export function useVoiceWaitSubmit({
                 change,
                 pending
               );
-              finalView.dispatch(outsideDraftWrite(change, draft, landed, selection));
+              finalView.dispatch(outsideDraftWrite(change, draft, landed, selection, reviewed));
             } else {
-              if (landed) replayLandedCorrection(finalView, landed);
+              if (landed) replayLandedCorrection(finalView, landed, reviewed);
               if (pending)
                 finalView.dispatch({ selection: { anchor: pending.from, head: pending.to } });
             }

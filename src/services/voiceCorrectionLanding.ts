@@ -24,6 +24,8 @@ export interface LandedCorrection {
   rawText: string;
   correctedText: string;
   baseline: CorrectionBaseline | null;
+  /** The dictation session whose words it cleaned. */
+  sessionId: string;
   /**
    * The draft write that swapped it in, passage by passage, for a composer
    * still showing `before`: one replacement over the whole span would drop
@@ -62,6 +64,16 @@ export function takeLandedCorrection(
   landed.delete(key);
   const { from, correctedText } = correction;
   return draft.slice(from, from + correctedText.length) === correctedText ? correction : null;
+}
+
+/**
+ * Whether a correction still belongs to the latest dictation on its voice
+ * panel. Once another has started, the correction is behind the user, and it
+ * lands without a review (#14875).
+ */
+export function isLatestDictation(panelId: string, correction: LandedCorrection): boolean {
+  const latest = useVoiceRecordingStore.getState().panelBuffers[panelId]?.dictationSessionId;
+  return !latest || latest === correction.sessionId;
 }
 
 /**

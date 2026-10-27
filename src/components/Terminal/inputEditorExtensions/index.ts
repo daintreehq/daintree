@@ -77,6 +77,7 @@ export {
 export {
   correctionLanded,
   createCorrectionReview,
+  endCorrectionReview,
   replayLandedCorrection,
 } from "./correctionReview";
 export type { CorrectionReview } from "./correctionReview";

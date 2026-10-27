@@ -97,6 +97,24 @@ export const correctionLanded = StateEffect.define<CorrectionReview>({ map: mapR
 /** Rides a transaction that puts the raw transcription back over a correction. */
 export const correctionReverted = StateEffect.define<CorrectionReview>({ map: mapReview });
 const advanceReview = StateEffect.define<null>();
+/**
+ * Dismisses the review and leaves the text as it is: the correction is behind
+ * the user, but still the undo step it was.
+ */
+export const correctionReviewEnded = StateEffect.define<null>();
+
+/**
+ * The effects that land a correction. One a newer dictation has put behind
+ * the user (#14875) lands out of review: still an undo step, which undo and
+ * redo carry as any other.
+ */
+export function correctionLandingEffects(
+  review: CorrectionReview,
+  reviewed = true
+): StateEffect<unknown>[] {
+  const landed = correctionLanded.of(review);
+  return reviewed ? [landed] : [landed, correctionReviewEnded.of(null)];
+}
 
 /**
  * Marks a write from outside the composer: dictated words, a cleanup, a file
@@ -160,7 +178,7 @@ export const correctionReviewField = StateField.define<ReviewState | null>({
     if (value && tr.docChanged) value = tr.annotation(outsideWrite) ? carryReview(value, tr) : null;
     for (const effect of tr.effects) {
       if (effect.is(correctionLanded)) value = reviewFor(tr.state.doc, effect.value);
-      else if (effect.is(correctionReverted)) value = null;
+      else if (effect.is(correctionReverted) || effect.is(correctionReviewEnded)) value = null;
       else if (effect.is(advanceReview) && value && value.phase !== "settled") {
         value = { ...value, phase: value.phase === "marked" ? "fading" : "settled" };
       }
@@ -176,7 +194,11 @@ export const correctionReviewField = StateField.define<ReviewState | null>({
  * usual sync. The raw text goes back out of history and the correction lands
  * over it as its own undo step, the same as one seen live.
  */
-export function replayLandedCorrection(view: EditorView, review: CorrectionReview): void {
+export function replayLandedCorrection(
+  view: EditorView,
+  review: CorrectionReview,
+  reviewed = true
+): void {
   const to = review.from + review.correctedText.length;
   if (view.state.doc.sliceString(review.from, to) !== review.correctedText) return;
   view.dispatch({
@@ -189,9 +211,18 @@ export function replayLandedCorrection(view: EditorView, review: CorrectionRevie
       to: review.from + review.rawText.length,
       insert: review.correctedText,
     },
-    effects: correctionLanded.of(review),
+    effects: correctionLandingEffects(review, reviewed),
     annotations: isolateHistory.of("full"),
   });
+}
+
+/**
+ * Ends the review of the correction that last landed, if one is showing. A
+ * new dictation puts it behind the user (#14875).
+ */
+export function endCorrectionReview(view: EditorView): void {
+  if (!view.state.field(correctionReviewField, false)) return;
+  view.dispatch({ effects: correctionReviewEnded.of(null) });
 }
 
 const RESTORE_USER_EVENT = "input.restore";
