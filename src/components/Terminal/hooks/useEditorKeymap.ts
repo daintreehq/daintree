@@ -8,6 +8,16 @@ import { currentContextReferenceProvidersEffects } from "../inputEditorExtension
 import { clearComposerHistory } from "../inputEditorExtensions/composerHistory";
 import { rescanForgeReferences } from "../inputEditorExtensions/forgeReference";
 
+/**
+ * Where one send goes in place of the composer's own `submitText` and
+ * `onSendKey("enter")`: taken at the key press and carried with that send
+ * alone, through a dictation's wait if it has one.
+ */
+export interface ComposerSendRoute {
+  submitText: (text: string, imagePaths: readonly string[]) => Promise<boolean>;
+  sendEnter: () => void;
+}
+
 interface LatestRefShape {
   terminalId: string;
   projectId?: string;
@@ -25,8 +35,8 @@ interface LatestRefShape {
   onSendKey?: (key: string) => void;
   isVoiceActiveForPanel: boolean;
   isExpanded: boolean;
-  /** ⌘↩ sends as Enter does (`HybridInputBarProps.modEnterSends`). */
-  modEnterSends?: boolean;
+  /** ⌘↩ sends as Enter does, by this route (`HybridInputBarProps.modEnterSend`). */
+  modEnterSend?: () => ComposerSendRoute;
 }
 
 interface UseEditorKeymapParams {
@@ -38,8 +48,8 @@ interface UseEditorKeymapParams {
   historyPaletteOpenRef: React.RefObject<(() => void) | null>;
   applyAutocompleteSelection: (mode: "enter" | "complete", index?: number) => boolean;
   handleHistoryNavigation: (direction: "up" | "down") => boolean;
-  sendFromEditor: () => void;
-  startVoiceWaitSubmit: () => void;
+  sendFromEditor: (route?: ComposerSendRoute) => void;
+  startVoiceWaitSubmit: (options?: { route?: ComposerSendRoute }) => void;
   cancelVoiceWaitSubmit: () => boolean;
   handleDictationEscape: () => boolean;
   hasPendingVoiceCorrection: () => boolean;
@@ -54,7 +64,7 @@ interface UseEditorKeymapParams {
 }
 
 interface KeymapHandlers {
-  onEnter: () => boolean;
+  onEnter: (route?: ComposerSendRoute) => boolean;
   onModEnter: () => boolean;
   onEscape: () => boolean;
   onArrowUp: () => boolean;
@@ -97,7 +107,9 @@ export function useEditorKeymap({
   const handlersRef = useRef<KeymapHandlers | null>(null);
 
   const buildHandlers = (): KeymapHandlers => ({
-    onEnter: () => {
+    // `route`: the way ⌘↩ sends. A completion row takes the key as its own and
+    // sends nothing by it.
+    onEnter: (route) => {
       const latest = latestRef.current;
       if (!latest) return false;
       if (isComposingRef.current) return false;
@@ -129,7 +141,7 @@ export function useEditorKeymap({
           handledEnterRef.current = false;
         }, 0);
 
-        startVoiceWaitSubmit();
+        startVoiceWaitSubmit(route && { route });
         return true;
       }
 
@@ -140,7 +152,8 @@ export function useEditorKeymap({
           handledEnterRef.current = false;
         }, 0);
 
-        if (latest.onSendKey) latest.onSendKey("enter");
+        if (route) route.sendEnter();
+        else if (latest.onSendKey) latest.onSendKey("enter");
         return true;
       }
 
@@ -149,14 +162,15 @@ export function useEditorKeymap({
         handledEnterRef.current = false;
       }, 0);
 
-      sendFromEditor();
+      sendFromEditor(route);
       return true;
     },
-    // The same send as Enter, for a host that tells the two apart; anywhere
-    // else the chord is left alone.
+    // Enter's send, by the route the host gives for the press; with none, the
+    // chord is left alone.
     onModEnter: () => {
-      if (!latestRef.current?.modEnterSends) return false;
-      return handlersRef.current?.onEnter() ?? false;
+      const route = latestRef.current?.modEnterSend?.();
+      if (!route) return false;
+      return handlersRef.current?.onEnter(route) ?? false;
     },
     onEscape: () => {
       const latest = latestRef.current;

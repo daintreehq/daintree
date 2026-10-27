@@ -238,7 +238,8 @@ describe("useVoiceWaitSubmit", () => {
       expect(claimSendHandBack).toHaveBeenCalledTimes(1);
       expect(sendFromEditor).toHaveBeenCalledWith(
         handBack,
-        expect.objectContaining({ text: "fix the login bug", kept: "", sessions: OWNED })
+        expect.objectContaining({ text: "fix the login bug", kept: "", sessions: OWNED }),
+        undefined
       );
     });
 
@@ -330,9 +331,42 @@ describe("useVoiceWaitSubmit", () => {
       resolveStop();
     });
 
-    expect(sendFromEditor).toHaveBeenCalledWith(handBack, expect.objectContaining({ kept: "" }));
+    expect(sendFromEditor).toHaveBeenCalledWith(
+      handBack,
+      expect.objectContaining({ kept: "" }),
+      undefined
+    );
     expect(claimSendHandBack).toHaveBeenCalledTimes(1);
     view.destroy();
+  });
+
+  it("sends by the route taken at the press, once, and the next wait by none", async () => {
+    let resolveStop!: () => void;
+    stopMock.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveStop = resolve;
+        })
+    );
+    const route = { submitText: vi.fn(async () => true), sendEnter: vi.fn() };
+    const { result } = renderWaitSubmit();
+
+    act(() => {
+      result.current.startVoiceWaitSubmit({ route });
+    });
+    expect(sendFromEditor).not.toHaveBeenCalled();
+    await act(async () => {
+      resolveStop();
+    });
+    expect(sendFromEditor).toHaveBeenCalledTimes(1);
+    expect(sendFromEditor).toHaveBeenLastCalledWith(undefined, expect.anything(), route);
+
+    stopMock.mockResolvedValue(undefined);
+    await act(async () => {
+      result.current.startVoiceWaitSubmit();
+    });
+    expect(sendFromEditor).toHaveBeenCalledTimes(2);
+    expect(sendFromEditor).toHaveBeenLastCalledWith(undefined, expect.anything(), undefined);
   });
 
   it("does not send when cancelled while the transcript is still finishing", async () => {

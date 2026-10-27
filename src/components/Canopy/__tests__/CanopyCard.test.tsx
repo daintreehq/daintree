@@ -26,6 +26,10 @@ interface ComposerProps {
   onSendKey: (key: string) => void;
   submitText?: (text: string, imagePaths: string[]) => Promise<boolean>;
   voiceTarget?: VoiceRecordingTarget;
+  modEnterSend?: () => {
+    submitText: (text: string, imagePaths: readonly string[]) => Promise<boolean>;
+    sendEnter: () => void;
+  };
 }
 
 interface TerminalProps {
@@ -287,12 +291,96 @@ describe("CanopyCard", () => {
     await act(async () => (await composer()).onSendKey("escape"));
     expect(sendKey).not.toHaveBeenCalled();
     expect(h.onLeavePane).toHaveBeenCalledTimes(1);
-    // Arrows steer the agent's menu; only Enter answers and moves the panel on.
+    // Arrows steer the agent's menu; only Enter answers it, and stays on the run.
     await act(async () => (await composer()).onSendKey("up"));
     expect(sendKey).toHaveBeenCalledWith(7, "up");
     expect(h.onSent).not.toHaveBeenCalled();
     await act(async () => (await composer()).onSendKey("enter"));
     expect(h.onSent).toHaveBeenCalledTimes(1);
+    expect(h.onSent).toHaveBeenLastCalledWith(
+      expect.objectContaining({ runId: "run-1" }),
+      undefined
+    );
+  });
+
+  describe("⌘↩", () => {
+    const named = (runId: string, title: string): CanopyItem => {
+      const item = itemFor("question", {}, runId);
+      return { ...item, row: { ...item.row, title } };
+    };
+
+    it("moves on to the run the reply named at the press, whatever it names by the time the send lands", async () => {
+      const h = handlers();
+      const item = itemFor("question");
+      const view = render(
+        <CanopyCard item={item} {...PROPS} {...h} moveOnTo={named("run-2", "Pick a port")} />
+      );
+      await streamOpens({ watchId: 7 });
+      const route = (await composer()).modEnterSend!();
+      view.rerender(
+        <CanopyCard item={item} {...PROPS} {...h} moveOnTo={named("run-3", "Bump the deps")} />
+      );
+
+      await act(async () => {
+        await route.submitText("Keep it read-only", []);
+      });
+      expect(submit).toHaveBeenCalledWith(7, "Keep it read-only", undefined);
+      expect(h.onSent).toHaveBeenLastCalledWith(item, "run-2");
+
+      // An empty reply's Enter answers the agent's menu, and moves on the same way.
+      await act(async () => route.sendEnter());
+      expect(sendKey).toHaveBeenCalledWith(7, "enter");
+      expect(h.onSent).toHaveBeenLastCalledWith(item, "run-2");
+      expect(h.onSent).toHaveBeenCalledTimes(2);
+
+      // Enter carries nowhere to go: it stays.
+      await act(async () => {
+        await (
+          await composer()
+        ).submitText!("and stay", []);
+      });
+      expect(h.onSent).toHaveBeenLastCalledWith(item, undefined);
+    });
+
+    it("sends and stays with nothing to name, and moves nowhere on a send main refused", async () => {
+      const h = handlers();
+      const item = itemFor("question");
+      const view = render(<CanopyCard item={item} {...PROPS} {...h} />);
+      await streamOpens({ watchId: 7 });
+
+      await act(async () => {
+        await (await composer()).modEnterSend!().submitText("no one below", []);
+      });
+      expect(h.onSent).toHaveBeenLastCalledWith(item, undefined);
+
+      view.rerender(
+        <CanopyCard item={item} {...PROPS} {...h} moveOnTo={named("run-2", "Pick a port")} />
+      );
+      submit.mockRejectedValueOnce(new Error("gone"));
+      let took: boolean | undefined;
+      await act(async () => {
+        took = await (await composer()).modEnterSend!().submitText("refused", []);
+      });
+      expect(took).toBe(false);
+      expect(h.onSendFailed).toHaveBeenCalledTimes(1);
+      expect(h.onSent).toHaveBeenCalledTimes(1);
+    });
+
+    it("names where it goes in a line kept under the reply, blank with nowhere to go", async () => {
+      const h = handlers();
+      const item = itemFor("question");
+      const view = render(
+        <CanopyCard item={item} {...PROPS} {...h} moveOnTo={named("run-2", "Pick a port")} />
+      );
+      await composer();
+      const line = () => view.container.querySelector<HTMLElement>("[data-canopy-move-on]");
+      expect(line()?.textContent).toContain("Send and go to");
+      expect(line()?.textContent).toContain("Pick a port");
+
+      view.rerender(<CanopyCard item={item} {...PROPS} {...h} moveOnTo={null} />);
+      expect(line()).not.toBeNull();
+      expect(line()!.textContent).toBe("");
+    });
   });
 
   it("hands Reply to the live terminal while it asks for a secret", async () => {
