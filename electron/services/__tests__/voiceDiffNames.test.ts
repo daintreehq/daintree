@@ -1,5 +1,12 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -87,6 +94,19 @@ describe("readWorktreeDiffNames", () => {
     expect(await readWorktreeDiffNames(dir, 5_000)).toEqual(["modifiedTrackedName"]);
   });
 
+  it("reads uncommitted work when the default branch shares no history with it", async () => {
+    const { dir, git } = repo();
+    const unrelated = execFileSync("git", ["commit-tree", "-m", "unrelated", "HEAD^{tree}"], {
+      cwd: dir,
+    })
+      .toString("utf8")
+      .trim();
+    git("update-ref", "refs/remotes/origin/develop", unrelated);
+    writeFileSync(path.join(dir, "base.ts"), "export const modifiedTrackedName = 1;\n");
+
+    expect(await readWorktreeDiffNames(dir, 5_000)).toEqual(["modifiedTrackedName"]);
+  });
+
   it("reads an edit made since the worktree's last dictation", async () => {
     const { dir } = repo();
     writeFileSync(path.join(dir, "base.ts"), "export function annotateUncertainSpans() {}\n");
@@ -114,12 +134,14 @@ describe("readWorktreeDiffNames", () => {
     git("config", "filter.proc.process", spy.process("process"));
     appendFileSync(path.join(dir, "spans.ts"), "export function annotateUncertainSpans() {}\n");
     appendFileSync(path.join(dir, "data.proc"), "y\n");
+    const index = readFileSync(path.join(dir, ".git", "index"));
 
     expect(await readWorktreeDiffNames(dir, 5_000)).toEqual(["annotateUncertainSpans"]);
     expect(["clean", "smudge", "process"].filter(spy.ran)).toEqual([]);
+    expect(readFileSync(path.join(dir, ".git", "index")).equals(index)).toBe(true);
     // The filters do run for a diff that allows them, so their silence above means something.
     plainDiff(dir, "HEAD");
-    expect(spy.ran("clean") && spy.ran("process")).toBe(true);
+    expect(["clean", "process"].filter(spy.ran)).toEqual(["clean", "process"]);
   });
 
   it("never runs a textconv program the repository configures", async () => {
@@ -152,22 +174,29 @@ describe("readWorktreeDiffNames", () => {
     const inSub = gitIn(sub);
     inSub("config", "user.email", "test@example.com");
     inSub("config", "user.name", "Test");
-    writeFileSync(path.join(sub, ".gitattributes"), "*.ts filter=spy diff=spy\n");
+    writeFileSync(path.join(sub, ".gitattributes"), "*.ts filter=spy diff=spy\n*.proc filter=proc\n");
     writeFileSync(path.join(sub, "inner.ts"), "export const innerSubmoduleName = 1;\n");
+    writeFileSync(path.join(sub, "data.proc"), "x\n");
     inSub("add", ".");
     inSub("commit", "-q", "-m", "inner");
     inSub("config", "filter.spy.clean", spy.clean("sub-clean"));
+    inSub("config", "filter.proc.process", spy.process("sub-process"));
     inSub("config", "diff.spy.textconv", spy.textconv("sub-textconv"));
     git("add", "sub");
     git("commit", "-q", "-m", "bump submodule");
     // Committed and uncommitted changes inside it, and a change beside it.
     appendFileSync(path.join(sub, "inner.ts"), "export const uncommittedInnerName = 2;\n");
+    appendFileSync(path.join(sub, "data.proc"), "y\n");
     writeFileSync(path.join(dir, "base.ts"), "export const modifiedTrackedName = 1;\n");
 
     expect(await readWorktreeDiffNames(dir, 5_000)).toEqual(["modifiedTrackedName"]);
-    expect(["sub-clean", "sub-textconv"].filter(spy.ran)).toEqual([]);
+    expect(["sub-clean", "sub-process", "sub-textconv"].filter(spy.ran)).toEqual([]);
     plainDiff(dir, "--submodule=diff", "origin/HEAD");
-    expect(spy.ran("sub-clean") && spy.ran("sub-textconv")).toBe(true);
+    expect(["sub-clean", "sub-process", "sub-textconv"].filter(spy.ran)).toEqual([
+      "sub-clean",
+      "sub-process",
+      "sub-textconv",
+    ]);
   });
 
   it("reads nothing outside a repository", async () => {

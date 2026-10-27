@@ -1,5 +1,10 @@
 import { disableFilters, filterDriversIn } from "./git/reviewPoint/filterDrivers.js";
-import { runGitForBytes, type RunGitOptions } from "./git/reviewPoint/runGit.js";
+import {
+  GitCommandError,
+  GitTimeoutError,
+  runGitForBytes,
+  type RunGitOptions,
+} from "./git/reviewPoint/runGit.js";
 import { diffCodeNames } from "./voiceCodeNames.js";
 
 // A branch's whole diff, read once per dictation; one past this is too big to
@@ -7,21 +12,24 @@ import { diffCodeNames } from "./voiceCodeNames.js";
 const MAX_DIFF_BYTES = 2_000_000;
 
 async function readDiff(cwd: string, deadline: number): Promise<string[]> {
-  const git = (args: string[], extra: Partial<RunGitOptions> = {}) =>
-    runGitForBytes(cwd, args, {
-      timeoutMs: Math.max(1, deadline - Date.now()),
-      maxStdoutBytes: MAX_DIFF_BYTES,
-      ...extra,
-    });
+  const git = (args: string[], extra: Partial<RunGitOptions> = {}) => {
+    const timeoutMs = deadline - Date.now();
+    if (timeoutMs <= 0) return Promise.reject(new GitTimeoutError(args[0] ?? ""));
+    return runGitForBytes(cwd, args, { timeoutMs, maxStdoutBytes: MAX_DIFF_BYTES, ...extra });
+  };
   const [config, mergeBase] = await Promise.all([
     git(["config", "-z", "--list"], { okExitCodes: [1] }),
     git(["merge-base", "HEAD", "origin/HEAD"]).then(
       ({ stdout }) => stdout.toString("utf8").trim(),
-      () => ""
+      // With no default branch to have left (or no history shared with it),
+      // the branch starts at its last commit, and only its uncommitted work
+      // counts. A read that ran out of time ends here instead.
+      (error: unknown) => {
+        if (error instanceof GitCommandError) return "";
+        throw error;
+      }
     ),
   ]);
-  // With no default branch to have left, the branch starts at its last
-  // commit, and only its uncommitted work counts.
   const base = mergeBase || "HEAD";
   // The base's tree against the working tree, for every path in the index:
   // committed work and uncommitted work, staged or not, but no untracked file.
