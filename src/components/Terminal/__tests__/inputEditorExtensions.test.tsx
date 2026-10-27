@@ -1264,7 +1264,7 @@ describe("pendingAIField", () => {
     view.destroy();
   });
 
-  it("shows a finished passage clean beside one still streaming", () => {
+  it("leaves no underline under a finished passage beside one still streaming", () => {
     const view = makeView("fix bug. add test now");
     view.dispatch({
       effects: setPendingAIRanges.of([
@@ -1274,6 +1274,54 @@ describe("pendingAIField", () => {
     });
     expect(underlined(view)).toEqual([" test now"]);
     view.destroy();
+  });
+
+  // #14901: a reply is judged only once it's whole, and lands only with every
+  // other passage of its pass, so until it is written into the draft the
+  // rewrite never reads as text that landed.
+  it("draws a streamed rewrite as words not yet written, until it lands", () => {
+    const parent = document.createElement("div");
+    // As the shell sets them: the draft's ink, and the ink for words not yet in it.
+    parent.style.color = "rgb(205, 214, 244)";
+    parent.style.setProperty("--ib-interim", "rgb(150, 155, 170)");
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc: "um so fix the bug. Then ship",
+        extensions: [
+          buildInputBarTheme({ background: "#1e1e2e", foreground: "#cdd6f4" }),
+          interimWidgetField,
+          pendingAIField,
+        ],
+      }),
+    });
+    const look = (selector: string) => {
+      const style = getComputedStyle(view.contentDOM.querySelector(selector)!);
+      return { color: style.color, fontStyle: style.fontStyle };
+    };
+    view.dispatch({
+      effects: [
+        setInterimText.of(" today"),
+        setPendingAIRanges.of([{ from: 0, to: 18, rewrite: { to: 18, text: "So fix the bug." } }]),
+      ],
+    });
+    const rewrite = look(".cm-voice-rewrite");
+    const draftText = look(".cm-line");
+    expect(rewrite).toEqual(look(".cm-voice-interim"));
+    // Neither its ink nor its slant is the draft's.
+    expect(rewrite.color).not.toBe(draftText.color);
+    expect(rewrite.fontStyle).not.toBe(draftText.fontStyle);
+
+    // Landing writes the cleanup into the draft and takes the rewrite away.
+    view.dispatch({
+      changes: { from: 0, to: 18, insert: "So fix the bug." },
+      effects: [setInterimText.of(""), setPendingAIRanges.of([])],
+    });
+    expect(view.contentDOM.querySelector(".cm-voice-rewrite")).toBeNull();
+    expect(view.contentDOM.textContent).toBe("So fix the bug. Then ship");
+    view.destroy();
+    parent.remove();
   });
 
   it("drops the rewrite in the same transaction as typing inside the words it hides", () => {

@@ -64,7 +64,11 @@ type CompletePayload = {
   commandUncertain?: Span[];
 };
 type Span = { from: number; to: number };
-type CorrectResult = { action: "no_change" | "replace"; correctedText: string };
+type CorrectResult = {
+  action: "no_change" | "replace";
+  correctedText: string;
+  verdict?: "replaced" | "unchanged" | "rejected_command" | "rejected_low_confidence";
+};
 
 type FileTokenPayload = {
   sessionId: string;
@@ -1427,8 +1431,21 @@ describe("VoiceRecordingService — streamed cleanup (#14779)", () => {
     // The session the passage sent as `rawText` was dictated in.
     const sessionOf = (rawText: string) =>
       correct.mock.calls.find(([r]) => r.rawText === rawText)?.[0].sessionId;
-    return { ...harness, pending, progress, ranges, sessionOf };
+    // Every draft the composer held for the panel, in order.
+    const drafts: string[] = [];
+    unwatchers.push(
+      harness.inputStore.subscribe(() => {
+        const next = harness.draft("panel-1");
+        if (next !== drafts.at(-1)) drafts.push(next);
+      })
+    );
+    return { ...harness, pending, progress, ranges, sessionOf, drafts };
   }
+
+  const unwatchers: Array<() => void> = [];
+  afterEach(() => {
+    for (const unwatch of unwatchers.splice(0)) unwatch();
+  });
 
   const DICTATED = "um so fix the bug in the parser";
   const CORRECTED = "So fix the bug in the parser.";
@@ -1614,4 +1631,67 @@ describe("VoiceRecordingService — streamed cleanup (#14779)", () => {
     expect(draft("panel-1")).toBe("The parser is broken.\nAnd the lexer too.");
     expect(ranges("panel-1")).toEqual([]);
   });
+
+  // #14901: a reply is judged only once it's whole, so what streams in before
+  // that is only ever drawn over the passage (tentatively, by the composer),
+  // and one turned down never reaches the draft.
+  it.each([
+    {
+      check: "the low-confidence gate",
+      dictated: DICTATED,
+      streamed: "So fix the bug in the",
+      verdict: "rejected_low_confidence" as const,
+    },
+    {
+      check: "the command check",
+      dictated: "run the review skill on auth and the parser",
+      streamed: "/review on auth and the",
+      verdict: "rejected_command" as const,
+    },
+  ])(
+    "only ever draws a reply $check turns down, then takes it away",
+    async ({ dictated, streamed, verdict }) => {
+      const {
+        service,
+        dictate,
+        say,
+        draft,
+        flush,
+        inputStore,
+        pending,
+        progress,
+        ranges,
+        sessionOf,
+        drafts,
+      } = await streamingSetup();
+      dictate("panel-1", dictated);
+      inputStore.getState().setDraftInput("panel-1", draft("panel-1") + "\n");
+      say("and the lexr too");
+      await service.stop();
+      const before = draft("panel-1");
+
+      progress(dictated, streamed);
+      const shown = ranges("panel-1")[0]!.rewrite!.text;
+      expect(shown).toBeTruthy();
+
+      // The other passage is still out, so the pass hasn't landed: this reply
+      // alone takes its rewrite away.
+      pending.get(dictated)!.resolve({ action: "no_change", correctedText: dictated, verdict });
+      await flush();
+      expect(ranges("panel-1")[0]).toEqual({
+        from: 0,
+        to: dictated.length,
+        session: sessionOf(dictated),
+      });
+      expect(draft("panel-1")).toBe(before);
+
+      pending.get("and the lexr too")!.resolve({
+        action: "replace",
+        correctedText: "And the lexer too.",
+      });
+      await flush();
+      expect(draft("panel-1")).toBe(`${dictated}\nAnd the lexer too.`);
+      expect(drafts.filter((text) => text.includes(shown))).toEqual([]);
+    }
+  );
 });

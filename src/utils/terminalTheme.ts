@@ -47,9 +47,10 @@ export interface InputBarColors {
   placeholderSelected: string;
   placeholderMore: string;
   /**
-   * Dictated words not yet written into the draft, fitted to 4.5:1 against
-   * the resting shell and the listening fill: they are the user's words, only
-   * provisional, so the italic says so and the ink stays readable.
+   * Dictated words not yet written into the draft, and a cleanup streaming
+   * over them until it lands, fitted to 4.5:1 against the resting shell and
+   * the listening fill: they are the user's words, only provisional, so the
+   * italic says so and the ink stays readable.
    */
   interim: string;
   /**

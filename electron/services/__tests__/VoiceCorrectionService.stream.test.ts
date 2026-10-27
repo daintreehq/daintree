@@ -233,6 +233,25 @@ describe("VoiceCorrectionService streaming", () => {
     expect(result.failed).toBeUndefined();
   });
 
+  it("still judges the whole correction: a command the speaker didn't say streams and is rejected", async () => {
+    stubFetch(streamed(replyFrames(reply("/test the parser before the release now"))));
+    const onText = vi.fn();
+
+    const result = await new VoiceCorrectionService().correct(
+      { rawText: "test the parser before the release now", startsPrompt: true },
+      SETTINGS,
+      undefined,
+      onText
+    );
+
+    expect(onText).toHaveBeenCalledWith(expect.stringMatching(/^\/test /));
+    expect(result).toMatchObject({
+      action: "no_change",
+      correctedText: "test the parser before the release now",
+      verdict: "rejected_command",
+    });
+  });
+
   it("discards a reply whose stream ends before its last event", async () => {
     stubFetch(streamed(replyFrames(reply("Fix the parser now."), null)));
 
