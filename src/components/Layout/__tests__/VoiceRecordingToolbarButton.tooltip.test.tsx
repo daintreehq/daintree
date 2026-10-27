@@ -447,10 +447,10 @@ describe("VoiceRecordingToolbarButton polish — issue #8176", () => {
 
     it("every state the slot shows shares one footprint, the waveform's included (#14911)", () => {
       const widthOf = () => {
-        const root = document.body.querySelector(
+        const root = document.body.querySelector<HTMLElement>(
           "button, [aria-hidden='true'].toolbar-icon-button"
-        ) as HTMLElement;
-        return root.className
+        );
+        return (root?.className ?? "")
           .split(/\s+/)
           .filter((c) => /^[wh]-/.test(c))
           .sort()
@@ -619,18 +619,24 @@ describe("VoiceRecordingToolbarButton — locked target (#14629)", () => {
 // #14911: the toolbar shows the mic and a small waveform; the orbit is the
 // composer's signal, and nothing in the toolbar spins.
 describe("VoiceRecordingToolbarButton — waveform (#14911)", () => {
-  let frames: FrameRequestCallback[];
+  // Pending frames by id; ids only ever grow, so a cancel of a stale id
+  // leaves the live frame pending and the loop running.
+  let frames: Map<number, FrameRequestCallback>;
+  let nextFrameId: number;
   let now: number;
 
   beforeEach(() => {
-    frames = [];
+    frames = new Map();
+    nextFrameId = 0;
     now = 0;
     motion.reduced = false;
     vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
-      frames.push(cb);
-      return frames.length;
+      frames.set(++nextFrameId, cb);
+      return nextFrameId;
     });
-    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => {
+      frames.delete(id);
+    });
     vi.spyOn(performance, "now").mockImplementation(() => now);
     useVoiceRecordingStore.setState({
       isConfigured: true,
@@ -647,27 +653,39 @@ describe("VoiceRecordingToolbarButton — waveform (#14911)", () => {
     useVoiceRecordingStore.setState({ audioLevel: 0 });
   });
 
-  function renderStatus(
-    status: "arming" | "connecting" | "recording" | "reconnecting" | "finishing" | "paused",
-    micSignal: "pending" | "live" | "silent" = "live"
-  ) {
+  type Status = "arming" | "connecting" | "recording" | "reconnecting" | "finishing" | "paused";
+  type MicSignal = "pending" | "live" | "silent";
+
+  function renderStatus(status: Status, micSignal: MicSignal = "live") {
     useVoiceRecordingStore.setState({ status, micSignal, activeTarget: { panelId: "p-1" } });
     return render(<VoiceRecordingToolbarButton />);
   }
 
+  // Each frame runs inside act, so any React work a frame queued has
+  // committed before the next assertion.
   function runFrames(count: number) {
     for (let i = 0; i < count; i++) {
       now += 16;
-      const pending = frames;
-      frames = [];
-      pending.forEach((cb) => cb(now));
+      const pending = [...frames.values()];
+      frames.clear();
+      act(() => {
+        pending.forEach((cb) => cb(now));
+      });
     }
   }
 
+  function bars(container: HTMLElement) {
+    return Array.from(container.querySelectorAll<HTMLElement>("[data-voice-wave] > span"));
+  }
+
   function barScales(container: HTMLElement) {
-    return Array.from(container.querySelectorAll<HTMLElement>("[data-voice-wave] > span")).map(
-      (bar) => Number(bar.style.transform.match(/scaleY\(([\d.]+)\)/)?.[1])
+    return bars(container).map((bar) =>
+      Number(bar.style.transform.match(/scaleY\(([\d.]+)\)/)?.[1])
     );
+  }
+
+  function waveMode(container: HTMLElement) {
+    return container.querySelector("[data-voice-wave]")?.getAttribute("data-voice-wave");
   }
 
   it.each([
@@ -681,11 +699,37 @@ describe("VoiceRecordingToolbarButton — waveform (#14911)", () => {
     { status: "paused" as const, micSignal: "live" as const, mode: "held" },
   ])("$status with the mic $micSignal shows the $mode wave and no ring", (c) => {
     const { container } = renderStatus(c.status, c.micSignal);
-    expect(container.querySelector("[data-voice-wave]")?.getAttribute("data-voice-wave")).toBe(
-      c.mode
-    );
+    expect(waveMode(container)).toBe(c.mode);
     expect(container.querySelector("[data-voice-ring]")).toBeNull();
     expect(container.querySelector(".animate-spin")).toBeNull();
+    expect(bars(container)).toHaveLength(4);
+    // Only listening runs a level loop; the waits and the pause cost no frames.
+    expect(frames.size).toBe(c.mode === "level" ? 1 : 0);
+  });
+
+  it("tells waiting, paused and listening apart by more than colour", () => {
+    const shapeOf = (status: Status, micSignal?: MicSignal) => {
+      const { container, unmount } = renderStatus(status, micSignal);
+      const shape = {
+        scales: barScales(container).join(),
+        animated: bars(container).map((bar) => bar.className.includes("animate-voice-wave-wait")),
+        delays: bars(container).map((bar) => bar.style.animationDelay),
+      };
+      unmount();
+      return shape;
+    };
+    const waiting = shapeOf("arming", "pending");
+    const held = shapeOf("paused");
+    motion.reduced = true;
+    const { container } = renderStatus("recording");
+    runFrames(1);
+    const stillListening = barScales(container).join();
+
+    expect(waiting.animated).toEqual([true, true, true, true]);
+    // Staggered, so the fade travels across the bars.
+    expect(new Set(waiting.delays).size).toBe(4);
+    expect(held.animated).toEqual([false, false, false, false]);
+    expect(new Set([waiting.scales, held.scales, stillListening]).size).toBe(3);
   });
 
   it("stays flat in silence and rises when the user speaks", () => {
@@ -708,18 +752,28 @@ describe("VoiceRecordingToolbarButton — waveform (#14911)", () => {
   });
 
   it("holds its shape under reduced motion while brightness follows the voice", () => {
-    motion.reduced = true;
     const { container } = renderStatus("recording");
-    const bars = () =>
-      Array.from(container.querySelectorAll<HTMLElement>("[data-voice-wave] > span"));
+    useVoiceRecordingStore.setState({ audioLevel: 0.8 });
     runFrames(20);
+    const moving = barScales(container);
+
+    // Turned on mid-dictation: the bars stop where the preference says.
+    motion.reduced = true;
+    useVoiceRecordingStore.setState({ audioLevel: 0 });
+    runFrames(60);
     const quietShape = barScales(container);
-    const quietOpacity = Number(bars()[0]!.style.opacity);
+    const quietOpacity = Number(bars(container)[0]!.style.opacity);
+    expect(quietShape).not.toEqual(moving);
 
     useVoiceRecordingStore.setState({ audioLevel: 0.8 });
     runFrames(20);
     expect(barScales(container)).toEqual(quietShape);
-    expect(Number(bars()[0]!.style.opacity)).toBeGreaterThan(quietOpacity);
+    expect(Number(bars(container)[0]!.style.opacity)).toBeGreaterThan(quietOpacity);
+
+    // And off again: the bars follow the level once more.
+    motion.reduced = false;
+    runFrames(20);
+    expect(barScales(container)).not.toEqual(quietShape);
   });
 
   it("moves the bars without a React commit per level update", () => {
@@ -744,24 +798,29 @@ describe("VoiceRecordingToolbarButton — waveform (#14911)", () => {
     expect(Math.max(...barScales(container))).toBeGreaterThan(0.5);
   });
 
-  it("cancels the level loop on unmount", () => {
+  it("cancels the level loop's live frame on unmount", () => {
     const { unmount } = renderStatus("recording");
+    runFrames(5);
+    expect(frames.size).toBe(1);
     unmount();
-    expect(window.cancelAnimationFrame).toHaveBeenCalled();
+    expect(frames.size).toBe(0);
   });
 
-  it("runs no level loop while waiting or paused", () => {
-    renderStatus("paused");
-    expect(frames).toHaveLength(0);
-  });
-
-  it("stops the level loop when listening ends", () => {
-    const { rerender } = renderStatus("recording");
-    expect(frames.length).toBeGreaterThan(0);
+  it.each([
+    { status: "finishing" as const, mode: "waiting" },
+    { status: "reconnecting" as const, mode: "waiting" },
+    { status: "paused" as const, mode: "held" },
+  ])("stops the level loop when listening gives way to $status", ({ status, mode }) => {
+    const { container } = renderStatus("recording");
+    useVoiceRecordingStore.setState({ audioLevel: 0.8 });
+    runFrames(5);
     act(() => {
-      useVoiceRecordingStore.setState({ status: "finishing" });
+      useVoiceRecordingStore.setState({ status });
     });
-    rerender(<VoiceRecordingToolbarButton />);
-    expect(window.cancelAnimationFrame).toHaveBeenCalled();
+    expect(frames.size).toBe(0);
+    expect(waveMode(container)).toBe(mode);
+    // The loop's last writes don't outlive it: no bar keeps a level height.
+    expect(new Set(barScales(container)).size).toBe(1);
+    expect(bars(container).every((bar) => bar.style.opacity === "")).toBe(true);
   });
 });
