@@ -272,9 +272,12 @@ describe("the reference card", () => {
     const card = forgeReferenceTooltipAt(view, 5, 1)!.create(view);
     const lastUpdate = () => updates.at(-1)!;
 
+    // Fitted to the old content; the new content gets fitted afresh.
+    card.dom.style.width = "40px";
     applyForgeReferences(view, new Map([[7, { ...OPEN_ISSUE, state: "closed" }]]));
     card.update!(lastUpdate());
     expect(card.dom.textContent).toBe("Closed#7Crash on start");
+    expect(card.dom.style.width).toBe("");
 
     // Another number's answer leaves this card as it is.
     applyForgeReferences(
