@@ -10,6 +10,7 @@ import {
   paneSurfaceHoldingFocus,
   pendingPaneSurface,
   requestPaneFocus,
+  requestedForDictation,
   requestedPaneSurface,
 } from "../paneFocusRequest";
 
@@ -182,6 +183,60 @@ describe("paneFocusRequest", () => {
       other.xterm.focus();
 
       expect(requestedPaneSurface("a")).toBeNull();
+    });
+  });
+
+  // Dictation's request is the one that leaves the caret alone (#14770). It is
+  // an ordinary request in every other way, so it ends the way any does.
+  describe("a request made for dictation", () => {
+    it("is told apart from a plain one, for its own pane only", () => {
+      requestPaneFocus("a", "hybridInput", { forDictation: true });
+      expect(requestedForDictation("a")).toBe(true);
+      expect(requestedForDictation("b")).toBe(false);
+
+      requestPaneFocus("a", "hybridInput");
+      expect(requestedForDictation("a")).toBe(false);
+    });
+
+    it("still reaches the registry as an ordinary request for the surface", () => {
+      const handler = vi.fn((_surface?: string) => true);
+      const cleanup = registerPanelFocusHandler("a", handler);
+
+      requestPaneFocus("a", "hybridInput", { forDictation: true });
+
+      expect(handler).toHaveBeenCalledExactlyOnceWith("hybridInput");
+      expect(requestedPaneSurface("a")).toBe("hybridInput");
+      cleanup();
+    });
+
+    it("ends on a press, like any request", () => {
+      requestPaneFocus("a", "hybridInput", { forDictation: true });
+      press();
+      expect(requestedForDictation("a")).toBe(false);
+    });
+
+    it("ends once the keyboard types its way to the terminal", () => {
+      const { xterm } = mountPane("a");
+      requestPaneFocus("a", "hybridInput", { forDictation: true });
+
+      xterm.focus();
+
+      expect(requestedForDictation("a")).toBe(false);
+    });
+
+    it("ends when the selection moves to another pane", () => {
+      requestPaneFocus("a", "hybridInput", { forDictation: true });
+      usePanelStore.setState({ focusedId: "b" });
+      expect(requestedForDictation("a")).toBe(false);
+    });
+
+    it("isn't something a pane's own arrival can be mistaken for", () => {
+      holdPaneFocus("a", "hybridInput");
+      expect(requestedForDictation("a")).toBe(false);
+
+      requestPaneFocus("a", "hybridInput", { forDictation: true });
+      holdPaneFocus("a", "hybridInput");
+      expect(requestedForDictation("a")).toBe(true);
     });
   });
 

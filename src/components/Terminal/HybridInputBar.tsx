@@ -97,6 +97,7 @@ import {
   isFocusEpochCurrent,
   pendingPaneSurface,
   requestPaneFocus,
+  requestedForDictation,
   requestedPaneSurface,
 } from "./paneFocusRequest";
 import { isRemoteWindow, useHostPlatform } from "@/hooks/useHostPlatform";
@@ -134,7 +135,7 @@ import {
 import { takeLandedCorrection } from "@/services/voiceCorrectionLanding";
 import { takeScratchLanded } from "@/services/voiceScratchCommand";
 import { registerComposerSelectionSource } from "@/services/voiceRewriteSelection";
-import { takePendingComposerSelection } from "@/lib/composerCaret";
+import { readComposerSelection, takePendingComposerSelection } from "@/lib/composerCaret";
 import { makeDraftKey } from "@/lib/draftKey";
 import { useHostReparent } from "./hooks/useHostReparent";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
@@ -1129,9 +1130,28 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       return selectHomeFocusTarget(useTerminalInputStore.getState()) === "hybridInput";
     };
 
+    const caretToEnd = (view: EditorView) => {
+      view.dispatch({
+        selection: EditorSelection.cursor(view.state.doc.length),
+        scrollIntoView: true,
+      });
+    };
+
+    // Dictation writes at the caret the composer last showed in this draft, or
+    // at the end of a draft nobody focused. Focusing a composer that never had
+    // focus would leave CodeMirror's caret at 0, which the caret tracker then
+    // publishes as the place to dictate (#14770).
+    const parkUnchosenCaret = (view: EditorView) => {
+      const draft = useTerminalInputStore
+        .getState()
+        .getDraftInput(terminalId, latestRef.current?.projectId);
+      if (readComposerSelection(draftKeyRef.current, draft) === null) caretToEnd(view);
+    };
+
     const focusEditor = () => {
       const view = editorViewRef.current;
       if (!view) return;
+      if (requestedForDictation(terminalId) && !editorOwnsDomFocus(view)) parkUnchosenCaret(view);
       view.focus();
       // The second look a frame later wins focus back from the grid pane's own
       // focus pass. An isolated composer has no pane behind it, and a late
@@ -1162,8 +1182,15 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         // that is still current: a press, another pane, or focus taken by
         // something else since the ask all end it.
         if (pendingPaneSurface(terminalId) !== "hybridInput") return;
-        // A bar that mounts late must not take the caret from the Scratchpad (#12835).
-        if (isScratchpadElement(document.activeElement, terminalId)) return;
+        // A bar that mounts late must not take the caret from the Scratchpad
+        // (#12835), unless dictation asked for it: that start is the user's own
+        // move to this bar (#14770).
+        if (
+          !requestedForDictation(terminalId) &&
+          isScratchpadElement(document.activeElement, terminalId)
+        ) {
+          return;
+        }
         focusEditor();
       };
     });
@@ -1244,6 +1271,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           // another pane ends it without advancing the epoch, and home alone
           // must not carry the grab on into the pane the user left.
           const asked = requestedPaneSurface(terminalId);
+          // Dictation starting is the user's own move to this bar, and the words
+          // go in at its caret: the Scratchpad doesn't hold the keyboard back
+          // and the caret stays where the composer showed it (#14770).
+          const forDictation = requestedForDictation(terminalId);
           requestAnimationFrame(() => {
             if (focusGenerationRef.current !== gen) return;
             // A press or a newer request since the call (#8487).
@@ -1251,13 +1282,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             if (editorViewRef.current !== view) return;
             if (asked !== null && requestedPaneSurface(terminalId) !== asked) return;
             if (!isHybridInputStillWanted()) return;
-            if (isScratchpadElement(document.activeElement, terminalId)) return;
+            if (!forDictation && isScratchpadElement(document.activeElement, terminalId)) return;
             // The user can click into the draft between the call and this frame.
             if (editorOwnsDomFocus(view)) return;
-            view.dispatch({
-              selection: EditorSelection.cursor(view.state.doc.length),
-              scrollIntoView: true,
-            });
+            if (forDictation) parkUnchosenCaret(view);
+            else caretToEnd(view);
             view.focus();
           });
           return true;

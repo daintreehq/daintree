@@ -91,6 +91,7 @@ import { isScratchCommand, recordScratchLanded } from "@/services/voiceScratchCo
 import { applyDraftEdits, planFileReferenceEdits } from "@/services/voiceFileReferences";
 import { isSpokenSendable } from "@/services/voiceSpokenSend";
 import { findRewriteComposer, type RewriteSelection } from "@/services/voiceRewriteSelection";
+import { focusDictationComposer } from "@/services/voiceComposerFocus";
 import {
   VOICE_REWRITE_MAX_INSTRUCTION_CHARS,
   VOICE_REWRITE_MAX_SELECTION_CHARS,
@@ -1177,6 +1178,7 @@ class VoiceRecordingService {
     // targets are a navigation aid, not a session log).
     useVoiceRecordingStore.getState().recordRecentTarget(target);
     this.claimHeldPress();
+    focusDictationComposer(target.panelId);
 
     // Synchronous pre-audio cue. setArming() resolves under 1ms (Zustand set);
     // the first await inside start() then carries us to "connecting" within
@@ -3599,6 +3601,7 @@ class VoiceRecordingService {
       // The held key gets the same pre-audio cue as a toggle press.
       useVoiceRecordingStore.getState().recordRecentTarget(target);
       this.claimHeldPress();
+      focusDictationComposer(target.panelId);
       this.armTarget(target);
       await this.start(target);
       return;

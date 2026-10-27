@@ -20,6 +20,11 @@ const runtime = vi.hoisted(() => ({
   panelListeners: [] as Array<(state: unknown) => void>,
 }));
 
+// Its DOM reads need a real document; the suite that runs it for real is
+// voiceComposerFocus.test.tsx.
+const focusDictationComposer = vi.hoisted(() => vi.fn());
+vi.mock("@/services/voiceComposerFocus", () => ({ focusDictationComposer }));
+
 vi.mock("@/store/terminalInputStore", () => {
   const fns = {
     getDraftInput: vi.fn((panelId: string) => runtime.drafts[panelId] ?? ""),
@@ -338,6 +343,7 @@ describe("VoiceRecordingService — starting while a session finishes (#14604)",
     runtime.panelState.focusedId = "panel-a";
     runtime.panelListeners = [];
     runtime.panelState.activateTerminal.mockReset();
+    focusDictationComposer.mockClear();
   });
 
   afterEach(() => {
@@ -390,6 +396,28 @@ describe("VoiceRecordingService — starting while a session finishes (#14604)",
 
     expect(runtime.drafts["panel-a"]).toBe("still talking");
     expect(runtime.drafts["panel-b"] ?? "").toBe("");
+  });
+
+  // The keyboard goes to the composer at the press (#14770). Words arriving,
+  // the stop and the session finishing are the user's from there.
+  it("asks for the composer once, at the start", async () => {
+    const { voiceRecordingService, store, delta, complete, drains, callbacks } = await setup();
+
+    await voiceRecordingService.toggle(PANEL_A);
+    expect(focusDictationComposer).toHaveBeenCalledTimes(1);
+    expect(focusDictationComposer).toHaveBeenCalledWith("panel-a");
+
+    callbacks.status!("recording");
+    delta("hello");
+    complete("Hello there.");
+    const stopping = voiceRecordingService.toggle(PANEL_A);
+    await vi.waitFor(() => expect(drains).toHaveLength(1));
+    drains[0]!.resolve();
+    await stopping;
+
+    expect(runtime.drafts["panel-a"]).toBe("Hello there.");
+    expect(store().activeTarget).toBeNull();
+    expect(focusDictationComposer).toHaveBeenCalledTimes(1);
   });
 
   it("starts a new session when pressed while the last one is finishing", async () => {

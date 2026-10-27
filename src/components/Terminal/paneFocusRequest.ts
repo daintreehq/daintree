@@ -30,6 +30,8 @@ interface PaneFocusIntent {
   paneId: string;
   surface: TerminalFocusTarget;
   explicit: boolean;
+  /** Asked by dictation, which is about to write at the composer's caret (#14770). */
+  forDictation: boolean;
 }
 
 let epoch = 0;
@@ -37,7 +39,7 @@ let current: PaneFocusIntent | null = null;
 let stopWatching: (() => void) | null = null;
 let pressListener: (() => void) | null = null;
 
-function isOnSurface(el: Element, intent: PaneFocusIntent): boolean {
+function isOnSurface(el: Element, intent: Pick<PaneFocusIntent, "paneId" | "surface">): boolean {
   if (intent.surface === "hybridInput") {
     return (
       el.closest("[data-hybrid-input-root]")?.getAttribute("data-hybrid-input-root") ===
@@ -94,10 +96,14 @@ function watchIntent(): void {
  * contract; false when nothing could take it yet. A hybrid input still loading
  * keeps the request and takes it when it mounts, if it is still current.
  */
-export function requestPaneFocus(paneId: string, surface: TerminalFocusTarget): boolean {
+export function requestPaneFocus(
+  paneId: string,
+  surface: TerminalFocusTarget,
+  options: { forDictation?: boolean } = {}
+): boolean {
   watchPresses();
   epoch += 1;
-  current = { paneId, surface, explicit: true };
+  current = { paneId, surface, explicit: true, forDictation: options.forDictation === true };
   watchIntent();
   return focusPanelInput(paneId, surface);
 }
@@ -110,7 +116,7 @@ export function requestPaneFocus(paneId: string, surface: TerminalFocusTarget): 
 export function holdPaneFocus(paneId: string, surface: TerminalFocusTarget): void {
   if (current?.explicit && current.paneId === paneId) return;
   watchPresses();
-  current = { paneId, surface, explicit: false };
+  current = { paneId, surface, explicit: false, forDictation: false };
   watchIntent();
 }
 
@@ -118,14 +124,22 @@ export function holdPaneFocus(paneId: string, surface: TerminalFocusTarget): voi
 export function paneSurfaceHoldingFocus(paneId: string): TerminalFocusTarget | null {
   const el = document.activeElement;
   if (!el) return null;
-  if (isOnSurface(el, { paneId, surface: "hybridInput", explicit: false })) return "hybridInput";
-  if (isOnSurface(el, { paneId, surface: "xterm", explicit: false })) return "xterm";
+  if (isOnSurface(el, { paneId, surface: "hybridInput" })) return "hybridInput";
+  if (isOnSurface(el, { paneId, surface: "xterm" })) return "xterm";
   return null;
 }
 
 /** The surface an explicit, still-current request asks `paneId` to focus, or null. */
 export function requestedPaneSurface(paneId: string): TerminalFocusTarget | null {
   return current?.explicit && current.paneId === paneId ? current.surface : null;
+}
+
+/**
+ * Whether the explicit, still-current request for `paneId` came from dictation,
+ * whose words go in at the composer's caret: the grab leaves that caret alone.
+ */
+export function requestedForDictation(paneId: string): boolean {
+  return current?.explicit === true && current.paneId === paneId && current.forDictation;
 }
 
 /** The surface `paneId` should still end up on, requested or settled on arrival, or null. */
