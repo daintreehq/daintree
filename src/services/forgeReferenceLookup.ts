@@ -146,7 +146,14 @@ async function askMain(cwd: string, numbers: number[], askedIn: number): Promise
   const now = Date.now();
 
   if (results === null) {
+    // What was found before is no longer known: a credential removed or a
+    // remote gone must not leave old marks, or bring them back afterwards.
     unavailableUntil.set(cwd, now + UNAVAILABLE_TTL_MS);
+    const prefix = `${cwd}\0`;
+    for (const key of [...answers.keys()]) {
+      if (key.startsWith(prefix)) answers.delete(key);
+    }
+    notifyChanged();
     return;
   }
 
@@ -178,10 +185,18 @@ export function invalidateForgeReferences(): void {
   answers.clear();
   scopes.clear();
   unavailableUntil.clear();
+  notifyChanged();
+}
+
+function notifyChanged(): void {
   for (const listener of [...invalidationListeners]) listener();
 }
 
-/** Hear about {@link invalidateForgeReferences}; returns the unsubscribe. */
+/**
+ * Hear when what was known is dropped (an invalidation, or a repository whose
+ * lookups became unavailable), to redraw from what's known now. Returns the
+ * unsubscribe.
+ */
 export function onForgeReferencesInvalidated(listener: () => void): () => void {
   invalidationListeners.add(listener);
   return () => {

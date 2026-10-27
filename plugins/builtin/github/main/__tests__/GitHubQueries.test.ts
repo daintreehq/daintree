@@ -639,6 +639,8 @@ describe("buildBatchReferencesQuery", () => {
     expect(query.match(/repository\(owner:/g)?.length).toBe(1);
     expect(query).toContain("r7: issueOrPullRequest(number: 7)");
     expect(query).toContain("r14843: issueOrPullRequest(number: 14843)");
+    expect(query).toContain("__typename");
+    expect(query).toContain("... on Issue { number title state }");
     expect(query).toContain("... on PullRequest { number title state isDraft }");
   });
 

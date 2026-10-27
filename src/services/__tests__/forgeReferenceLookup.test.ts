@@ -107,6 +107,26 @@ describe("forge reference lookup (#14849)", () => {
     expect(getReferencesByNumbers).toHaveBeenCalledTimes(3);
   });
 
+  it("forgets what it found once lookups become unavailable, and tells the composers", async () => {
+    getReferencesByNumbers.mockImplementation(answerWith([7]));
+    await lookUpForgeReferences(CWD, [7]);
+    await lookUpForgeReferences("/other", [7]);
+    const listener = vi.fn();
+    const stop = onForgeReferencesInvalidated(listener);
+
+    getReferencesByNumbers.mockResolvedValueOnce(null);
+    await lookUpForgeReferences(CWD, [8]);
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    // Past the unavailable window, the old answer is not trusted back.
+    vi.advanceTimersByTime(31_000);
+    expect(knownForgeReferences(CWD, [7]).size).toBe(0);
+    expect(knownForgeReferences("/other", [7]).get(7)).toEqual(issue(7));
+    await lookUpForgeReferences(CWD, [7]);
+    expect(getReferencesByNumbers.mock.calls.at(-1)).toEqual([CWD, [7]]);
+    stop();
+  });
+
   it("keeps one request in flight per repository and sends what came up meanwhile next", async () => {
     const first = deferred<ForgeReferenceLookupResult[]>();
     getReferencesByNumbers

@@ -858,12 +858,7 @@ function repositoryDespiteMissingNumbers(
       answered[path[1]] === null
     );
   });
-  if (!onlyMissingNumbers) return null;
-  gitHubRateLimitService.updateFromGraphQL(
-    data as Record<string, unknown>,
-    "BATCH_REFERENCES_QUERY"
-  );
-  return answered;
+  return onlyMissingNumbers ? answered : null;
 }
 
 export async function findReferencesByNumbersImpl(

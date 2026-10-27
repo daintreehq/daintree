@@ -176,10 +176,15 @@ const dismissOnEscape = EditorView.domEventHandlers({
  * opens while a chip is staged for deletion: the staged chip is the one thing
  * that moment is about, and a card over it would compete with it.
  */
-export function chipHoverTooltip(source: HoverTooltipSource): Extension {
+export function chipHoverTooltip(
+  source: HoverTooltipSource,
+  options?: Parameters<typeof hoverTooltip>[1]
+): Extension {
   return [
-    hoverTooltip((view, pos, side) =>
-      view.state.field(chipPendingDeleteField, false) ? null : source(view, pos, side)
+    hoverTooltip(
+      (view, pos, side) =>
+        view.state.field(chipPendingDeleteField, false) ? null : source(view, pos, side),
+      options
     ),
     dismissOnEscape,
   ];

@@ -2077,6 +2077,41 @@ describe("batchLookups.findReferencesByNumbers", () => {
     expect(result.size).toBe(0);
   });
 
+  it("leaves a chunk unanswered when a null alias failed for any reason but missing", async () => {
+    mockGraphQLClient.mockRejectedValueOnce(
+      responseError(
+        {
+          repository: {
+            r1: { __typename: "Issue", number: 1, title: "First", state: "OPEN" },
+            r2: null,
+          },
+        },
+        [{ type: "FORBIDDEN", path: ["repository", "r2"], message: "Resource not accessible" }]
+      )
+    );
+
+    const result = await findReferences([1, 2]);
+
+    expect(result.size).toBe(0);
+  });
+
+  it("reads a partial response's budget once, however many callers share it", async () => {
+    const data = {
+      repository: { r1: null },
+      rateLimit: { cost: 1, remaining: 42, resetAt: "", limit: 5000 },
+    };
+    mockGraphQLClient.mockRejectedValueOnce(responseError(data, [missing("r1")]));
+    const update = vi.mocked(gitHubRateLimitService.updateFromGraphQL);
+    update.mockClear();
+
+    const [first, second] = await Promise.all([findReferences([1]), findReferences([1])]);
+
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(1);
+    expect(first.get(1)).toBeNull();
+    expect(second.get(1)).toBeNull();
+    expect(update).toHaveBeenCalledExactlyOnceWith(data, "BATCH_REFERENCES_QUERY");
+  });
+
   it("leaves a chunk unanswered when a NOT_FOUND names an alias it did not null", async () => {
     mockGraphQLClient.mockRejectedValueOnce(
       responseError(
@@ -2097,13 +2132,11 @@ describe("batchLookups.findReferencesByNumbers", () => {
     const firstRepo: Record<string, unknown> = {};
     for (let i = 1; i <= 20; i++) firstRepo[`r${i}`] = null;
     mockGraphQLClient.mockResolvedValueOnce({ repository: firstRepo });
-    mockShouldBlockRequest
-      .mockReturnValueOnce({ blocked: false, reason: null })
-      .mockReturnValue({
-        blocked: true,
-        reason: "primary",
-        resumeAt: Date.now() + 1000,
-      } as ShouldBlockResult);
+    mockShouldBlockRequest.mockReturnValueOnce({ blocked: false, reason: null }).mockReturnValue({
+      blocked: true,
+      reason: "primary",
+      resumeAt: Date.now() + 1000,
+    } as ShouldBlockResult);
 
     const result = await findReferences(numbers);
 

@@ -14,18 +14,31 @@ export interface IssueReferenceToken {
  */
 const ISSUE_REFERENCE = /(?<![\p{L}\p{M}\p{N}_#&/\\])#([1-9]\d{0,8})(?![\p{L}\p{M}\p{N}_])/gu;
 
-/** Whether `index` sits in a whitespace-delimited run that holds a URL (`?page=#12`). */
-function insideUrl(text: string, index: number): boolean {
-  let start = index;
-  while (start > 0 && !/\s/.test(text[start - 1]!)) start--;
-  return text.slice(start, index).includes("://");
+/**
+ * Where URLs run in `text`: from each `://` to the whitespace that ends its
+ * run, so a `#12` there (`?page=#12`) is part of the URL. One forward pass, so
+ * a long pasted run costs no more than its length.
+ */
+function urlSpans(text: string): Array<[number, number]> {
+  const spans: Array<[number, number]> = [];
+  let from = text.indexOf("://");
+  while (from !== -1) {
+    let to = from + 3;
+    while (to < text.length && !/\s/.test(text[to]!)) to++;
+    spans.push([from, to]);
+    from = text.indexOf("://", to);
+  }
+  return spans;
 }
 
 export function getAllIssueReferences(text: string): IssueReferenceToken[] {
   if (!text.includes("#")) return [];
+  const urls = urlSpans(text);
+  let url = 0;
   const tokens: IssueReferenceToken[] = [];
   for (const match of text.matchAll(ISSUE_REFERENCE)) {
-    if (insideUrl(text, match.index)) continue;
+    while (url < urls.length && urls[url]![1] <= match.index) url++;
+    if (url < urls.length && urls[url]![0] < match.index) continue;
     tokens.push({
       start: match.index,
       end: match.index + match[0].length,

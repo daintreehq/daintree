@@ -12,15 +12,18 @@ vi.mock("@/lib/trustedTypesPolicy", () => ({
 
 import { EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
+import { cursorCharLeft, cursorCharRight } from "@codemirror/commands";
 import type { ForgeNumberReference } from "@shared/types/forge";
 import {
   applyForgeReferences,
+  closesReferenceCard,
   describeForgeReference,
   eligibleIssueReferences,
   forgeReferenceField,
   forgeReferenceTooltipAt,
   onForgeReferenceRescan,
   rescanForgeReferences,
+  setForgeReferences,
   type ForgeReferenceMap,
 } from "../inputEditorExtensions/forgeReference";
 import { createFileChipField } from "../inputEditorExtensions/fileChip";
@@ -41,7 +44,7 @@ const OPEN_ISSUE: ForgeNumberReference = {
   title: "Crash on start",
   state: "open",
 };
-const REFERENCES: ForgeReferenceMap = new Map([
+const REFERENCES: ForgeReferenceMap = new Map<number, ForgeNumberReference>([
   [14843, MERGED_PR],
   [7, OPEN_ISSUE],
 ]);
@@ -109,11 +112,18 @@ describe("issue and pull request references (#14849)", () => {
     expect(marked(view)).toEqual(["#7"]);
   });
 
-  it("lets the caret stop inside a reference", () => {
-    const view = mount("see #14843 now", 0);
+  it("lets the caret walk through a reference one character at a time", () => {
+    const view = mount("a #7 b", 1);
     applyForgeReferences(view, REFERENCES);
-    view.dispatch({ selection: EditorSelection.cursor(7) });
-    expect(view.state.selection.main.head).toBe(7);
+    const heads: number[] = [];
+    for (let i = 0; i < 4; i++) {
+      cursorCharRight(view);
+      heads.push(view.state.selection.main.head);
+    }
+    expect(heads).toEqual([2, 3, 4, 5]);
+    cursorCharLeft(view);
+    cursorCharLeft(view);
+    expect(view.state.selection.main.head).toBe(3);
   });
 
   it("does not dispatch when told what it already holds", () => {
@@ -122,14 +132,36 @@ describe("issue and pull request references (#14849)", () => {
     const dispatch = vi.spyOn(view, "dispatch");
     applyForgeReferences(
       view,
-      new Map([
+      new Map<number, ForgeNumberReference>([
         [7, { ...OPEN_ISSUE }],
         [14843, { ...MERGED_PR }],
       ])
     );
     expect(dispatch).not.toHaveBeenCalled();
-    applyForgeReferences(view, new Map([[7, { ...OPEN_ISSUE, state: "closed" }]]));
-    expect(dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["title", { title: "Renamed" }],
+    ["state", { state: "closed" }],
+    ["draft flag", { isDraft: true }],
+  ] as const)("redraws when a reference's %s changes", (_, change) => {
+    const view = mount("see #14843");
+    applyForgeReferences(view, REFERENCES);
+    const changed = { ...MERGED_PR, ...change } as ForgeNumberReference;
+    applyForgeReferences(view, new Map([...REFERENCES, [14843, changed]]));
+    expect(view.dom.querySelector(".cm-forge-ref")?.getAttribute("aria-description")).toBe(
+      `${describeForgeReference(changed)}: ${changed.title}`
+    );
+  });
+
+  it("redraws when a number turns out to name the other kind", () => {
+    const view = mount("see #7");
+    applyForgeReferences(view, REFERENCES);
+    const asPr: ForgeNumberReference = { ...OPEN_ISSUE, kind: "pr", isDraft: false };
+    applyForgeReferences(view, new Map([...REFERENCES, [7, asPr]]));
+    expect(view.dom.querySelector(".cm-forge-ref")?.getAttribute("aria-description")).toBe(
+      "Open pull request #7: Crash on start"
+    );
   });
 
   it("leaves a number inside a file chip to the chip", () => {
@@ -147,6 +179,11 @@ describe("issue and pull request references (#14849)", () => {
       effects: addImageChip.of({ from: 0, to: path.length, filePath: path, thumbnailUrl: "" }),
     });
     expect(eligibleIssueReferences(view.state).map((t) => t.start)).toEqual([path.length + 5]);
+  });
+
+  it("leaves a number inside a context reference to its chip", () => {
+    const view = mount("pull @rec:#7 and #7");
+    expect(eligibleIssueReferences(view.state).map((t) => t.start)).toEqual([17]);
   });
 
   it("hands a rescan to the composer that registered for the view", () => {
@@ -194,6 +231,16 @@ describe("the reference card", () => {
     const view = mount("see #99");
     applyForgeReferences(view, REFERENCES);
     expect(cardText(view, 5)).toBeNull();
+  });
+
+  it("closes once the draft or what its numbers name changes", () => {
+    const view = mount("see #7");
+    const typed = view.state.update({ changes: { from: 6, insert: "1" } });
+    const told = view.state.update({ effects: setForgeReferences.of(REFERENCES) });
+    const moved = view.state.update({ selection: EditorSelection.cursor(0) });
+    expect(closesReferenceCard(typed)).toBe(true);
+    expect(closesReferenceCard(told)).toBe(true);
+    expect(closesReferenceCard(moved)).toBe(false);
   });
 
   it("asks the composer to re-read references once a card is shown", () => {

@@ -1,5 +1,11 @@
 import { Decoration, EditorView, type DecorationSet, type Tooltip } from "@codemirror/view";
-import { StateEffect, StateField, type EditorState, type Range } from "@codemirror/state";
+import {
+  StateEffect,
+  StateField,
+  type EditorState,
+  type Range,
+  type Transaction,
+} from "@codemirror/state";
 import type { ForgeNumberReference } from "@shared/types/forge";
 import {
   getIssueStateColor,
@@ -10,7 +16,7 @@ import {
 import { cn } from "@/lib/utils";
 import { createTrustedHTML, setTrustedInnerHTML } from "@/lib/trustedTypesPolicy";
 import { getAllIssueReferences, type IssueReferenceToken } from "../forgeReferenceParsing";
-import { getAllAtFileTokens } from "../hybridInputParsing";
+import { getAllAtContextReferences, getAllAtFileTokens } from "../hybridInputParsing";
 import { chipHoverTooltip, chipTooltip } from "./chipCard";
 import { isOwnedByAttachmentChip } from "./fileChip";
 
@@ -56,17 +62,19 @@ export function rescanForgeReferences(view: EditorView): void {
 }
 
 /**
- * The `#N`s in the draft that could be references: not one inside a chip
- * (`@"notes #12.md"`), whose own card speaks for that text.
+ * The `#N`s in the draft that could be references: not one inside another
+ * token (`@"notes #12.md"`, `@rec:#12`), whose own chip speaks for that text.
  */
 export function eligibleIssueReferences(state: EditorState): IssueReferenceToken[] {
   const text = state.doc.toString();
   const tokens = getAllIssueReferences(text);
   if (tokens.length === 0) return tokens;
-  const fileTokens = text.includes("@") ? getAllAtFileTokens(text) : [];
+  const owned: Array<{ start: number; end: number }> = text.includes("@")
+    ? [...getAllAtFileTokens(text), ...getAllAtContextReferences(text)]
+    : [];
   return tokens.filter(
     (token) =>
-      !fileTokens.some((file) => file.start < token.end && file.end > token.start) &&
+      !owned.some((other) => other.start < token.end && other.end > token.start) &&
       !isOwnedByAttachmentChip(state, token.start, token.end)
   );
 }
@@ -222,6 +230,15 @@ export function forgeReferenceTooltipAt(
   );
 }
 
+/**
+ * Whether `tr` leaves an open card describing something stale. The card shows
+ * the reference it opened on, so it closes once the draft's text or what its
+ * numbers name changes; the next hover reads anew.
+ */
+export function closesReferenceCard(tr: Transaction): boolean {
+  return tr.docChanged || tr.effects.some((effect) => effect.is(setForgeReferences));
+}
+
 export function createForgeReferenceTooltip() {
-  return chipHoverTooltip(forgeReferenceTooltipAt);
+  return chipHoverTooltip(forgeReferenceTooltipAt, { hideOn: closesReferenceCard });
 }

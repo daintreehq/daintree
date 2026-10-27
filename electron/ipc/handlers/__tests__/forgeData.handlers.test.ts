@@ -1276,7 +1276,9 @@ describe("registerForgeDataHandlers", () => {
     });
 
     it("asks for at most 50 numbers at once", async () => {
-      const findReferencesByNumbers = vi.fn(async () => new Map());
+      const findReferencesByNumbers = vi.fn(
+        async (_repo: RepoRef, _numbers: number[]) => new Map()
+      );
       fakeImpl.batchLookups = { findReferencesByNumbers };
       const numbers = Array.from({ length: 60 }, (_, i) => i + 1);
       const result = await lookup({ cwd: "/repo", numbers });

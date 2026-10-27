@@ -446,6 +446,18 @@ describe("pending forge-side merges (#13747)", () => {
 describe("toForgeNumberReference", () => {
   it("reads an issue and a pull request in each of their states", () => {
     expect(
+      toForgeNumberReference({ __typename: "Issue", number: 6, title: "New", state: "OPEN" })
+    ).toEqual({ kind: "issue", number: 6, title: "New", state: "open" });
+    expect(
+      toForgeNumberReference({
+        __typename: "PullRequest",
+        number: 10,
+        title: "Dropped",
+        state: "CLOSED",
+        isDraft: false,
+      })
+    ).toMatchObject({ kind: "pr", state: "closed" });
+    expect(
       toForgeNumberReference({ __typename: "Issue", number: 7, title: "Crash", state: "CLOSED" })
     ).toEqual({ kind: "issue", number: 7, title: "Crash", state: "closed" });
     expect(

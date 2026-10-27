@@ -96,7 +96,7 @@ afterEach(() => {
 });
 
 async function mount() {
-  const onSend = vi.fn(async () => true);
+  const onSend = vi.fn(async (_payload: { text: string }) => true);
   const result = render(
     <TooltipProvider>
       <WorktreeStoreContext.Provider value={createWorktreeStore()}>

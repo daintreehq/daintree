@@ -36,6 +36,10 @@ describe("getAllIssueReferences", () => {
     expect(numbers(text)).toEqual([]);
   });
 
+  it("tells references apart from the URLs around them", () => {
+    expect(numbers("https://x.test/?a=#1 #2 see https://y.test/#3, then #4")).toEqual([2, 4]);
+  });
+
   it("keeps the largest number that fits a GraphQL Int", () => {
     expect(numbers("#999999999")).toEqual([999999999]);
   });
