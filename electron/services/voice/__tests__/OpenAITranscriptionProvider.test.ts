@@ -4225,3 +4225,164 @@ describe("OpenAITranscriptionProvider — reconnect replay (#14605)", () => {
     });
   });
 });
+
+describe("OpenAITranscriptionProvider — recovery window (#14796)", () => {
+  beforeEach(() => {
+    instances.length = 0;
+    throwOnConstruct = false;
+    constructError = null;
+    vadWorkers.length = 0;
+    throwOnVadConstruct = false;
+    logCalls.length = 0;
+    vi.spyOn(process, "kill").mockImplementation(() => true);
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    for (const worker of vadWorkers) worker.emitExit(0);
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  function chunk(marker: number): ArrayBuffer {
+    return new Uint8Array(4_800).fill(marker).buffer;
+  }
+
+  function wire(socket: MockWebSocket): Array<number | "commit"> {
+    return socket.sentJson().flatMap<number | "commit">((p) => {
+      if (p.type === "input_audio_buffer.append") {
+        return [Buffer.from(p.audio as string, "base64").readUInt8(0)];
+      }
+      if (p.type === "input_audio_buffer.commit") return ["commit"];
+      return [];
+    });
+  }
+
+  function statusesOf(events: VoiceTranscriptionEvent[]): string[] {
+    return events.flatMap((e) => (e.type === "status" ? [e.status] : []));
+  }
+
+  /**
+   * Advances 100ms at a time, speaking a chunk each step, while every attempt
+   * fails the way it does with the network down: at once, with a DNS error.
+   * Returns the markers spoken.
+   */
+  function speakThroughOutage(
+    service: OpenAITranscriptionProviderInstance,
+    events: VoiceTranscriptionEvent[],
+    outageMs: number,
+    firstMarker: number
+  ): number[] {
+    const spoken: number[] = [];
+    const failed = new Set<MockWebSocket>(instances);
+    for (let elapsed = 0; elapsed < outageMs; elapsed += 100) {
+      if (events.some((e) => e.type === "error" && e.error.severity === "fatal")) break;
+      const marker = firstMarker + spoken.length;
+      service.sendAudioChunk(chunk(marker));
+      spoken.push(marker);
+      vi.advanceTimersByTime(100);
+      const attempt = instances.at(-1);
+      if (attempt && !failed.has(attempt)) {
+        failed.add(attempt);
+        attempt.simulateError(new Error("getaddrinfo ENOTFOUND api.openai.com"));
+        attempt.simulateClose(1006);
+      }
+    }
+    return spoken;
+  }
+
+  /** Lets the next attempt through once the network is back. */
+  function nextAttemptSucceeds(): MockWebSocket {
+    const before = instances.length;
+    for (let i = 0; i < 100 && instances.length === before; i++) vi.advanceTimersByTime(100);
+    const socket = latestInstance();
+    expect(instances.length).toBeGreaterThan(before);
+    socket.simulateOpen();
+    socket.simulateMessage("session.updated");
+    return socket;
+  }
+
+  it("rides out a network that's down for 10 s and transcribes what was said during it", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+    const { socket } = await bringSessionReady(service);
+    latestVadWorker().emitSpeechStart();
+    service.sendAudioChunk(chunk(1));
+    service.sendAudioChunk(chunk(2));
+
+    socket.simulateClose(1006);
+    const spoken = speakThroughOutage(service, events, 10_000, 10);
+    const recovered = nextAttemptSucceeds();
+
+    expect(events.filter((e) => e.type === "error")).toEqual([]);
+    expect(statusesOf(events).at(-1)).toBe("recording");
+    expect(spoken).toHaveLength(100);
+    expect(wire(recovered)).toEqual([1, 2, ...spoken]);
+
+    // The new connection's VAD closes the recovered speech as one segment.
+    latestVadWorker().emitSpeechStart();
+    latestVadWorker().emitSpeechEnd();
+    expect(wire(recovered).at(-1)).toBe("commit");
+    service.stop();
+  });
+
+  it("gives up only after the recovery window, with the last failure", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+    const { socket } = await bringSessionReady(service);
+    const droppedAt = performance.now();
+
+    socket.simulateClose(1006);
+    speakThroughOutage(service, events, 120_000, 0);
+    const gaveUpAt = performance.now();
+
+    expect(gaveUpAt - droppedAt).toBeGreaterThan(20_000);
+    expect(gaveUpAt - droppedAt).toBeLessThan(40_000);
+    const errors = events.filter((e) => e.type === "error");
+    expect(errors).toEqual([
+      expect.objectContaining({
+        error: expect.objectContaining({ severity: "fatal", code: "reconnect_exhausted" }),
+      }),
+    ]);
+    expect(statusesOf(events).at(-1)).toBe("error");
+
+    const attempts = instances.length;
+    vi.advanceTimersByTime(60_000);
+    expect(instances).toHaveLength(attempts);
+  });
+
+  it("carries on in a new session when the session expires, replaying unacknowledged audio", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+    const { socket } = await bringSessionReady(service);
+    const vad = latestVadWorker();
+    vad.emitSpeechStart();
+    service.sendAudioChunk(chunk(1));
+    vad.emitSpeechEnd();
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    vad.emitSpeechStart();
+    service.sendAudioChunk(chunk(2));
+    vad.emitSpeechEnd();
+    vad.emitSpeechStart();
+    service.sendAudioChunk(chunk(3));
+
+    const message = "Your session hit the maximum duration of 60 minutes.";
+    socket.simulateMessage("error", {
+      error: { type: "invalid_request_error", code: "session_expired", message, param: null },
+    });
+    socket.simulateClose(1001, Buffer.from(message));
+    const renewed = nextAttemptSucceeds();
+
+    expect(renewed).not.toBe(socket);
+    // The acknowledged segment is the old session's; the rest is resent.
+    expect(wire(renewed)).toEqual([2, "commit", 3]);
+    expect(events.filter((e) => e.type === "error")).toEqual([]);
+    expect(statusesOf(events)).not.toContain("error");
+    expect(statusesOf(events).at(-1)).toBe("recording");
+    service.stop();
+  });
+});
