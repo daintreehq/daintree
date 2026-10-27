@@ -2662,6 +2662,7 @@ class VoiceRecordingService {
         // commit before finishSession clears it. In the ghost-widget flow the
         // doc carries no interim text, so without this flush a mid-utterance
         // stop would silently drop the partial transcription.
+        let committedLiveText: string | undefined;
         if (preserveLiveText) {
           const currentTarget = useVoiceRecordingStore.getState().activeTarget;
           const rewrite = currentTarget?.rewrite;
@@ -2675,6 +2676,7 @@ class VoiceRecordingService {
             const buffer = useVoiceRecordingStore.getState().panelBuffers[panelId];
             const preview = buffer?.liveText?.trim();
             const remaining = preview && this.dropHesitations ? stripHesitations(preview) : preview;
+            committedLiveText = remaining;
             if (remaining) {
               const { words } = writeVoiceWords(
                 panelId,
@@ -2690,7 +2692,11 @@ class VoiceRecordingService {
           }
         }
         releaseActiveVoiceAnchors();
-        useVoiceRecordingStore.getState().finishSession({ preserveLiveText, nextStatus });
+        useVoiceRecordingStore.getState().finishSession({
+          preserveLiveText,
+          nextStatus,
+          ...(committedLiveText !== undefined ? { committedLiveText } : {}),
+        });
         // Every ending keeps its words, not only a clean stop: an error, a
         // closed panel or a sleep are exactly when they need recovering. Read
         // by the session this stop began with, which a start racing the

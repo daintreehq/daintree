@@ -288,6 +288,24 @@ describe("VoiceRecordingService — recent dictations (#14637)", () => {
     expect(kept().map((d) => d.rawText)).toEqual(["the connection dropped here and this was mid"]);
   });
 
+  it("leaves the hesitations of an unfinished preview out of the draft a stop commits", async () => {
+    const { service, begin, say, kept, inputStore } = await setup();
+
+    begin("panel-1");
+    say("the connection dropped here");
+    callbacks.delta!({ text: "Um, and this was mid", itemId: "late" });
+    await service.stop("Dictation stopped because the connection failed.", {
+      skipRemoteStop: true,
+      nextStatus: "error",
+      preserveLiveText: true,
+    });
+
+    expect(inputStore.getState().getDraftInput("panel-1")).toBe(
+      "the connection dropped here And this was mid"
+    );
+    expect(kept().map((d) => d.rawText)).toEqual(["the connection dropped here And this was mid"]);
+  });
+
   it("never lets a cleanup of part of the session stand in for all of it", async () => {
     const { service, begin, say, kept, cleanups, flush, inputStore } = await setup();
     correct.mockResolvedValueOnce({ action: "replace", correctedText: "Second part." });

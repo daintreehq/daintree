@@ -286,6 +286,8 @@ interface VoiceAnnouncement {
 interface FinishSessionOptions {
   nextStatus?: VoiceInputStatus;
   preserveLiveText?: boolean;
+  /** The preview as the caller committed it, when that isn't the words the buffer holds. */
+  committedLiveText?: string;
 }
 
 interface VoiceRecordingState {
@@ -729,7 +731,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
           };
         }),
 
-      finishSession: ({ nextStatus = "idle", preserveLiveText = false } = {}) =>
+      finishSession: ({ nextStatus = "idle", preserveLiveText = false, committedLiveText } = {}) =>
         set((state) => {
           const panelId = state.activeTarget?.panelId;
           // A silent warning belongs to the session that was silent; the other
@@ -750,7 +752,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
           }
 
           const buffer = getBuffer(state.panelBuffers, panelId);
-          const normalizedLiveText = buffer.liveText.trim();
+          const normalizedLiveText = (committedLiveText ?? buffer.liveText).trim();
           const completedSegments =
             preserveLiveText && normalizedLiveText
               ? [...buffer.completedSegments, normalizedLiveText]
