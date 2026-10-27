@@ -12,15 +12,18 @@ export const migration040: Migration = {
   version: 40,
   description: "Move dictation cleanup to gpt-6.1-terra for existing installs (#14793)",
   up: (store) => {
-    const raw = store.get("voiceInput");
+    const settings = store.get("voiceInput");
 
-    if (!isPlainObject(raw)) {
+    if (!isPlainObject(settings)) {
       console.log("[Migration 040] No voiceInput settings found, skipping");
       return;
     }
 
     // A store without a model already reads the default.
-    if (raw.correctionModel === undefined || raw.correctionModel === TARGET_CORRECTION_MODEL) {
+    if (
+      settings.correctionModel === undefined ||
+      settings.correctionModel === TARGET_CORRECTION_MODEL
+    ) {
       console.log("[Migration 040] No other correctionModel stored, skipping");
       return;
     }
@@ -29,8 +32,8 @@ export const migration040: Migration = {
     // no choice to keep. Everyone moves to the new default once; picking Luna
     // again is one click, and this never runs again to undo it.
     console.log(
-      `[Migration 040] Moving correctionModel from "${String(raw.correctionModel)}" to "${TARGET_CORRECTION_MODEL}"`
+      `[Migration 040] Moving correctionModel from "${String(settings.correctionModel)}" to "${TARGET_CORRECTION_MODEL}"`
     );
-    store.set("voiceInput", { ...raw, correctionModel: TARGET_CORRECTION_MODEL });
+    store.set("voiceInput", { ...settings, correctionModel: TARGET_CORRECTION_MODEL });
   },
 };
