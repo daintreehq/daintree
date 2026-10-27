@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { forgeClient } from "@/clients/forgeClient";
 import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
 import type { ForgeReferencePrefixes, ListOptions } from "@shared/types/forge";
@@ -25,19 +25,40 @@ interface Slot {
 // Shared by every composer in this project's view, so a fleet of panes typing
 // `#` asks the forge once: both list channels are rate limited per call.
 const slots = new Map<string, Slot>();
-// Bumped when any remote changes: a remote can move to another repository on
-// the same forge, which changes nothing in a slot's key.
+// Bumped when any remote changes, and part of every key: a remote can move to
+// another repository on the same forge, which changes nothing else in it.
 let generation = 0;
+const generationListeners = new Set<() => void>();
 let unwatchRemotes: (() => void) | null = null;
 
-function watchRemotes(): void {
-  if (unwatchRemotes) return;
-  const forge = window.electron?.forge;
-  if (typeof forge?.onRemoteChanged !== "function") return;
-  unwatchRemotes = forge.onRemoteChanged(() => {
-    generation++;
-    slots.clear();
-  });
+function remoteChanged(): void {
+  generation++;
+  slots.clear();
+  for (const listener of generationListeners) listener();
+}
+
+// Composers listen only while a `#` token is being typed. The forge listener
+// stays once installed: the cache outlives the menu and has to hear changes
+// made between one `#` and the next.
+function subscribeGeneration(listener: () => void): () => void {
+  if (!unwatchRemotes) {
+    const forge = window.electron?.forge;
+    if (typeof forge?.onRemoteChanged === "function") {
+      unwatchRemotes = forge.onRemoteChanged(remoteChanged);
+    }
+  }
+  generationListeners.add(listener);
+  return () => {
+    generationListeners.delete(listener);
+  };
+}
+
+function subscribeNothing(): () => void {
+  return () => {};
+}
+
+function readGeneration(): number {
+  return generation;
 }
 
 const NO_REFERENCES: ForgeReference[] = [];
@@ -63,7 +84,6 @@ async function fetchReferences(
 }
 
 function refresh(key: string, cwd: string, prefixes: ForgeReferencePrefixes): Promise<void> {
-  watchRemotes();
   const slot = slots.get(key);
   if (slot?.inFlight) return slot.inFlight;
   if (slot && Date.now() - slot.settledAt < (slot.failed ? FAILED_MS : FRESH_MS)) {
@@ -73,7 +93,7 @@ function refresh(key: string, cwd: string, prefixes: ForgeReferencePrefixes): Pr
   const inFlight = fetchReferences(cwd, prefixes)
     .catch(() => null)
     .then((refs) => {
-      // Asked of a remote that has since changed: the answer is another repository's.
+      // Asked of a remote that has since changed: no key will ask for it again.
       if (generation !== startedIn) return;
       slots.set(key, { refs, settledAt: Date.now(), failed: refs === null, inFlight: null });
     });
@@ -112,13 +132,24 @@ export function useForgeReferences({
   enabled,
 }: UseForgeReferencesParams): ForgeReference[] {
   const forge = useResolvedForgeProvider(enabled ? projectId : null);
+  const remoteGeneration = useSyncExternalStore(
+    enabled ? subscribeGeneration : subscribeNothing,
+    readGeneration
+  );
   const declared = forge.entry?.contribution.referencePrefixes;
   // Issues bound to another tracker are numbered there, not in this repository.
   const issuePrefix = forge.issues.resolvedVia === "code" ? declared?.issue : undefined;
   const prPrefix = declared?.pr;
   const key =
     enabled && cwd && forge.providerId !== null && (issuePrefix || prPrefix)
-      ? JSON.stringify([cwd, forge.providerId, forge.issues.providerId, issuePrefix, prPrefix])
+      ? JSON.stringify([
+          cwd,
+          forge.providerId,
+          forge.issues.providerId,
+          issuePrefix,
+          prPrefix,
+          remoteGeneration,
+        ])
       : null;
 
   const [answer, setAnswer] = useState<{ key: string; refs: ForgeReference[] } | null>(null);

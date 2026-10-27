@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import type { Issue, ListOptions, Page, PR } from "@shared/types/forge";
 import type { ResolvedForgeProviderState } from "@/hooks/useResolvedForgeProvider";
 
@@ -233,27 +233,21 @@ describe("useForgeReferences", () => {
     expect(result.current.map((ref) => ref.number)).toEqual([2]);
   });
 
-  it("never shows one provider's rows once the project resolves to another", async () => {
-    let finishFirst: (value: Page<PR>) => void = () => {};
-    listPRs.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          finishFirst = resolve;
-        })
+  it("never serves one provider's cached rows once the project resolves to another", async () => {
+    const { result, rerender } = renderReferences({ enabled: true });
+    await waitFor(() => expect(result.current.map((ref) => ref.number)).toEqual([14843, 14842]));
+    rerender({ enabled: false });
+
+    // Same cwd, same prefixes: only the provider tells the two apart.
+    resolved.mockImplementation((projectId) =>
+      projectId ? provider({ issue: "#", pr: "#" }, "code", "daintree.gitea.gitea") : NO_PROVIDER
     );
     listIssues.mockResolvedValue(page([]));
-    const { result, rerender } = renderReferences({ enabled: true });
-    resolved.mockImplementation((projectId) =>
-      projectId ? provider({ issue: "#", pr: "!" }, "code", "daintree.gitlab.gitlab") : NO_PROVIDER
-    );
     listPRs.mockResolvedValue(page([pr(2, 1)]));
     rerender({ enabled: true });
-    await waitFor(() => expect(result.current.map((ref) => ref.reference)).toEqual(["!2"]));
-
-    finishFirst(page([pr(1, 1)]));
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(result.current.map((ref) => ref.reference)).toEqual(["!2"]);
+    expect(result.current).toEqual([]);
+    await waitFor(() => expect(result.current.map((ref) => ref.number)).toEqual([2]));
+    expect(listPRs).toHaveBeenCalledTimes(2);
   });
 
   describe("when a remote changes", () => {
@@ -282,11 +276,17 @@ describe("useForgeReferences", () => {
       else delete (window as { electron?: unknown }).electron;
     });
 
+    async function settle() {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+    }
+
     it("asks again on the next `#`, since the repository may be another", async () => {
       const { result, rerender } = renderReferences({ enabled: true });
       await waitFor(() => expect(result.current).toHaveLength(2));
       rerender({ enabled: false });
-      remoteChanged();
+      act(() => remoteChanged());
       listPRs.mockResolvedValue(page([pr(7, 9)]));
       listIssues.mockResolvedValue(page([]));
       rerender({ enabled: true });
@@ -294,7 +294,18 @@ describe("useForgeReferences", () => {
       expect(listPRs).toHaveBeenCalledTimes(2);
     });
 
-    it("never keeps an answer asked of the remote before it changed", async () => {
+    it("drops the rows on screen and asks again while `#` is still being typed", async () => {
+      const { result } = renderReferences({ enabled: true });
+      await waitFor(() => expect(result.current).toHaveLength(2));
+      listPRs.mockResolvedValue(page([pr(7, 9)]));
+      listIssues.mockResolvedValue(page([]));
+      act(() => remoteChanged());
+      expect(result.current).toEqual([]);
+      await waitFor(() => expect(result.current.map((ref) => ref.number)).toEqual([7]));
+      expect(listPRs).toHaveBeenCalledTimes(2);
+    });
+
+    it("never shows or keeps an answer asked of the remote before it changed", async () => {
       let finishFirst: (value: Page<PR>) => void = () => {};
       listPRs.mockImplementationOnce(
         () =>
@@ -305,15 +316,20 @@ describe("useForgeReferences", () => {
       listIssues.mockResolvedValue(page([]));
       const { result, rerender } = renderReferences({ enabled: true });
       await waitFor(() => expect(listPRs).toHaveBeenCalledTimes(1));
-      rerender({ enabled: false });
-      remoteChanged();
-      finishFirst(page([pr(1, 1)]));
-      await Promise.resolve();
-      await Promise.resolve();
 
       listPRs.mockResolvedValue(page([pr(2, 1)]));
-      rerender({ enabled: true });
+      act(() => remoteChanged());
       await waitFor(() => expect(result.current.map((ref) => ref.number)).toEqual([2]));
+
+      // The old answer lands last.
+      await act(async () => finishFirst(page([pr(1, 1)])));
+      await settle();
+      expect(result.current.map((ref) => ref.number)).toEqual([2]);
+
+      rerender({ enabled: false });
+      rerender({ enabled: true });
+      await settle();
+      expect(result.current.map((ref) => ref.number)).toEqual([2]);
       expect(listPRs).toHaveBeenCalledTimes(2);
     });
   });
