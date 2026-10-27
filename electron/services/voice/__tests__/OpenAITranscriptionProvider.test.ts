@@ -5579,6 +5579,27 @@ describe("OpenAITranscriptionProvider — recovery window (#14796)", () => {
     service.stop();
   });
 
+  it("resends a whole 15s segment and its drop's detection beside a full outage", async () => {
+    const service = new OpenAITranscriptionProvider({ maxSegmentMs: 15_000 });
+    const { socket } = await bringSessionReady(service);
+    latestVadWorker().emitSpeechStart();
+    // 15s of speech whose commit the dead socket took, and 7s more before the
+    // heartbeat noticed: 220 chunks no transcript ever covered.
+    for (let i = 0; i < 220; i++) service.sendAudioChunk(chunk(1));
+
+    socket.simulateClose(1006);
+    // The reconnect window's 33s of audio, up to its last attempt.
+    for (let i = 0; i < 330; i++) service.sendAudioChunk(chunk(2));
+    const recovered = nextAttemptSucceeds();
+
+    const resent = [...Array<number>(220).fill(1), ...Array<number>(330).fill(2)];
+    expect(wire(recovered)).toEqual(resent);
+    recovered.simulateClose(1006);
+    expect(wire(nextAttemptSucceeds())).toEqual(resent);
+    expect(service.getSessionStats()).toMatchObject({ droppedConnect: 0, droppedReplay: 0 });
+    service.stop();
+  });
+
   it("gives the window's last attempt time to become ready past the deadline", async () => {
     const service = new OpenAITranscriptionProvider();
     const events: VoiceTranscriptionEvent[] = [];

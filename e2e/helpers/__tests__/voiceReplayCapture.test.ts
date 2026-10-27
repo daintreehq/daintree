@@ -127,8 +127,10 @@ describe("installReplayCapture's microphone wrapper", () => {
   } as unknown as Page;
   let getUserMedia: ReturnType<typeof vi.fn>;
 
+  let reported: Record<string, unknown>;
+
   beforeEach(() => {
-    const reported = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+    reported = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
     getUserMedia = vi.fn(async () => ({
       getAudioTracks: () => [{ getSettings: () => reported }],
     }));
@@ -182,6 +184,21 @@ describe("installReplayCapture's microphone wrapper", () => {
       },
       video: false,
     });
+  });
+
+  it("saves what the track ran, not what was asked, so an ignored request shows", async () => {
+    reported = { echoCancellation: false, autoGainControl: true, sampleRate: 48_000 };
+    await installReplayCapture(page, { micProcessing: "off" });
+    await navigator.mediaDevices.getUserMedia({ audio: true });
+    const capture = await readReplayCapture(page);
+    expect(micProcessingAfter(capture, 0)).toEqual({
+      echoCancellation: false,
+      noiseSuppression: undefined,
+      autoGainControl: true,
+    });
+    expect(micProcessingMismatch(capture, 0, "off")).toBe(
+      "microphone processing stayed on: autoGainControl"
+    );
   });
 
   it("passes the app's own request through on the default arm", async () => {
