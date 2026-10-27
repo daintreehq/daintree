@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
-import { isActiveVoiceSession, type VoiceLiveSessionUpdate } from "@shared/types";
+import {
+  isActiveVoiceSession,
+  type VoiceLiveSessionUpdate,
+  type VoiceRevealRequest,
+} from "@shared/types";
 
 // Capture suspend/wake callbacks registered by the service.
 const suspendCallbacks = vi.hoisted(() => [] as Array<() => void>);
@@ -123,10 +127,14 @@ vi.mock("@/store/terminalInputStore", () => {
 });
 
 vi.mock("@/store/projectStore", () => {
-  const state = { currentProject: null, isSwitching: false };
+  const state = { currentProject: null as { id: string; name: string } | null, isSwitching: false };
   const switchProject = vi.fn();
   const getState = () => ({ ...state, switchProject });
-  return { useProjectStore: Object.assign(getState, { getState }), __switchProject: switchProject };
+  return {
+    useProjectStore: Object.assign(getState, { getState }),
+    __switchProject: switchProject,
+    __state: state,
+  };
 });
 
 vi.mock("@/store/createWorktreeStore", () => ({
@@ -206,10 +214,7 @@ function buildElectronStub() {
       onSessionEnded: vi.fn(() => () => {}),
       onLiveSession: vi.fn((_callback: (update: VoiceLiveSessionUpdate) => void) => () => {}),
       onStopRequested: vi.fn((_callback: (payload: { sessionId: string }) => void) => () => {}),
-      onRevealRequested: vi.fn(
-        (_callback: (payload: { sessionId: string; workspaceId: string | null }) => void) =>
-          () => {}
-      ),
+      onRevealRequested: vi.fn((_callback: (payload: VoiceRevealRequest) => void) => () => {}),
       getLiveSession: vi.fn().mockResolvedValue({ revision: 0, session: null }),
       getSettings: vi.fn().mockResolvedValue({
         enabled: true,
@@ -3249,21 +3254,58 @@ describe("VoiceRecordingService — a session another view owns (#14601)", () =>
 
     it("goes to the other host's copy of a project that shares this host's id", async () => {
       const { electron } = await arrange({ sessionElsewhere: null });
+      // This view shows studio-02's copy of the very project id studio-01 dictates in.
       Reflect.set(window, "__DAINTREE_HOST_ID__", { id: "studio-02" });
+      const projectStore = await import("@/store/projectStore");
+      if (!hasMockState<{ currentProject: { id: string; name: string } | null }>(projectStore)) {
+        throw new Error("projectStore mock lacks __state");
+      }
+      projectStore.__state.currentProject = { id: "proj-r", name: "Remote R" };
       const switchProject = await projectSwitch();
 
-      reveal(electron, { sessionId: "remote", hostId: "studio-01", workspaceId: "proj-r" });
+      try {
+        reveal(electron, { sessionId: "remote", hostId: "studio-01", workspaceId: "proj-r" });
 
-      await vi.waitFor(() => {
-        expect(switchToHost).toHaveBeenCalledWith("studio-01", false, "proj-r");
-      });
-      expect(switchProject).not.toHaveBeenCalled();
+        await vi.waitFor(() => {
+          expect(switchToHost).toHaveBeenCalledWith("studio-01", false, "proj-r");
+        });
+        expect(switchProject).not.toHaveBeenCalled();
+      } finally {
+        projectStore.__state.currentProject = null;
+      }
     });
 
     it("waits for the owner's cached view to come on screen before taking the keyboard there", async () => {
-      const { electron, voiceRecordingService, voiceState } = await arrange({
+      const { electron, voiceRecordingService, voiceState, panelState } = await arrange({
         status: "recording",
       });
+      Reflect.set(voiceRecordingService, "sessionId", "own");
+      // The owner dictates into panel-c; the person last left panel-b selected.
+      voiceState.activeTarget = { panelId: "panel-c" };
+      const activateTerminal = vi.fn((id: string) => {
+        panelState.focusedId = id;
+      });
+      Reflect.set(panelState, "activateTerminal", activateTerminal);
+      viewLifecycle.cached = true;
+
+      reveal(electron, { sessionId: "own", hostId: "local", workspaceId: "project-a" });
+      for (const listener of [...viewLifecycle.listeners]) listener("active");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(activateTerminal).not.toHaveBeenCalled();
+      expect(revealDictationComposer).not.toHaveBeenCalled();
+
+      for (const listener of [...viewLifecycle.listeners]) listener("revealed");
+
+      await vi.waitFor(() => {
+        expect(revealDictationComposer).toHaveBeenCalledWith("panel-c");
+      });
+      expect(activateTerminal).toHaveBeenCalledWith("panel-c");
+      expect(panelState.focusedId).toBe("panel-c");
+      expect(viewLifecycle.listeners.size).toBe(0);
+    });
+
+    it("forgets a reveal whose view was cached again before it came on screen", async () => {
+      const { electron, voiceRecordingService } = await arrange({ status: "recording" });
       Reflect.set(voiceRecordingService, "sessionId", "own");
       const focusTarget = vi
         .spyOn(voiceRecordingService, "focusActiveTarget")
@@ -3271,17 +3313,14 @@ describe("VoiceRecordingService — a session another view owns (#14601)", () =>
       viewLifecycle.cached = true;
 
       reveal(electron, { sessionId: "own", hostId: "local", workspaceId: "project-a" });
-      for (const listener of viewLifecycle.listeners) listener("active");
+      for (const listener of [...viewLifecycle.listeners]) listener("active");
+      for (const listener of [...viewLifecycle.listeners]) listener("cached");
+      expect(viewLifecycle.listeners.size).toBe(0);
+
+      // The person's own return later is not the reveal's.
+      for (const listener of [...viewLifecycle.listeners]) listener("revealed");
       await Promise.resolve();
       expect(focusTarget).not.toHaveBeenCalled();
-
-      for (const listener of [...viewLifecycle.listeners]) listener("revealed");
-
-      await vi.waitFor(() => {
-        expect(revealDictationComposer).toHaveBeenCalledWith(voiceState.activeTarget!.panelId);
-      });
-      expect(focusTarget).toHaveBeenCalledTimes(1);
-      expect(viewLifecycle.listeners.size).toBe(0);
     });
 
     it("takes the keyboard to its pane at once when the owner is already on screen", async () => {

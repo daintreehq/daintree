@@ -300,7 +300,12 @@ describe("VoiceRecordingToolbarButton — dictation in another view (#14601)", (
   it("puts the session elsewhere ahead of this view's lock", () => {
     useVoiceRecordingStore.setState({
       lockedTarget: { panelId: "p-1", panelTitle: "claude · notes" },
-      sessionElsewhere: { sessionId: "s1", projectId: "p-a", projectName: "Alpha" },
+      sessionElsewhere: {
+        sessionId: "s1",
+        hostId: "local",
+        projectId: "p-a",
+        projectName: "Alpha",
+      },
     });
     const { getByTestId, queryByTestId } = render(<VoiceRecordingToolbarButton />);
 

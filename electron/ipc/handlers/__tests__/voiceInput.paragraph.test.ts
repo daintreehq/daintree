@@ -363,6 +363,35 @@ describe("voiceInput — IPC handler surface", () => {
     }
   });
 
+  it("correct lets go of the asking view when the handlers go away mid-request", async () => {
+    const handleCorrect = getHandler("voice-input:correct") as (
+      e: unknown,
+      request: unknown
+    ) => Promise<unknown>;
+    const view = { ...fakeEvent.sender, id: 3 } as unknown as Electron.WebContents;
+    let answer!: () => void;
+    shared.cleanupGate = new Promise<void>((resolve) => {
+      answer = resolve;
+    });
+
+    try {
+      const pending = handleCorrect({ sender: view }, { rawText: "helo world" });
+      await Promise.resolve();
+      expect(isDictationViewHeld(view)).toBe(true);
+
+      cleanup();
+      cleanup = () => {};
+      expect(isDictationViewHeld(view)).toBe(false);
+
+      // An answer arriving after teardown takes no new hold.
+      answer();
+      await pending;
+      expect(isDictationViewHeld(view)).toBe(false);
+    } finally {
+      shared.cleanupGate = null;
+    }
+  });
+
   it("correct tells the renderer when the request failed", async () => {
     shared.correctionFailed = true;
     const handleCorrect = getHandler("voice-input:correct");

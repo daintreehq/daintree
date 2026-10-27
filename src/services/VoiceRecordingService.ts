@@ -3921,6 +3921,9 @@ class VoiceRecordingService {
       if (this.cancelRevealWait === cancel) this.cancelRevealWait = null;
     };
     unsubscribe = subscribeProjectViewLifecycle((phase) => {
+      // Cached again before it was shown: the person went somewhere else, and
+      // a later return of theirs is not this reveal.
+      if (phase === "cached") cancel();
       if (phase !== "revealed") return;
       cancel();
       reveal();

@@ -1678,14 +1678,17 @@ describe("voiceInput — one dictation across hosts (#14773)", () => {
   });
 
   describe("keeping the dictating view", () => {
-    it("holds the view from the start until the session is cancelled", async () => {
+    it("holds the view from the start, and briefly past a cancel for its ending", async () => {
       const starting = startIn(local, "a");
       expect(held(local)).toBe(true);
       await starting;
       expect(held(studio1)).toBe(false);
+      vi.useFakeTimers();
 
       await cancel(local, "a");
+      expect(held(local)).toBe(true);
 
+      vi.advanceTimersByTime(5_000);
       expect(held(local)).toBe(false);
     });
 
@@ -1700,12 +1703,13 @@ describe("voiceInput — one dictation across hosts (#14773)", () => {
       expect(held(local)).toBe(false);
     });
 
-    it("lets a replaced session's view go once its drain ends, with no cleanup to wait for", async () => {
+    it("keeps a replaced session's view past its drain, for the words it still commits", async () => {
       await startIn(local, "a");
 
       await startIn(studio1, "b");
 
-      expect(held(local)).toBe(false);
+      expect(ended(local)).toEqual([{ sessionId: "a", reason: "superseded" }]);
+      expect(held(local)).toBe(true);
       expect(held(studio1)).toBe(true);
     });
 

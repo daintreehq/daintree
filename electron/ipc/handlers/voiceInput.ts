@@ -378,12 +378,11 @@ function endSession(session: VoiceSession, reason: VoiceSessionEndReason): void 
   session.unsubscribe = null;
   session.unwatchDestroyed?.();
   session.unwatchDestroyed = null;
-  // A stop's cleanup still writes into the view's draft, so the view is handed
-  // to a short hold for the request to arrive. Taken before the session's own
-  // goes, so no eviction finds the view free in between.
-  if (reason === "stopped" && !session.sender.isDestroyed()) {
-    holdCleanupHandoff(session.webContentsId);
-  }
+  // The view still has the ending to finish: a stop's cleanup to ask for, or
+  // the last words of a replaced or failed session to commit to its draft. It
+  // is handed to a short hold for that, taken before the session's own goes so
+  // no eviction finds the view free in between.
+  if (!session.sender.isDestroyed()) holdCleanupHandoff(session.webContentsId);
   session.releaseView?.();
   session.releaseView = null;
   // Abort any in-flight file-link detection / resolution.
@@ -903,6 +902,22 @@ function mayCorrect(settings: VoiceInputSettings): boolean {
 }
 
 export function registerVoiceInputHandlers(deps: HandlerDependencies): () => void {
+  let disposed = false;
+  // Cleanup requests still running, each holding the view that asked.
+  const requestHolds = new Set<() => void>();
+  // A cleanup answer lands in the asking view's draft, so the view is kept
+  // through the request and a handoff for the reply (#14773). Returns the end
+  // of the hold, called once the answer is on its way.
+  const holdForCleanup = (webContentsId: number): (() => void) => {
+    const release = holdDictationView(webContentsId, CLEANUP_REQUEST_HOLD_MS);
+    requestHolds.add(release);
+    return () => {
+      if (!requestHolds.delete(release)) return;
+      if (!disposed) holdCleanupHandoff(webContentsId);
+      release();
+    };
+  };
+
   const handleGetSettings = async () => {
     return getVoiceSettings();
   };
@@ -2103,14 +2118,11 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     if (!mayCorrect(settings) || !request.rawText.trim()) {
       return { action: "no_change", correctedText: request.rawText };
     }
-    // The answer lands in the asking view's draft, so the view is kept until
-    // it has (#14773): through the request, and a handoff for the reply.
-    const releaseView = holdDictationView(ctx.webContentsId, CLEANUP_REQUEST_HOLD_MS);
+    const answered = holdForCleanup(ctx.webContentsId);
     try {
       return await correctPassage(ctx, request, settings, startedAt);
     } finally {
-      holdCleanupHandoff(ctx.webContentsId);
-      releaseView();
+      answered();
     }
   };
 
@@ -2202,12 +2214,11 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
   ): Promise<VoiceRewriteOutcome> => {
     const settings = getVoiceSettings();
     if (!settings.openaiApiKey) return { status: "unavailable" };
-    const releaseView = holdDictationView(ctx.webContentsId, CLEANUP_REQUEST_HOLD_MS);
+    const answered = holdForCleanup(ctx.webContentsId);
     try {
       return await rewriteSelection(ctx, request, settings);
     } finally {
-      holdCleanupHandoff(ctx.webContentsId);
-      releaseView();
+      answered();
     }
   };
 
@@ -2302,6 +2313,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     ipcMain.removeListener(CHANNELS.VOICE_INPUT_AUDIO_CHUNK, handleAudioChunk);
     if (liveSession) endSession(liveSession, "cancelled");
     if (drainingSession) endSession(drainingSession, "cancelled");
+    disposed = true;
+    for (const release of [...requestHolds]) release();
+    requestHolds.clear();
     for (const end of [...cleanupHandoffs]) end();
     drainingSession = null;
     service?.destroy();
