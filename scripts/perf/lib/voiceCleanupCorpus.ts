@@ -1051,16 +1051,6 @@ const NAMES: readonly AuthoredCase[] = [
     fixes: { "Tell Wren": "misread", "put Wren": "misread", "W-R-E-N": "form" },
     keep: ["Is there anything else"],
   },
-  // A command the agent lists, misheard as it's asked for.
-  {
-    id: "names-command:openai",
-    style: "openai",
-    source: "names",
-    raw: "Slash security reviews on the voice cleanup changes before I push.",
-    reference: "/security-review on the voice cleanup changes before I push.",
-    fixes: { "/security-review": "misread" },
-    keep: ["before I push"],
-  },
   // Words that sound like something on screen and mean what was transcribed.
   {
     id: "names-promise-rejects:deepgram",

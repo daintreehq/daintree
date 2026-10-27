@@ -347,6 +347,38 @@ const NAMES_REPAIR = revise(NAMES_CONTEXT, {
   ],
 });
 
+// Round 2 of #14873: NAMES_REPAIR wrote "ZOD" for a spelled Zod and "terra"
+// after gpt-6.1-terra, turned "onyx runtime node" into "ONNX Runtime Node"
+// where V13 wrote the package, dropped an "obviously" the speaker meant, and
+// still turned a hanging "to" into "too".
+const NAMES_2 = revise(NAMES_REPAIR, {
+  core: [
+    [
+      'Fix only the misheard word and keep the form the speaker said the rest in: "GPT 6.1 Terra", not "gpt-6.1-terra".',
+      'Fix only the misheard word, and write it as the name is written in a sentence: "GPT 6.1 Terra", not "gpt-6.1-terra" or "GPT 6.1 terra". A package, file, flag or identifier the speaker names in words is still written the way it\'s typed.',
+    ],
+    [
+      "write every mention of it in the target that way, before the spelling as well as after, over whatever the context says.",
+      'write every mention of it in the target in those letters, cased as the name is in a sentence ("Z O D" is Zod, not ZOD), before the spelling as well as after, over whatever the context says.',
+    ],
+    [
+      'and "I think", "I guess", "maybe" or "probably" marking a guess, which tells the agent it isn\'t a fact.',
+      'and "I think", "I guess", "maybe" or "probably" marking a guess, which tells the agent it isn\'t a fact, and "obviously" or "of course" saying the speaker expected it to be clear.',
+    ],
+    [
+      '("and send me a summary of what you find in."), goes;',
+      '("and send me a summary of what you find in."), goes, rather than becoming another word that would end the sentence ("what you find inside");',
+    ],
+    [
+      'A word left hanging at the very end of the passage,',
+      'A sentence the speaker restarts partway keeps only the restart ("what I want to do is I want to rename it" becomes "what I want to do is rename it"). A word left hanging at the very end of the passage,',
+    ],
+  ],
+});
+
+// NAMES_2 with the project, dictionary and workspace blocks as V13 had them.
+const NAMES_2_CORE: CorrectionInstructions = { ...NAMES_2, contextNames: "tiebreak" };
+
 export const PROMPT_VARIANTS: Readonly<Record<string, PromptVariant>> = {
   v11: { description: "the rules production sent before #14786", instructionsFor: fixed(V11) },
   firm: {
@@ -386,6 +418,15 @@ export const PROMPT_VARIANTS: Readonly<Record<string, PromptVariant>> = {
   "names-repair": {
     description: "names-context, also mending an aside inside a sentence and a hanging last word",
     instructionsFor: fixed(NAMES_REPAIR),
+  },
+  names2: {
+    description:
+      "round 2: names-repair, with a name cased as in a sentence, a package still typed, \"obviously\" kept and a restarted clause mended",
+    instructionsFor: fixed(NAMES_2),
+  },
+  "names2-core": {
+    description: "names2, with the project, dictionary and workspace blocks as v13 had them",
+    instructionsFor: fixed(NAMES_2_CORE),
   },
   production: {
     description: "the rules production sends each model now",
