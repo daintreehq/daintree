@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { useIsPresent } from "framer-motion";
 import { SettingsDependents, SettingsGroup } from "@/components/Settings/SettingsGroup";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import {
@@ -9,9 +10,16 @@ import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadError
 import { useTerminalInputStore } from "@/store";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
-import type { ActionId } from "@shared/types/actions";
 
 type FocusTarget = "hybrid" | "terminal";
+
+type InputAction =
+  "terminalConfig.setHybridInputEnabled" | "terminalConfig.setHybridInputAutoFocus";
+
+interface FailedWrite {
+  actionId: InputAction;
+  enabled: boolean;
+}
 
 const FOCUS_OPTIONS: readonly SettingsPresetOption<FocusTarget>[] = [
   { value: "hybrid", label: "Hybrid input" },
@@ -27,27 +35,45 @@ const FOCUS_OPTIONS: readonly SettingsPresetOption<FocusTarget>[] = [
 export function AgentInputStep({ onBusyChange }: { onBusyChange: (busy: boolean) => void }) {
   const hybridInputEnabled = useTerminalInputStore((state) => state.hybridInputEnabled);
   const hybridInputAutoFocus = useTerminalInputStore((state) => state.hybridInputAutoFocus);
-  const [retry, setRetry] = useState<(() => void) | null>(null);
-  // A second pick can land before the busy state renders; the ref turns it away.
-  const writingRef = useRef(false);
+  // A step animating out is still clickable, but the lock it holds goes with it.
+  const isPresent = useIsPresent();
+  const [failed, setFailed] = useState<FailedWrite | null>(null);
+  const inFlightRef = useRef(0);
+  const latestAttemptRef = useRef<Partial<Record<InputAction, number>>>({});
 
-  // The actions roll their own value back on failure, so the banner only offers the same write again.
-  const persist = async (actionId: ActionId, enabled: boolean): Promise<void> => {
-    if (writingRef.current) return;
-    writingRef.current = true;
+  // Writes overlap as they do on the Settings page, and the actions roll their
+  // own value back on failure. Only the newest pick of a setting decides
+  // whether a retry is on offer.
+  const persist = async (actionId: InputAction, enabled: boolean): Promise<void> => {
+    if (!isPresent) return;
+    const attempt = (latestAttemptRef.current[actionId] ?? 0) + 1;
+    latestAttemptRef.current[actionId] = attempt;
+    inFlightRef.current += 1;
     onBusyChange(true);
     try {
       const result = await actionService.dispatch(actionId, { enabled }, { source: "user" });
       if (!result.ok) throw new Error(result.error.message);
-      setRetry(null);
+      if (latestAttemptRef.current[actionId] === attempt) {
+        setFailed((prev) => (prev?.actionId === actionId ? null : prev));
+      }
     } catch (error) {
       logError("Failed to persist a hybrid input setting from setup", error);
-      setRetry(() => () => void persist(actionId, enabled));
+      if (latestAttemptRef.current[actionId] === attempt) setFailed({ actionId, enabled });
     } finally {
-      writingRef.current = false;
-      onBusyChange(false);
+      inFlightRef.current -= 1;
+      if (inFlightRef.current === 0) onBusyChange(false);
     }
   };
+
+  // Nothing is left to retry once the setting reads the pick (another window
+  // saved it), or once the focus choice is out of reach.
+  const retry =
+    failed &&
+    (failed.actionId === "terminalConfig.setHybridInputEnabled"
+      ? hybridInputEnabled !== failed.enabled
+      : hybridInputEnabled && hybridInputAutoFocus !== failed.enabled)
+      ? failed
+      : null;
 
   return (
     <section className="space-y-3">
@@ -55,13 +81,13 @@ export function AgentInputStep({ onBusyChange }: { onBusyChange: (busy: boolean)
         <SettingsLoadErrorBanner
           title="Couldn't save that change"
           message="The setting is back to its previous value."
-          onRetry={retry}
+          onRetry={() => void persist(retry.actionId, retry.enabled)}
         />
       )}
       <SettingsGroup>
         <SettingsSwitchCard
           title="Hybrid input"
-          subtitle="Show the multi-line input at the bottom of agent terminals. With it off, you type straight into the agent's own prompt, and dictation and file references stop working there."
+          subtitle="Show the multi-line input at the bottom of agent terminals. With it off, you type straight into the agent's own prompt, without dictation or Insert file reference."
           isEnabled={hybridInputEnabled}
           onChange={() => void persist("terminalConfig.setHybridInputEnabled", !hybridInputEnabled)}
         />

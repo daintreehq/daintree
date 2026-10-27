@@ -44,6 +44,10 @@ describe("AgentInputSettings", () => {
 
   // First-run setup writes these same two settings, so its choices land here as modified.
   it("marks a non-default choice as modified, and its reset writes the default back", () => {
+    render(<AgentInputSettings />);
+    expect(screen.queryByRole("button", { name: /^Reset .* to default$/ })).toBeNull();
+
+    cleanup();
     useTerminalInputStore.setState({ hybridInputAutoFocus: false });
     render(<AgentInputSettings />);
     fireEvent.click(screen.getByRole("button", { name: "Reset Focus first to default" }));
