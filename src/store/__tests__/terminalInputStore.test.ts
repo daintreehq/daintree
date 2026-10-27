@@ -53,12 +53,13 @@ describe("terminalInputStore", () => {
 
     it("keeps the latest sends, counting every one so far", () => {
       for (let n = 0; n < 9; n++) {
-        useTerminalInputStore.getState().recordSentPrompt("term-1", `prompt ${n}`, n);
+        useTerminalInputStore.getState().recordSentPrompt("term-1", `prompt ${n}`, 1_000 + n * 10);
       }
 
       const sent = useTerminalInputStore.getState().getSentPrompts("term-1");
-      expect(sent.map((prompt) => prompt.seq)).toEqual([3, 4, 5, 6, 7, 8]);
-      expect(sent.map((prompt) => prompt.sentAt)).toEqual([3, 4, 5, 6, 7, 8]);
+      expect(sent).toEqual(
+        [3, 4, 5, 6, 7, 8].map((seq) => ({ text: `prompt ${seq}`, sentAt: 1_000 + seq * 10, seq }))
+      );
     });
 
     it("keeps only the opening of a long prompt, never half a surrogate pair", () => {
@@ -70,9 +71,9 @@ describe("terminalInputStore", () => {
       store.recordSentPrompt("term-3", exact);
 
       expect(texts("term-1")).toEqual([`${opening}…`]);
-      const [cjk] = texts("term-2");
-      expect(cjk).toHaveLength(VOICE_RECENT_PROMPT_MAX_CHARS);
-      expect(cjk!.endsWith("…")).toBe(true);
+      expect(texts("term-2")).toEqual([
+        `${"日本語".repeat(VOICE_RECENT_PROMPT_MAX_CHARS).slice(0, VOICE_RECENT_PROMPT_MAX_CHARS - 1)}…`,
+      ]);
       expect(texts("term-3")).toEqual([exact]);
     });
 
@@ -106,8 +107,15 @@ describe("terminalInputStore", () => {
       expect(texts("term-1")).toEqual([]);
       expect(texts("term-2")).toEqual(["second"]);
 
-      useTerminalInputStore.getState().resetForProjectSwitch("project-a");
-      expect(useTerminalInputStore.getState().sentPrompts.size).toBe(0);
+      store.recordSentPrompt("term-3", "kept with its pane");
+      vi.mocked(getViewWorkspaceId).mockReturnValue("project-b");
+      store.recordSentPrompt("term-2", "another workspace's");
+
+      useTerminalInputStore.getState().resetForProjectSwitch("project-a", new Set(["term-3"]));
+      expect([...useTerminalInputStore.getState().sentPrompts.keys()]).toEqual([
+        "project-a:term-3",
+        "project-b:term-2",
+      ]);
     });
   });
 

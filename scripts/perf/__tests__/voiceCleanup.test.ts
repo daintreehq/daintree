@@ -109,26 +109,41 @@ describe("cleanup corpus", () => {
 
   // #14855: the prompts sent before a passage must both settle names and leave
   // alone passages that only sound like them, measurably.
-  it("carries recent prompts on its prompts passages, each it should settle beside a bare twin", () => {
+  it("carries recent prompts on its prompts passages, each beside the same passage sent bare", () => {
     const prompts = CLEANUP_CORPUS.filter((entry) => entry.source === "prompts");
-    expect(prompts.every((entry) => (entry.recentPrompts ?? []).length > 0)).toBe(true);
+    const withPrompts = prompts.filter((entry) => entry.recentPrompts);
+    expect(withPrompts.every((entry) => entry.recentPrompts!.length > 0)).toBe(true);
     expect(
       CLEANUP_CORPUS.filter((entry) => entry.source !== "prompts" && entry.recentPrompts)
     ).toEqual([]);
 
-    const settled = prompts.filter((entry) => Object.keys(entry.fixes).length > 0);
-    const leftAlone = prompts.filter(
+    const settled = withPrompts.filter((entry) => Object.keys(entry.fixes).length > 0);
+    const leftAlone = withPrompts.filter(
       (entry) => Object.keys(entry.fixes).length === 0 && entry.raw === entry.reference
     );
     expect(settled.length).toBeGreaterThanOrEqual(6);
     expect(leftAlone.length).toBeGreaterThanOrEqual(3);
-    // Any passage it shares with one sent bare is twinned, settled or not.
+    // Every one, settled or left alone, so a run shows what the prompts changed either way.
     const twins = recentPromptTwins(CLEANUP_CORPUS);
-    const twinned = new Set(twins.map((twin) => twin.withPrompts));
-    expect(settled.filter((entry) => !twinned.has(entry))).toEqual([]);
-    for (const { withPrompts, bare } of twins) {
+    expect(twins.map((twin) => twin.withPrompts)).toEqual(withPrompts);
+    for (const { withPrompts: sent, bare } of twins) {
       expect(bare.recentPrompts).toBeUndefined();
-      expect(bare.raw).toBe(withPrompts.raw);
+      expect(bare.raw).toBe(sent.raw);
+    }
+    expect(new Set(twins.map((twin) => twin.bare)).size).toBe(twins.length);
+
+    // A name only the prompts spell: the word the raw transcript misheard is in them.
+    const named = settled.filter((entry) => entry.id.startsWith("prompts-"));
+    expect(named.length).toBeGreaterThanOrEqual(2);
+    for (const entry of named) {
+      const heard = new Set(entry.raw.toLowerCase().split(/[^a-z0-9]+/));
+      const spelled = Object.keys(entry.fixes)
+        .flatMap((fix) => fix.split(/\s+/))
+        .filter((word) => !heard.has(word.toLowerCase()));
+      expect(spelled.length).toBeGreaterThan(0);
+      for (const word of spelled) {
+        expect(entry.recentPrompts!.some((prompt) => prompt.includes(word))).toBe(true);
+      }
     }
   });
 });
@@ -169,6 +184,14 @@ describe("inputHash", () => {
     ];
     expect(new Set(hashes).size).toBe(hashes.length);
     expect(inputHash({ ...passage, recentPrompts: [] })).toBe(hashes[0]);
+    // By what they say and in what order, not by how many there are.
+    expect(inputHash({ ...passage, recentPrompts: ["Measure luna"] })).not.toBe(hashes[1]);
+    expect(inputHash({ ...passage, recentPrompts: ["Then luna", "Measure terra"] })).not.toBe(
+      hashes[2]
+    );
+    expect(inputHash({ ...passage, recentPrompts: ["Measure terra", "Then luna"] })).toBe(
+      hashes[2]
+    );
   });
 
   it("changes with anything its session tells cleanup, and only that", () => {
@@ -697,6 +720,8 @@ describe("requestCost", () => {
       (3 + 1_576.25 + 148.25 + 215) / 1e6,
       12
     );
+    // The same at $0.10, $0.125, $0.01 and $0.50.
+    expect(requestCost("gpt-6-luna", usage)).toBeCloseTo((0.3 + 157.625 + 29.65 + 21.5) / 1e6, 12);
     // A write the reply reports past the uncached input is billed only as far as it goes.
     expect(requestCost("gpt-6.1-terra", { ...usage, cacheWriteTokens: 9_999 })).toBeCloseTo(
       (1_264 * 1.25 + 148.25 + 215) / 1e6,
@@ -1205,13 +1230,13 @@ describe("rescore", () => {
     expect(closing("remove20")).toBeNull();
   });
 
-  it("sets the passages sent with recent prompts beside their bare twins, cost and all", () => {
-    const withPrompts: CleanupCase = {
-      ...codex,
-      id: "codex-prompts",
+  it("sets the passages sent with recent prompts beside their bare twins, repeat by repeat", () => {
+    const prompted = (entry: CleanupCase): CleanupCase => ({
+      ...entry,
+      id: `${entry.id}-prompts`,
       source: "prompts",
-      recentPrompts: ["Have Codex review the voice settings diff."],
-    };
+      recentPrompts: ["Have Codex look over the diff, then fix the Zustand selector."],
+    });
     const billed = (inputTokens: number, cachedTokens: number, costUsd: number) => ({
       usage: {
         inputTokens,
@@ -1222,26 +1247,65 @@ describe("rescore", () => {
       },
       costUsd,
     });
+    const trial = (
+      variant: string,
+      caseId: string,
+      landed: string,
+      repeat: number,
+      usage: ReturnType<typeof billed>
+    ) => ({ ...saved(variant, caseId, landed, "high", usage), repeat });
+    const fixedZustand = "The Zustand selector in the worktree store needs useShallow.";
     const file = writeRun(
       "prompts.json",
-      [codex, withPrompts],
+      [codex, zustand, prompted(codex), prompted(zustand)],
       [
-        saved(
-          TERRA,
-          "codex",
-          "Ask codecs to review the diff.",
-          "high",
-          billed(3_000, 2_944, 0.0003)
-        ),
-        saved(TERRA, "codex-prompts", codex.reference, "high", billed(3_100, 2_944, 0.0004)),
+        trial(TERRA, "codex", "Ask codecs to review the diff.", 1, billed(3_000, 2_944, 0.0003)),
+        trial(TERRA, "codex-prompts", codex.reference, 1, billed(3_100, 2_944, 0.0004)),
+        trial(TERRA, "zustand", zustand.raw, 1, billed(3_000, 2_944, 0.0003)),
+        trial(TERRA, "zustand-prompts", fixedZustand, 1, billed(3_100, 3_072, 0.0002)),
+        // A repeat only one side ran isn't compared.
+        trial(TERRA, "codex-prompts", codex.reference, 2, billed(3_100, 3_072, 0.0001)),
+        trial(LUNA, "codex", codex.reference, 1, billed(3_000, 2_944, 0.00003)),
+        trial(LUNA, "codex-prompts", codex.reference, 1, billed(3_100, 2_944, 0.00004)),
       ]
     );
-    const { run, corpus } = rescore(file, null, [codex, withPrompts]);
+    const { run, corpus } = rescore(file, null, [
+      codex,
+      zustand,
+      prompted(codex),
+      prompted(zustand),
+    ]);
     const section = renderReport(run, corpus)
       .split("## With and without recent prompts")[1]!
       .split("\n## ")[0]!;
-    expect(section).toContain(`| ${TERRA} | with | 1 | 100.0% | 3100 | 95.0% | 156 | $0.00040 |`);
-    expect(section).toContain(`| ${TERRA} | without | 1 | 0.0% | 3000 | 98.1% | 56 | $0.00030 |`);
-    expect(section).toContain(`| ${LUNA} | with | 0 |`);
+    const row = (variant: string, side: string) =>
+      section
+        .split("\n")
+        .find((line) => line.startsWith(`| ${variant} | ${side} |`))
+        ?.split(" | ")
+        .slice(2);
+    // Trials, misreads, clean kept, risky, mean input, cached, writes, per cleanup.
+    expect(row(TERRA, "with")).toEqual([
+      "2",
+      "100.0%",
+      "0/0",
+      "0",
+      "3100",
+      "97.0%",
+      "184",
+      "$0.00030 |",
+    ]);
+    expect(row(TERRA, "without")).toEqual([
+      "2",
+      "0.0%",
+      "0/0",
+      "0",
+      "3000",
+      "98.1%",
+      "112",
+      "$0.00030 |",
+    ]);
+    expect(row(LUNA, "with")?.slice(0, 2)).toEqual(["1", "100.0%"]);
+    expect(row(LUNA, "without")?.slice(0, 2)).toEqual(["1", "100.0%"]);
   });
 });

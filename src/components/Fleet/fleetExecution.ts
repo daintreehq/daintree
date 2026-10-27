@@ -176,10 +176,16 @@ function resolveSubmissions(
 }
 
 // A send that landed is one its terminal's dictations can be cleaned up
-// against. Another host's agent keeps its own.
-function noteSent(submission: ResolvedSubmission): void {
-  if (isCrossHostTargetId(submission.terminalId)) return;
-  useTerminalInputStore.getState().recordSentPrompt(submission.terminalId, submission.authored);
+// against, noted as it lands so a slower target can't put it behind a later
+// send. Another host's agent keeps its own.
+function submitAndNote(submission: ResolvedSubmission, retry: boolean): Promise<void> {
+  const sentAt = Date.now();
+  return submitTarget(submission.terminalId, submission.payload, retry).then(() => {
+    if (isCrossHostTargetId(submission.terminalId)) return;
+    useTerminalInputStore
+      .getState()
+      .recordSentPrompt(submission.terminalId, submission.authored, sentAt);
+  });
 }
 
 function shouldBatchAcrossTargets(resolved: ResolvedSubmission[]): boolean {
@@ -288,7 +294,7 @@ export async function executeFleetBroadcast(
         // (not "") preserves Phase 2 escalation for large pastes — see #3565.
         for (const r of batch) noteUserInput(r.terminalId, r.payload);
         const batchResults = await Promise.allSettled(
-          batch.map((r) => submitTarget(r.terminalId, r.payload, retry))
+          batch.map((r) => submitAndNote(r, retry))
         );
         for (let j = 0; j < batchResults.length; j += 1) {
           const r = batchResults[j]!;
@@ -299,7 +305,6 @@ export async function executeFleetBroadcast(
             // `onEnterPressed` is a no-op if the canonical state machine has
             // already transitioned the terminal to working from PTY echo.
             noteSubmitted(terminalId);
-            noteSent(batch[j]!);
           } else {
             // Submit rejected — the PTY never received bytes, so revert
             // the synthetic `directing` we set above rather than leaving
@@ -320,7 +325,7 @@ export async function executeFleetBroadcast(
       // Same ordering rule as the batched path — see comment above.
       for (const r of resolved) noteUserInput(r.terminalId, r.payload);
       const all = await Promise.allSettled(
-        resolved.map((r) => submitTarget(r.terminalId, r.payload, retry))
+        resolved.map((r) => submitAndNote(r, retry))
       );
       for (let j = 0; j < all.length; j += 1) {
         const r = all[j]!;
@@ -328,7 +333,6 @@ export async function executeFleetBroadcast(
         const terminalId = resolved[j]!.terminalId;
         if (r.status === "fulfilled") {
           noteSubmitted(terminalId);
-          noteSent(resolved[j]!);
         } else {
           noteRejected(terminalId);
         }

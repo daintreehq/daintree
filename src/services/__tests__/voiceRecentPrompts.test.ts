@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useTerminalInputStore, type SentPrompt } from "@/store/terminalInputStore";
 import { recentPromptsFor, selectRecentPrompts } from "../voiceRecentPrompts";
 
@@ -54,6 +54,30 @@ describe("selectRecentPrompts", () => {
 describe("recentPromptsFor", () => {
   beforeEach(() => {
     useTerminalInputStore.setState({ sentPrompts: new Map() });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("shows the window and age bound over what was sent, by the clock now", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10 * HOUR);
+    const store = useTerminalInputStore.getState();
+    store.recordSentPrompt("term-1", "prompt 0", 8 * HOUR);
+    for (let n = 1; n < 8; n++) store.recordSentPrompt("term-1", `prompt ${n}`, 9.5 * HOUR + n);
+
+    // Eight sends: the window starts at the fourth, so the stale first is out anyway.
+    expect(recentPromptsFor("term-1")).toEqual([
+      "prompt 3",
+      "prompt 4",
+      "prompt 5",
+      "prompt 6",
+      "prompt 7",
+    ]);
+    // An hour after the fourth was sent, the third is out and the window stays put.
+    vi.setSystemTime(10.5 * HOUR + 4);
+    expect(recentPromptsFor("term-1")).toEqual(["prompt 4", "prompt 5", "prompt 6", "prompt 7"]);
   });
 
   it("reads what was sent to that terminal, as it was written", () => {

@@ -235,6 +235,12 @@ describe("the log-call scan", () => {
     expect(scan("warn(`heard ${transcript}`);")).not.toEqual([]);
   });
 
+  it("flags the prompts sent to a terminal, but not their count", () => {
+    expect(scan("warn('a', { recentPrompts });")).not.toEqual([]);
+    expect(scan("warn('a', { first: request.recentPrompts[0] });")).not.toEqual([]);
+    expect(scan("warn('a', { n: request.recentPrompts.length });")).toEqual([]);
+  });
+
   it("flags microphone names", () => {
     expect(scan("warn('a', { mic: track.label });")).not.toEqual([]);
     expect(scan("warn('a', { deviceLabel });")).not.toEqual([]);

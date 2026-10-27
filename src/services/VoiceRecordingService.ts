@@ -3654,12 +3654,12 @@ class VoiceRecordingService {
       aligner: new CorrectionStreamAligner(passage.text),
     });
     let text: string | null = null;
-    // Read as the request goes, so a prompt sent while this dictation ran
-    // counts. A terminal outside the view names none.
-    const recentPrompts = correction.context.terminalId
-      ? recentPromptsFor(correction.context.terminalId)
-      : [];
     try {
+      // Read as the request goes, so a prompt sent while this dictation ran
+      // counts. A terminal outside the view names none.
+      const recentPrompts = correction.context.terminalId
+        ? recentPromptsFor(correction.context.terminalId)
+        : [];
       const result = await window.electron.voiceInput.correct({
         rawText: passage.text,
         ...correction.context,

@@ -616,47 +616,45 @@ describe("VoiceCorrectionService", () => {
       return content;
     };
 
-    it("go first, oldest first, each in a block marked as a cache breakpoint", async () => {
-      const fetchMock = vi
-        .fn()
-        .mockResolvedValue(makeFetchResponse({ corrected_text: "Corrected." }));
-      vi.stubGlobal("fetch", fetchMock);
-      const svc = new VoiceCorrectionService();
-      const prompts = ["Compare gpt-6.1-terra with Luna", 'Then "quote" it\nacross lines'];
-
-      await svc.correct(
-        {
+    it.each(["gpt-6.1-terra", "gpt-6-luna"])(
+      "go first on %s, oldest first, each in a block marked as a cache breakpoint",
+      async (model) => {
+        const fetchMock = vi
+          .fn()
+          .mockResolvedValue(makeFetchResponse({ corrected_text: "Corrected." }));
+        vi.stubGlobal("fetch", fetchMock);
+        const svc = new VoiceCorrectionService();
+        const settings = { ...BASE_SETTINGS, model };
+        const prompts = ["Compare gpt-6.1-terra with Luna", 'Then "quote" it\nacross lines'];
+        const passage = {
           rawText: "run the tara benchmark",
-          recentPrompts: prompts,
           recentContext: ["The draft so far."],
           terminalOutput: "Done.",
           reason: "stop",
-        },
-        BASE_SETTINGS
-      );
-      await svc.correct({ rawText: "run the tara benchmark", reason: "stop" }, BASE_SETTINGS);
+          startsPrompt: false,
+        };
 
-      const withPrompts = sentInput(fetchMock, 0);
-      const without = sentInput(fetchMock, 1);
-      const blocks = blocksOf(withPrompts.input[1].content);
-      expect(blocks.slice(0, 2)).toEqual(
-        prompts.map((prompt, index) => ({
-          type: "input_text",
-          text: `${index === 0 ? "<recent_prompts>\n" : ""}${JSON.stringify(prompt)}\n`,
-          prompt_cache_breakpoint: { mode: "explicit" },
-        }))
-      );
-      expect(blocks).toHaveLength(3);
-      expect(blocks[2]!.prompt_cache_breakpoint).toBeUndefined();
-      const rest = blocks[2]!.text;
-      expect(rest.startsWith("</recent_prompts>\n\n<confirmed_history>")).toBe(true);
-      expect(rest.indexOf("<job>")).toBeLessThan(rest.indexOf("<target>"));
-      expect(rest.indexOf("<target>")).toBeLessThan(rest.indexOf("<terminal_output>"));
-      // The prompt and its key stay the session's, so the warm-up still covers them.
-      expect(withPrompts.input[0].content).toBe(without.input[0].content);
-      expect(withPrompts.prompt_cache_key).toBe(without.prompt_cache_key);
-      expect(without.input[0].content).not.toContain("gpt-6.1-terra with Luna");
-    });
+        await svc.correct({ ...passage, recentPrompts: prompts }, settings);
+        await svc.correct(passage, settings);
+
+        const withPrompts = sentInput(fetchMock, 0);
+        const without = sentInput(fetchMock, 1);
+        expect(blocksOf(withPrompts.input[1].content)).toEqual([
+          ...prompts.map((prompt, index) => ({
+            type: "input_text",
+            text: `${index === 0 ? "<recent_prompts>\n" : ""}${JSON.stringify(prompt)}\n`,
+            prompt_cache_breakpoint: { mode: "explicit" },
+          })),
+          { type: "input_text", text: `</recent_prompts>\n\n${without.input[1].content}` },
+        ]);
+        expect(without.input[1].content).toContain("<target>\nrun the tara benchmark\n</target>");
+        expect(without.input[1].content).toContain("<terminal_output>\nDone.\n</terminal_output>");
+        // The prompt and its key stay the session's, so the warm-up still covers them.
+        expect(withPrompts.input[0].content).toBe(without.input[0].content);
+        expect(withPrompts.prompt_cache_key).toBe(without.prompt_cache_key);
+        expect(without.input[0].content).not.toContain("gpt-6.1-terra with Luna");
+      }
+    );
 
     it("send only one more block after a send, leaving the ones before as they were", async () => {
       const fetchMock = vi
@@ -675,6 +673,9 @@ describe("VoiceCorrectionService", () => {
       const after = blocksOf(sentInput(fetchMock, 1).input[1].content);
       expect(after.slice(0, 2)).toEqual(before.slice(0, 2));
       expect(after[2]!.text).toBe('"three"\n');
+      expect(after).toHaveLength(4);
+      expect(after[3]!.text).toContain("<target>\nand log it\n</target>");
+      expect(after[3]!.text).not.toContain("check it");
     });
 
     it("can't close their block or open a target of their own", async () => {
@@ -712,6 +713,7 @@ describe("VoiceCorrectionService", () => {
 
       const blocks = blocksOf(sentInput(fetchMock).input[1].content);
       expect(blocks.map((block) => block.prompt_cache_breakpoint)).toEqual([undefined, undefined]);
+      expect(blocks[0]!.text).toBe('<recent_prompts>\n"one"\n');
     });
 
     it("are logged as a count and a length, never as text", async () => {

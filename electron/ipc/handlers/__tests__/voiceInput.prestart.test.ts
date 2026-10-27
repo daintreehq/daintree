@@ -1285,13 +1285,16 @@ describe("voiceInput — keyterm target", () => {
 
   describe("cleanup recent prompts (#14855)", () => {
     const PROMPTS = ["Measure gpt-6.1-terra against Luna", "Then compare Wispr Flow"];
-    const correct = (extra: Record<string, unknown> = {}) =>
-      getHandler("voice-input:correct")(fakeEvent, {
+    // Seeded stale first, so a call that left them out still proves cleanup ran.
+    const correct = (extra: Record<string, unknown> = {}) => {
+      shared.correctionRecentPrompts = ["stale"];
+      return getHandler("voice-input:correct")(fakeEvent, {
         rawText: "run the tara benchmark",
         terminalId: "t-1",
         recentPrompts: PROMPTS,
         ...extra,
       });
+    };
 
     beforeEach(() => {
       shared.voiceInput = { correctionEnabled: true };
@@ -1303,9 +1306,12 @@ describe("voiceInput — keyterm target", () => {
 
       await startWith({ terminalId: "t-1" });
       await stop();
-      shared.correctionRecentPrompts = undefined;
       await correct({ sessionId: currentSessionId });
       expect(shared.correctionRecentPrompts).toEqual(PROMPTS);
+
+      const fullest = Array.from({ length: 6 }, (_, n) => `${n}`.repeat(1_000));
+      await correct({ recentPrompts: fullest });
+      expect(shared.correctionRecentPrompts).toEqual(fullest);
     });
 
     it("sends none for a terminal another project owns, or one main doesn't track", async () => {
@@ -1332,7 +1338,6 @@ describe("voiceInput — keyterm target", () => {
         ["x".repeat(1_001)],
         "not a list",
       ]) {
-        shared.correctionRecentPrompts = ["stale"];
         await expect(correct({ recentPrompts })).resolves.toMatchObject({ action: "no_change" });
         expect(shared.correctionRecentPrompts).toBeUndefined();
       }
