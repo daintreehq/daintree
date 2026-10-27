@@ -174,22 +174,17 @@ describe("CanopyTrashLedger", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("asks for an exited run's earlier session as the trash lets it go, again when no close landed, and leaves", async () => {
+  it("asks for the incarnation's earlier session when no close landed, and leaves either way", async () => {
     const onSettle = vi.fn(async () => true);
-    const { ledger, answer, onChange } = setup(
-      { a: record("a", { isExited: true }) },
-      { onSettle }
-    );
+    const { ledger, answer, onChange } = setup({ a: record("a") }, { onSettle });
     ledger.onTrashed("a", NOW + 20_000);
     await answer("a");
     ledger.onCleared("a", NOW + 20_000);
-    // At once: nothing more of it will be captured, and a quit straight after still keeps it.
-    await vi.waitFor(() => expect(onSettle).toHaveBeenCalledTimes(1));
     onChange.mockClear();
 
     vi.advanceTimersByTime(CANOPY_TRASH_SETTLE_MS);
     await vi.waitFor(() => expect(ledger.get("a")).toBeUndefined());
-    expect(onSettle).toHaveBeenCalledTimes(2);
+    expect(onSettle).toHaveBeenCalledTimes(1);
     expect(onSettle).toHaveBeenCalledWith(
       expect.objectContaining({
         expiresAt: NOW + 20_000,

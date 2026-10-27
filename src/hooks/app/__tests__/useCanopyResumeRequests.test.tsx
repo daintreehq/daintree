@@ -12,7 +12,7 @@ const {
   view,
 } = vi.hoisted(() => ({
   onResumeRequested: vi.fn(),
-  resumeStarted: vi.fn(async (_requestId: string) => true),
+  resumeStarted: vi.fn(async (_requestId: string): Promise<number | null> => 30_000),
   resumeSettled: vi.fn(async () => {}),
   resumeSessionForPerson: vi.fn(),
   whenWorktreesKnown: vi.fn(async () => true),
@@ -59,7 +59,7 @@ describe("useCanopyResumeRequests", () => {
     view.isInitialized = true;
     view.isLoading = false;
     whenWorktreesKnown.mockResolvedValue(true);
-    resumeStarted.mockResolvedValue(true);
+    resumeStarted.mockResolvedValue(30_000);
     resumeSessionForPerson.mockResolvedValue({
       terminalId: "term-9",
       outcome: "created",
@@ -113,6 +113,29 @@ describe("useCanopyResumeRequests", () => {
     );
   });
 
+  it("launches nothing when main's go-ahead arrives too late to land the pane in time", async () => {
+    let now = 1_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    resumeStarted.mockImplementationOnce(async () => {
+      // The reply takes the whole launch budget to come back.
+      now += 30_000;
+      return 30_000;
+    });
+    try {
+      renderHook(() => useCanopyResumeRequests(true));
+      act(() => request(asked("r7")));
+      await vi.waitFor(() => expect(resumeStarted).toHaveBeenCalledWith("r7"));
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(resumeSessionForPerson).not.toHaveBeenCalled();
+      expect(resumeSettled).not.toHaveBeenCalled();
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it("answers why when the resume fails", async () => {
     resumeSessionForPerson.mockRejectedValue(
       new Error("That session's worktree has been removed.")
@@ -127,7 +150,7 @@ describe("useCanopyResumeRequests", () => {
   });
 
   it("claims each request before launching, and never starts one main has stopped waiting for", async () => {
-    resumeStarted.mockResolvedValueOnce(false);
+    resumeStarted.mockResolvedValueOnce(null);
     renderHook(() => useCanopyResumeRequests(true));
     act(() => request(asked("r5")));
     await vi.waitFor(() => expect(resumeStarted).toHaveBeenCalledWith("r5"));

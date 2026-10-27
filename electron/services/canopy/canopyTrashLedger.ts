@@ -19,8 +19,6 @@ export interface TrashedTerminalRecord {
   isTrashed?: boolean;
   trashExpiresAt?: number;
   hasPty?: boolean;
-  /** The process had already ended: nothing more of it will be captured. */
-  isExited?: boolean;
   agentState?: AgentState;
   lastStateChange?: number;
   detectedAgentId?: BuiltInAgentId;
@@ -39,9 +37,6 @@ export interface CanopyTrashLedgerDeps {
    * The trash let a run go and no close of it reached the journal in the time
    * one takes to land. The caller may keep it some other way (a session the
    * journal held from before the close); the run leaves the ledger either way.
-   * A run whose process had already ended before its trash is asked about as
-   * the trash lets it go too: nothing more of it will be captured, so a quit
-   * straight after still keeps it.
    */
   onSettle?: (entry: CanopyTrashEntry) => Promise<boolean> | boolean;
   /** The user took this run out of Canopy's Trash: when the trash lets it go, it goes. */
@@ -68,8 +63,6 @@ export class CanopyTrashLedger {
   /** The trash of each run a read is in flight for, by its deadline. */
   private readonly pending = new Map<string, number>();
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
-  /** Runs whose process had ended before they were trashed. */
-  private readonly exitedBeforeTrash = new Set<string>();
   private disposed = false;
 
   constructor(private readonly deps: CanopyTrashLedgerDeps) {}
@@ -108,7 +101,6 @@ export class CanopyTrashLedger {
           return;
         }
         this.entries.set(id, { run: runOf(id, record, record.projectId), trashedAt, expiresAt });
-        if (record.isExited === true) this.exitedBeforeTrash.add(id);
         // A backstop for a clear never heard: the entry goes at its deadline.
         const timer = setTimeout(
           () => this.onCleared(id, expiresAt),
@@ -154,11 +146,6 @@ export class CanopyTrashLedger {
     timer.unref?.();
     this.timers.set(id, timer);
     this.deps.onChange();
-    if (this.exitedBeforeTrash.has(id)) {
-      void Promise.resolve()
-        .then(() => this.deps.onSettle?.(ended))
-        .catch(() => {});
-    }
   }
 
   /**
@@ -184,7 +171,6 @@ export class CanopyTrashLedger {
     this.disposed = true;
     for (const timer of this.timers.values()) clearTimeout(timer);
     this.timers.clear();
-    this.exitedBeforeTrash.clear();
     this.entries.clear();
     this.turns.clear();
     this.pending.clear();
@@ -217,7 +203,6 @@ export class CanopyTrashLedger {
 
   private drop(id: string): boolean {
     this.clearTimer(id);
-    this.exitedBeforeTrash.delete(id);
     return this.entries.delete(id);
   }
 

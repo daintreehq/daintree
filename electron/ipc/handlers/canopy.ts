@@ -1117,14 +1117,14 @@ const pendingResumes = new Map<string, PendingResume>();
 const resumingCloses = new Map<string, Promise<CanopyRestoreOutcome>>();
 
 /**
- * The view asked is about to launch: true while Canopy still waits, and the
- * launch then has its own while to land. False once Canopy stopped waiting,
- * so a view slow to hear never launches a resume nobody is told of.
+ * The view asked is about to launch: while Canopy still waits, the launch gets
+ * its own while to land, and the view is told how long, so a reply it hears
+ * late starts nothing either. Null once Canopy stopped waiting, so a view slow
+ * to hear never launches a resume nobody is told of.
  */
-function startResume(requestId: string, viewId: number): boolean {
+function startResume(requestId: string, viewId: number): number | null {
   const pending = pendingResumes.get(requestId);
-  if (!pending || pending.viewId !== viewId) return false;
-  if (pending.started) return true;
+  if (!pending || pending.viewId !== viewId || pending.started) return null;
   pending.started = true;
   clearTimeout(pending.timer);
   pending.timer = setTimeout(
@@ -1132,7 +1132,7 @@ function startResume(requestId: string, viewId: number): boolean {
     RESUME_LAUNCH_MS
   );
   pending.timer.unref?.();
-  return true;
+  return RESUME_LAUNCH_MS;
 }
 
 function settleResume(requestId: string, answer: CanopyResumeAnswer): void {
@@ -2009,12 +2009,13 @@ export const canopyNamespace = defineIpcNamespace({
     ),
 
     /**
-     * A project's view is about to launch a resume Canopy asked of it: whether
-     * Canopy still waits for it. Only the view asked is heard.
+     * A project's view is about to launch a resume Canopy asked of it: how
+     * long it has to land the pane, or null once Canopy stopped waiting. Only
+     * the view asked is heard, and only once.
      */
     resumeStarted: op(
       CANOPY_METHOD_CHANNELS.resumeStarted,
-      async (ctx, requestId: string): Promise<boolean> => {
+      async (ctx, requestId: string): Promise<number | null> => {
         if (typeof requestId !== "string" || requestId.length === 0 || requestId.length > 64) {
           throw new Error("Invalid resume request id");
         }

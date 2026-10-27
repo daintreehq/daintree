@@ -1238,7 +1238,7 @@ describe("canopy IPC", () => {
         expect(await trash()).toEqual([]);
       });
 
-      it("lets only the view asked take up a resume, and only while Canopy waits", async () => {
+      it("lets only the view asked take up a resume, once, and only while Canopy waits", async () => {
         journaled();
         const view = projectView(1);
         await trash();
@@ -1250,20 +1250,62 @@ describe("canopy IPC", () => {
         );
         await vi.waitFor(() => expect(view.send).toHaveBeenCalled());
         const { requestId } = view.send.mock.calls[0]![1] as { requestId: string };
-        expect(await invoke(CANOPY_METHOD_CHANNELS.resumeStarted, fakeSender(2), requestId)).toBe(
-          false
-        );
-        expect(await invoke(CANOPY_METHOD_CHANNELS.resumeStarted, fakeSender(1), requestId)).toBe(
-          true
-        );
+        const started = (sender: number) =>
+          invoke(CANOPY_METHOD_CHANNELS.resumeStarted, fakeSender(sender), requestId);
+        expect(await started(2)).toBeNull();
+        // The launch's own while to land the pane, told to the view.
+        expect(await started(1)).toBeGreaterThan(0);
+        expect(await started(1)).toBeNull();
         await invoke(CANOPY_METHOD_CHANNELS.resumeSettled, fakeSender(1), requestId, {
           runId: "run-9",
         });
         expect(await restoring).toEqual({ runId: "run-9" });
         // Settled: a view hearing it only now launches nothing.
-        expect(await invoke(CANOPY_METHOD_CHANNELS.resumeStarted, fakeSender(1), requestId)).toBe(
-          false
-        );
+        expect(await started(1)).toBeNull();
+      });
+
+      it("gives up on a resume not taken up in time, and gives one taken up its own while", async () => {
+        journaled();
+        const view = projectView(1);
+        await trash();
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        try {
+          // Never taken up: Canopy stops waiting, and a late claim starts nothing.
+          const untaken = refusal(
+            invoke(CANOPY_METHOD_CHANNELS.restoreTrashed, fakeSender(1), "run-1", target)
+          );
+          await vi.waitFor(() => expect(view.send).toHaveBeenCalledTimes(1));
+          const first = (view.send.mock.calls[0]![1] as { requestId: string }).requestId;
+          await vi.advanceTimersByTimeAsync(30_000);
+          expect(await untaken).toContain("didn't answer in time");
+          expect(
+            await invoke(CANOPY_METHOD_CHANNELS.resumeStarted, fakeSender(1), first)
+          ).toBeNull();
+
+          // Taken up: the start's deadline no longer applies, the launch's does.
+          const taken = refusal(
+            invoke(CANOPY_METHOD_CHANNELS.restoreTrashed, fakeSender(1), "run-1", target)
+          );
+          await vi.waitFor(() => expect(view.send).toHaveBeenCalledTimes(2));
+          const second = (view.send.mock.calls[1]![1] as { requestId: string }).requestId;
+          await vi.advanceTimersByTimeAsync(20_000);
+          const budget = (await invoke(
+            CANOPY_METHOD_CHANNELS.resumeStarted,
+            fakeSender(1),
+            second
+          )) as number;
+          await vi.advanceTimersByTimeAsync(budget - 1);
+          let settled = false;
+          void taken.then(() => {
+            settled = true;
+          });
+          await vi.advanceTimersByTimeAsync(0);
+          expect(settled).toBe(false);
+          await vi.advanceTimersByTimeAsync(1);
+          expect(await taken).toContain("didn't finish resuming it in time");
+        } finally {
+          vi.useRealTimers();
+        }
       });
 
       it("keeps an ended run whose resume failed, saying why", async () => {

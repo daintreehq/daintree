@@ -398,7 +398,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "canopy:resume-started": {
     args: [requestId: string];
-    result: boolean;
+    result: number | null;
   };
   "canopy:retry-model": {
     args: [];
