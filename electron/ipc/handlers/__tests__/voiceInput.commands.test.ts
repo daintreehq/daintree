@@ -119,7 +119,6 @@ vi.mock("../../../services/VoiceCorrectionService.js", () => ({
     this.detectFileLinkTokens = function () {
       return Promise.resolve([]);
     };
-    this.setSessionSignal = function () {};
     this.warm = function (settings: unknown) {
       shared.warmCalls.push(settings);
       return Promise.resolve();

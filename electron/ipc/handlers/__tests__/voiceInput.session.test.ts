@@ -35,8 +35,16 @@ const shared = vi.hoisted(() => ({
   drain: null as null | Promise<void>,
   /** Settles a deferred drain, as the real provider's stop() does. */
   endDrain: null as null | (() => void),
-  /** Every signal the correction service was bound to, in order. */
-  signals: [] as Array<AbortSignal | null>,
+  /** Cleanup turned on in the voice settings. */
+  correctionEnabled: false,
+  /** Every cleanup request that reached the correction service, still open. */
+  cleanups: [] as Array<{
+    rawText: string;
+    signal: AbortSignal | undefined;
+    finish: (text: string) => void;
+  }>,
+  /** When set, the project vocabulary read waits on this. */
+  vocabulary: null as null | Promise<never[]>,
   assembleKeyterms: null as null | (() => Promise<string[]>),
   /** The start context svc.start() was last handed: OpenAI's pending terms. */
   startContext: undefined as undefined | { keyterms?: Promise<string[]> },
@@ -98,10 +106,29 @@ vi.mock("../../../services/VoiceCorrectionService.js", () => ({
   VoiceCorrectionService: function VoiceCorrectionService(this: Record<string, unknown>) {
     this.warm = () => Promise.resolve();
     this.preconnect = () => {};
-    this.setSessionSignal = function (signal: AbortSignal | null) {
-      shared.signals.push(signal);
+    // Settles as failed once its signal aborts, as a real request does.
+    this.correct = function (
+      request: { rawText: string },
+      _settings: unknown,
+      signal?: AbortSignal
+    ) {
+      return new Promise((resolve) => {
+        const fail = () =>
+          resolve({ action: "no_change", confirmedText: request.rawText, failed: true });
+        if (signal?.aborted) return fail();
+        signal?.addEventListener("abort", fail, { once: true });
+        shared.cleanups.push({
+          rawText: request.rawText,
+          signal,
+          finish: (text) => resolve({ action: "replace", confirmedText: text }),
+        });
+      });
     };
   },
+}));
+
+vi.mock("../../../services/projectVoiceDictionary.js", () => ({
+  readProjectVoiceDictionary: vi.fn(() => shared.vocabulary ?? Promise.resolve([])),
 }));
 
 vi.mock("../../../services/ProjectStore.js", () => ({
@@ -130,6 +157,7 @@ vi.mock("../../../store.js", () => ({
             openaiApiKey: "sk-test",
             deepgramApiKey: "dg-test",
             transcriptionProvider: shared.transcriptionProvider,
+            correctionEnabled: shared.correctionEnabled,
           }
         : undefined
     ),
@@ -219,6 +247,10 @@ function cancel(sender: FakeSender, sessionId: string) {
   return getHandler(CHANNELS.VOICE_INPUT_CANCEL)({ sender }, sessionId);
 }
 
+function correct(sender: FakeSender, sessionId: string, rawText: string) {
+  return getHandler(CHANNELS.VOICE_INPUT_CORRECT)({ sender }, { rawText, sessionId });
+}
+
 function flush(sender: FakeSender, sessionId: string) {
   return getHandler(CHANNELS.VOICE_INPUT_FLUSH_PARAGRAPH)({ sender }, sessionId);
 }
@@ -295,7 +327,9 @@ describe("voiceInput — session identity", () => {
     shared.startResult = { ok: true };
     shared.drain = null;
     shared.endDrain = null;
-    shared.signals = [];
+    shared.correctionEnabled = false;
+    shared.cleanups = [];
+    shared.vocabulary = null;
     shared.assembleKeyterms = null;
     shared.startContext = undefined;
     shared.transcriptionProvider = "openai";
@@ -785,24 +819,160 @@ describe("voiceInput — session identity", () => {
     expect(shared.calls).toEqual(["start:a", "drain", "start:c", "chunk:2"]);
   });
 
-  it("binds the new session's correction signal only once the drain hands over", async () => {
-    await start(ownerA, "a");
-    const signalA = shared.signals.at(-1)!;
-    const finishDrain = deferDrain();
-    const startingB = start(ownerB, "b");
-    await settle();
+  describe("cleanup after a stop", () => {
+    beforeEach(() => {
+      shared.correctionEnabled = true;
+    });
 
-    // A's file-link detection during its drain still runs under A's signal.
-    expect(shared.signals.at(-1)).toBe(signalA);
-    expect(signalA.aborted).toBe(false);
+    // The cleanup request A's correction reached the service with.
+    const requestFor = async (rawText: string) => {
+      await vi.waitFor(() => expect(shared.cleanups.map((c) => c.rawText)).toContain(rawText));
+      return shared.cleanups.find((c) => c.rawText === rawText)!;
+    };
 
-    finishDrain();
-    await startingB;
-    const signalB = shared.signals.at(-1);
-    expect(signalA.aborted).toBe(true);
-    expect(signalB).toBeInstanceOf(AbortSignal);
-    expect(signalB).not.toBe(signalA);
-    expect(signalB?.aborted).toBe(false);
+    // A follow-up pressed around A's stop: how it starts, and how it ends.
+    const followUps: Array<[string, () => Promise<unknown>, () => unknown]> = [
+      ["stops", () => start(ownerA, "b"), () => stop(ownerA, "b")],
+      ["is cancelled", () => start(ownerA, "b"), () => cancel(ownerA, "b")],
+      [
+        "fails to start",
+        () => {
+          shared.startResult = { ok: false, error: "OpenAI API key not configured" };
+          return start(ownerA, "b");
+        },
+        () => {},
+      ],
+      ["runs in another view that goes away", () => start(ownerB, "b"), () => ownerB.destroy()],
+    ];
+
+    const expectLanded = async (
+      cleanupA: Promise<unknown>,
+      requestA: Awaited<ReturnType<typeof requestFor>>
+    ) => {
+      expect(getLiveVoiceSession()).toBeNull();
+      expect(requestA.signal?.aborted).toBe(false);
+      requestA.finish("Fix the bug.");
+      await expect(cleanupA).resolves.toMatchObject({
+        action: "replace",
+        correctedText: "Fix the bug.",
+      });
+    };
+
+    it.each(followUps)(
+      "keeps a dictation's cleanup running when the next one %s while it's out",
+      async (_label, startB, endB) => {
+        await start(ownerA, "a");
+        await stop(ownerA, "a");
+        const cleanupA = correct(ownerA, "a", "fix the bug");
+        const requestA = await requestFor("fix the bug");
+
+        await startB();
+        await endB();
+        await expectLanded(cleanupA, requestA);
+      }
+    );
+
+    it.each(followUps)(
+      "keeps a dictation's cleanup running when the next one %s while it reads its context",
+      async (_label, startB, endB) => {
+        shared.projects.set(ownerA.id, "proj-a");
+        let readVocabulary!: () => void;
+        shared.vocabulary = new Promise((resolve) => {
+          readVocabulary = () => resolve([]);
+        });
+        await start(ownerA, "a");
+        await stop(ownerA, "a");
+        const cleanupA = correct(ownerA, "a", "fix the bug");
+        await settle();
+        expect(shared.cleanups).toEqual([]);
+
+        await startB();
+        readVocabulary();
+        const requestA = await requestFor("fix the bug");
+        await endB();
+        await expectLanded(cleanupA, requestA);
+      }
+    );
+
+    // Pressed again while A's stop was still draining: B is up before A's
+    // cleanup is asked for.
+    it.each(followUps)(
+      "keeps a dictation's cleanup asked for after the next one starts running when it %s",
+      async (_label, startB, endB) => {
+        await start(ownerA, "a");
+        await stop(ownerA, "a");
+        await startB();
+        const cleanupA = correct(ownerA, "a", "fix the bug");
+        const requestA = await requestFor("fix the bug");
+
+        await endB();
+        await expectLanded(cleanupA, requestA);
+      }
+    );
+
+    it("cancels only the cleanup whose view goes away", async () => {
+      await start(ownerA, "a");
+      await stop(ownerA, "a");
+      const cleanupA = correct(ownerA, "a", "fix the bug");
+      await start(ownerB, "b");
+      await stop(ownerB, "b");
+      const cleanupB = correct(ownerB, "b", "ship it");
+      const [requestA, requestB] = [await requestFor("fix the bug"), await requestFor("ship it")];
+
+      ownerA.destroy();
+
+      expect(requestA.signal?.aborted).toBe(true);
+      await expect(cleanupA).resolves.toMatchObject({ failed: true });
+      expect(requestB.signal?.aborted).toBe(false);
+      requestB.finish("Ship it.");
+      await expect(cleanupB).resolves.toMatchObject({ correctedText: "Ship it." });
+    });
+
+    it("sends nothing for a cleanup whose view went away while it read its context", async () => {
+      shared.projects.set(ownerA.id, "proj-a");
+      let readVocabulary!: () => void;
+      shared.vocabulary = new Promise((resolve) => {
+        readVocabulary = () => resolve([]);
+      });
+      await start(ownerA, "a");
+      await stop(ownerA, "a");
+      const cleanupA = correct(ownerA, "a", "fix the bug");
+      await settle();
+
+      ownerA.destroy();
+      readVocabulary();
+
+      await expect(cleanupA).resolves.toEqual({
+        action: "no_change",
+        correctedText: "fix the bug",
+        failed: true,
+      });
+      expect(shared.cleanups).toEqual([]);
+    });
+
+    it("stops watching the view once the cleanup has replied", async () => {
+      await start(ownerA, "a");
+      await stop(ownerA, "a");
+      const cleanupA = correct(ownerA, "a", "fix the bug");
+      const requestA = await requestFor("fix the bug");
+      requestA.finish("Fix the bug.");
+      await cleanupA;
+
+      ownerA.destroy();
+      expect(requestA.signal?.aborted).toBe(false);
+    });
+
+    it("cancels a cleanup still out when the handlers are unregistered", async () => {
+      await start(ownerA, "a");
+      await stop(ownerA, "a");
+      const cleanupA = correct(ownerA, "a", "fix the bug");
+      const requestA = await requestFor("fix the bug");
+
+      cleanup();
+
+      expect(requestA.signal?.aborted).toBe(true);
+      await expect(cleanupA).resolves.toMatchObject({ failed: true });
+    });
   });
 
   it("starts the waiting session once a draining view goes away", async () => {

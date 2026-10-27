@@ -58,7 +58,6 @@ vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
 
 vi.mock("../../../services/VoiceCorrectionService.js", () => ({
   VoiceCorrectionService: function VoiceCorrectionService(this: Record<string, unknown>) {
-    this.setSessionSignal = () => {};
     this.correct = (request: Record<string, unknown>, settings: Record<string, unknown>) => {
       shared.correctCalls.push({ request, settings });
       return Promise.resolve({ action: "no_change", confirmedText: request.rawText });
@@ -346,11 +345,12 @@ describe("voiceInput — dictating into a host's pane", () => {
     );
     const [{ request, settings }] = shared.correctCalls;
     expect(request.terminalOutput).toBe(CORRECTION.terminalOutput);
+    // A passage naming no session takes no dictation's names.
     expect(settings).toMatchObject({
       projectName: "Daintree",
       projectPath: "/home/greg/daintree",
       commandTarget: COMMAND_TARGET,
-      knownNames: ["feature-voice-hosts"],
+      knownNames: [],
     });
     expect(settings.customDictionary).toEqual(expect.arrayContaining(["Zustand", "Wispr"]));
     expectNoLocalReads();

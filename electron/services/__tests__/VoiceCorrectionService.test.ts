@@ -610,7 +610,7 @@ describe("VoiceCorrectionService", () => {
     });
   });
 
-  it("returns fallback silently on session abort", async () => {
+  it("returns fallback silently when its request is cancelled", async () => {
     const controller = new AbortController();
     vi.stubGlobal(
       "fetch",
@@ -625,15 +625,49 @@ describe("VoiceCorrectionService", () => {
     );
 
     const svc = new VoiceCorrectionService();
-    svc.setSessionSignal(controller.signal);
 
-    const resultPromise = svc.correct({ rawText: "react is great" }, BASE_SETTINGS);
+    const resultPromise = svc.correct(
+      { rawText: "react is great" },
+      BASE_SETTINGS,
+      controller.signal
+    );
     controller.abort();
 
     const result = await resultPromise;
     expect(result.confirmedText).toBe("react is great");
     expect(result.action).toBe("no_change");
     expect(result.failed).toBe(true);
+  });
+
+  it("cancels only the request whose signal aborts", async () => {
+    const replies: Array<() => void> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(
+        (_url: string, init: RequestInit) =>
+          new Promise((resolve, reject) => {
+            init.signal!.addEventListener("abort", () => reject(init.signal!.reason), {
+              once: true,
+            });
+            replies.push(() =>
+              resolve(makeFetchResponse({ action: "replace", corrected_text: "React is great." }))
+            );
+          })
+      )
+    );
+    const svc = new VoiceCorrectionService();
+    const first = new AbortController();
+    const second = new AbortController();
+
+    const firstResult = svc.correct({ rawText: "react is great" }, BASE_SETTINGS, first.signal);
+    const secondResult = svc.correct({ rawText: "react is great" }, BASE_SETTINGS, second.signal);
+    await vi.waitFor(() => expect(replies).toHaveLength(2));
+    second.abort();
+    replies[0]!();
+
+    expect(await firstResult).toMatchObject({ confirmedText: "React is great." });
+    expect((await firstResult).failed).toBeUndefined();
+    expect(await secondResult).toMatchObject({ confirmedText: "react is great", failed: true });
   });
 
   describe("meaning guards", () => {
@@ -1368,43 +1402,6 @@ describe("VoiceCorrectionService", () => {
       expect(result).toEqual([]);
     });
 
-    it("outlives the session signal, so a stop doesn't cancel the final utterance", async () => {
-      const session = new AbortController();
-      let respond: (() => void) | null = null;
-      vi.stubGlobal(
-        "fetch",
-        vi.fn().mockImplementation(
-          (_url: string, init: RequestInit) =>
-            new Promise((resolve, reject) => {
-              init.signal!.addEventListener("abort", () => reject(init.signal!.reason), {
-                once: true,
-              });
-              respond = () =>
-                resolve({
-                  ok: true,
-                  json: async () => ({
-                    output_text: JSON.stringify({
-                      file_references: [{ description: "input bar" }],
-                    }),
-                  }),
-                });
-            })
-        )
-      );
-
-      const svc = new VoiceCorrectionService();
-      svc.setSessionSignal(session.signal);
-      const resultPromise = svc.detectFileLinkTokens(
-        "link to input bar",
-        { apiKey: "sk-test" },
-        new AbortController().signal
-      );
-      session.abort();
-      respond!();
-
-      expect(await resultPromise).toEqual([{ description: "input bar" }]);
-    });
-
     it("returns empty array silently when its signal aborts", async () => {
       const controller = new AbortController();
       vi.stubGlobal(
@@ -1558,23 +1555,6 @@ describe("VoiceCorrectionService.rewrite", () => {
     expect(await svc.rewrite(request, BASE_SETTINGS)).toEqual({ status: "failed" });
 
     expect(JSON.stringify(vi.mocked(logWarn).mock.calls)).not.toMatch(/secret/);
-  });
-
-  it("is not cancelled by the recording session's signal", async () => {
-    const session = new AbortController();
-    const svc = new VoiceCorrectionService();
-    svc.setSessionSignal(session.signal);
-    session.abort();
-    const fetchMock = vi.fn().mockResolvedValue(rewriteResponse("replace", "Shorter."));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const outcome = await svc.rewrite(
-      { selectedText: "a long sentence", instruction: "shorter" },
-      BASE_SETTINGS
-    );
-
-    expect(outcome).toEqual({ status: "replace", text: "Shorter." });
-    expect((fetchMock.mock.calls[0]![1].signal as AbortSignal).aborted).toBe(false);
   });
 });
 
@@ -1837,10 +1817,9 @@ describe("VoiceCorrectionService timing and warm-up", () => {
     vi.stubGlobal("fetch", fetchMock);
     const svc = new VoiceCorrectionService();
     const controller = new AbortController();
-    svc.setSessionSignal(controller.signal);
 
     svc.preconnect();
-    const result = svc.correct({ rawText: "fix it" }, BASE_SETTINGS);
+    const result = svc.correct({ rawText: "fix it" }, BASE_SETTINGS, controller.signal);
     controller.abort();
     await vi.advanceTimersByTimeAsync(1_000);
 
