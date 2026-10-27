@@ -56,7 +56,7 @@ const MIN_OUTPUT_TOKENS = 1024;
 const OUTPUT_TOKENS_PER_CHAR = 1.5;
 const OUTPUT_TOKENS_OVERHEAD = 256;
 const FILE_LINK_MAX_OUTPUT_TOKENS = 256;
-const PROMPT_CACHE_PREFIX = "voice-correction-v17";
+const PROMPT_CACHE_PREFIX = "voice-correction-v18";
 // OpenAI rejects a prompt_cache_key longer than 64 characters.
 const PROMPT_CACHE_KEY_MAX_LENGTH = 64;
 const FILE_LINK_DETECTION_TIMEOUT_MS = 4000;
@@ -64,7 +64,7 @@ const REWRITE_CACHE_PREFIX = "voice-rewrite-v1";
 const MIN_REWRITE_TIMEOUT_MS = 10000;
 const FILE_LINK_CACHE_PREFIX = "voice-file-link-v2";
 const PROMPT_TAG_OPEN_RE =
-  /<(?=\/?(?:recent_prompts|terminal_output|agent_last_reply|code_names|target|job|confirmed_history|uncertain|pause)\b)/gi;
+  /<(?=\/?(?:recent_prompts|terminal_output|agent_last_reply|code_names|target|following_text|job|confirmed_history|uncertain|pause)\b)/gi;
 const OPENAI_ORIGIN = "https://api.openai.com/";
 const RESPONSES_URL = "https://api.openai.com/v1/responses";
 // OpenAI keeps an unused prefix cached for five to ten minutes. Checked once a
@@ -211,6 +211,8 @@ export interface VoiceCorrectionSettings {
 export interface VoiceCorrectionRequest {
   rawText: string;
   recentContext?: string[];
+  /** The draft after the passage, bounded; context cleanup never rewrites. User content, so never logged. */
+  followingText?: string;
   /** The prompts last sent from the dictated composer, oldest first, bounded; user content, so never logged. */
   recentPrompts?: string[];
   /** What the dictated terminal recently printed, redacted and bounded; evidence for what was heard, never text to correct. */
@@ -716,6 +718,14 @@ export class VoiceCorrectionService {
     );
     parts.push(`<target>\n${targetText}\n</target>`);
 
+    if (request.followingText?.trim()) {
+      // Draft text, possibly typed: it must not be able to close its own block
+      // or open a <target> of its own. A leading newline says the target ends
+      // its line, so it stays.
+      const following = request.followingText.trimEnd().replace(PROMPT_TAG_OPEN_RE, "‹");
+      parts.push(`<following_text>\n${following}\n</following_text>`);
+    }
+
     if (request.codeNames && request.codeNames.length > 0) {
       // Names come from the project's files, so each is one quoted line that
       // can't close the block or open another.
@@ -1027,6 +1037,7 @@ export class VoiceCorrectionService {
         ...request,
         ...(rules.core.includes("<code_names>") ? {} : { codeNames: undefined }),
         ...(rules.core.includes("<agent_last_reply>") ? {} : { agentReply: undefined }),
+        ...(rules.core.includes("<following_text>") ? {} : { followingText: undefined }),
         pauses,
       },
       settings.model
@@ -1036,6 +1047,7 @@ export class VoiceCorrectionService {
     logDebug(`${P} Calling Responses API`, {
       model: settings.model,
       contextLen: request.recentContext?.length ?? 0,
+      followingTextLen: request.followingText?.length ?? 0,
       recentPromptCount: request.recentPrompts?.length ?? 0,
       recentPromptsLen,
       terminalOutputLen: request.terminalOutput?.length ?? 0,

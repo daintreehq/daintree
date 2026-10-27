@@ -96,6 +96,7 @@ const shared = vi.hoisted(() => ({
   correctionTerminalOutput: undefined as string | undefined,
   correctionAgentReply: undefined as unknown,
   correctionRecentPrompts: undefined as string[] | undefined,
+  correctionFollowingText: undefined as string | undefined,
   correctionProjectName: undefined as string | undefined,
 }));
 
@@ -158,6 +159,7 @@ vi.mock("../../../services/VoiceCorrectionService.js", () => ({
         terminalOutput?: string;
         agentReply?: unknown;
         recentPrompts?: string[];
+        followingText?: string;
       },
       settings: {
         customDictionary: string[];
@@ -170,6 +172,7 @@ vi.mock("../../../services/VoiceCorrectionService.js", () => ({
       shared.correctionTerminalOutput = request.terminalOutput;
       shared.correctionAgentReply = request.agentReply;
       shared.correctionRecentPrompts = request.recentPrompts;
+      shared.correctionFollowingText = request.followingText;
       shared.correctionDictionary = settings.customDictionary;
       shared.correctionNames = settings.knownNames;
       shared.correctionRepositoryNames = settings.repositoryNames;
@@ -823,6 +826,7 @@ describe("voiceInput — keyterm target", () => {
     shared.correctionAgentReply = undefined;
     agentReplyFixture.reply = null;
     shared.correctionRecentPrompts = undefined;
+    shared.correctionFollowingText = undefined;
     shared.correctionProjectName = undefined;
     shared.drainPromise = null;
     sender.destroyed = false;
@@ -1448,6 +1452,35 @@ describe("voiceInput — keyterm target", () => {
       ]) {
         await expect(correct({ recentPrompts })).resolves.toMatchObject({ action: "no_change" });
         expect(shared.correctionRecentPrompts).toBeUndefined();
+      }
+    });
+  });
+
+  describe("the draft after the passage (#14899)", () => {
+    const correct = (followingText: unknown) => {
+      shared.correctionFollowingText = "stale";
+      return getHandler("voice-input:correct")(fakeEvent, {
+        rawText: "make sure the settings page loads",
+        terminalId: "t-1",
+        followingText,
+      });
+    };
+
+    beforeEach(() => {
+      shared.voiceInput = { correctionEnabled: true };
+    });
+
+    it("sends it to cleanup, up to its bound", async () => {
+      await correct("and that the theme picker opens.");
+      expect(shared.correctionFollowingText).toBe("and that the theme picker opens.");
+      await correct("x".repeat(200));
+      expect(shared.correctionFollowingText).toBe("x".repeat(200));
+    });
+
+    it("still cleans up, without it, when it doesn't validate", async () => {
+      for (const followingText of ["x".repeat(201), 42, ""]) {
+        await expect(correct(followingText)).resolves.toMatchObject({ action: "no_change" });
+        expect(shared.correctionFollowingText).toBeUndefined();
       }
     });
   });

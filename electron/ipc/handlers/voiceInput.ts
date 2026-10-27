@@ -2619,6 +2619,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       request: {
         rawText: request.rawText,
         recentContext: request.recentContext,
+        ...(request.followingText ? { followingText: request.followingText } : {}),
         ...(recentPrompts ? { recentPrompts } : {}),
         ...(terminalOutput ? { terminalOutput } : {}),
         ...(agentReply ? { agentReply } : {}),

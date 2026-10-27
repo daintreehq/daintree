@@ -134,6 +134,10 @@ export interface CleanupCase {
   /** The words each pause the speaker made comes straight after, located in `raw` in order (#14898). */
   pauses?: string[];
   recentContext?: string[];
+  /** The draft after a passage dictated into the middle of one, as production sends it (#14899). */
+  followingText?: string;
+  /** Casing and punctuation count: ready only as an accepted reference, character for character. */
+  exact?: true;
   /** The prompts last sent to the terminal, oldest first, as production sends them (#14855). */
   recentPrompts?: string[];
   terminalOutput?: string;
@@ -738,6 +742,58 @@ const CONTEXT: readonly AuthoredCase[] = [
       newerRecordsFollow: true,
       observedState: { state: "waiting", waitingReason: "question", changedMinutesAgo: 0 },
     },
+  },
+  // Dictated into the middle of a sentence (#14899): what follows carries it
+  // on, so the passage neither opens nor closes one.
+  {
+    id: "context-following-continues:openai",
+    style: "openai",
+    source: "context",
+    raw: "Make sure the settings page still loads.",
+    reference: "make sure the settings page still loads",
+    fixes: { "make sure": "form" },
+    exact: true,
+    recentContext: ["Before you merge,"],
+    followingText: "and that the theme picker opens.",
+    startsPrompt: false,
+  },
+  // A bracket the draft already closes gets no full stop inside it.
+  {
+    id: "context-following-bracket:deepgram",
+    style: "deepgram",
+    source: "context",
+    raw: "Times out on Windows.",
+    reference: "times out on Windows",
+    fixes: { "times out": "form" },
+    keep: ["Windows"],
+    exact: true,
+    recentContext: ["Rerun the flaky spec (the one that"],
+    followingText: ") before you merge.",
+    startsPrompt: false,
+  },
+  // The passage ends on a word the draft carries on from: it isn't a hanging
+  // word to drop, and the rest of the sentence isn't the passage's to take.
+  {
+    id: "context-following-hanging:openai",
+    style: "openai",
+    source: "context",
+    raw: "Add a retry to the upload and.",
+    reference: "Add a retry to the upload and",
+    keep: ["upload and"],
+    exact: true,
+    followingText: "log every attempt with its status code.",
+  },
+  // A line typed after the passage is the draft's next instruction, not more
+  // of the passage.
+  {
+    id: "context-following-apart:deepgram",
+    style: "deepgram",
+    source: "context",
+    raw: "Um, can you check why the login test fails?",
+    reference: "Can you check why the login test fails?",
+    drops: ["um"],
+    exact: true,
+    followingText: "\nDon't touch the auth service while you're in there.",
   },
 ];
 

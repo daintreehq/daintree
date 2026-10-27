@@ -29,7 +29,7 @@ export const VOICE_CLEANUP_SCHEMA_VERSION = 4;
 // rescore still reads them and lands each saved reply once, as schema 4 does.
 export const VOICE_CLEANUP_READABLE_SCHEMAS: readonly number[] = [3, VOICE_CLEANUP_SCHEMA_VERSION];
 // Bump when a definition below changes, so runs scored differently aren't compared.
-export const VOICE_CLEANUP_SCORING_VERSION = 7;
+export const VOICE_CLEANUP_SCORING_VERSION = 8;
 
 /** Today's send yardstick (#14793): the wait a send used to give cleanup. */
 export const SEND_WAIT_TARGET_MS = 2000;
@@ -355,6 +355,8 @@ export function scoreText(entry: CleanupCase, text: string): TextScore {
 
   const lines = lineWords(text);
   const matchesReference = references.some((reference) => sameLines(lines, lineWords(reference)));
+  // Words can't see a full stop the draft after the passage rules out.
+  const exact = entry.exact ? references.includes(text.trim()) : true;
   const longest = longestSentence(text);
   const split = entry.maxSentenceWords === undefined ? null : longest <= entry.maxSentenceWords;
   const missedBreaks = (entry.breaks ?? []).filter((phrase) => !endsSentenceAfter(text, phrase));
@@ -388,7 +390,8 @@ export function scoreText(entry: CleanupCase, text: string): TextScore {
       lostKeeps.length === 0 &&
       split !== false &&
       missedBreaks.length === 0 &&
-      splitSpans.length === 0,
+      splitSpans.length === 0 &&
+      exact,
   };
 }
 

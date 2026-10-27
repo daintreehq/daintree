@@ -4066,6 +4066,7 @@ export interface GeneratedIpcInvokeMap {
           sessionId?: string | undefined;
           outsideView?: true | undefined;
           recentContext?: string[] | undefined;
+          followingText?: string | undefined;
           recentPrompts?: string[] | undefined;
           startsPrompt?: boolean | undefined;
           uncertain?: { from: number; to: number }[] | undefined;

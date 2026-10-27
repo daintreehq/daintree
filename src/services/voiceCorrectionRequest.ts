@@ -9,6 +9,7 @@ export interface CorrectionRequest {
   terminalId?: string;
   outsideView?: true;
   recentContext?: string[];
+  followingText?: string;
   recentPrompts?: string[];
   startsPrompt: boolean;
   sessionId?: string;
@@ -34,6 +35,7 @@ export function correctionRequest(
     rawText: passage.text,
     ...context,
     ...(passage.context ? { recentContext: [passage.context] } : {}),
+    ...(passage.following ? { followingText: passage.following } : {}),
     ...(recentPrompts.length > 0 ? { recentPrompts } : {}),
     startsPrompt: passage.startsPrompt,
     ...(sessionId ? { sessionId } : {}),
