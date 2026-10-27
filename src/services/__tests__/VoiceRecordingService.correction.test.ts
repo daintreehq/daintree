@@ -465,6 +465,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     say("and fix the lexr too");
     await service.stop();
     expect(correct).toHaveBeenLastCalledWith({
+      sessionId: expect.any(String),
       rawText: "and fix the lexr too",
       recentContext: ["look at the parsr in /src/parser.ts\n"],
       startsPrompt: false,
@@ -501,6 +502,27 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     expect(draft("panel-1")).toBe(
       "Look at the parser /src/parser.ts\n\nand the lexer /tmp/screenshot.png then the tokenizer."
     );
+  });
+
+  it("hands the composer only what cleanup changed in each passage", async () => {
+    const { service, dictate, say, draft, flush, inputStore } = await setup();
+    correct.mockImplementation(async ({ rawText }) => ({
+      action: "replace",
+      correctedText: rawText.replace("parsr", "parser").replace("lexr", "lexer"),
+    }));
+
+    dictate("panel-1", "the parsr");
+    inputStore.getState().setDraftInput("panel-1", draft("panel-1") + " /tmp/screenshot.png ");
+    say("the lexr");
+    await service.stop();
+    await flush();
+
+    expect(draft("panel-1")).toBe("the parser /tmp/screenshot.png the lexer");
+    const { takeLandedCorrection } = await import("@/services/voiceCorrectionLanding");
+    expect(takeLandedCorrection("panel-1", undefined, draft("panel-1"))?.write?.changes).toEqual([
+      { from: 8, to: 8, insert: "e" },
+      { from: 37, to: 37, insert: "e" },
+    ]);
   });
 
   it("leaves only the passage edited while its cleanup was out raw", async () => {

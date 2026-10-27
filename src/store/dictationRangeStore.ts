@@ -501,7 +501,10 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
   },
 
   expectDraftChange: (panelId, projectId, before, after, change) => {
-    const changes = "insert" in change ? [change] : [...change].sort((a, b) => b.from - a.from);
+    // A replacement goes ahead of an insertion at its start: the insertion is
+    // the earlier of the two in the draft.
+    const changes =
+      "insert" in change ? [change] : [...change].sort((a, b) => b.from - a.from || b.to - a.to);
     expectedChanges.set(makeDraftKey(panelId, projectId), { before, after, changes });
   },
 

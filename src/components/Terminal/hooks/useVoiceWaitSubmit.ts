@@ -5,8 +5,7 @@ import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useVoiceRecordingStore } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
 import { usePanelStore } from "@/store/panelStore";
-import { takeLandedCorrection } from "@/services/voiceCorrectionLanding";
-import { minimalDocChange } from "@/lib/textRangeMapping";
+import { outsideWriteChange, takeLandedCorrection } from "@/services/voiceCorrectionLanding";
 import {
   outsideDraftWrite,
   selectionAfterOutsideWrite,
@@ -234,7 +233,7 @@ export function useVoiceWaitSubmit({
               makeDraftKey(terminalId, projectId),
               draft
             );
-            const change = minimalDocChange(finalView.state.doc.toString(), draft);
+            const change = outsideWriteChange(finalView.state.doc.toString(), draft, landed);
             if (change !== null) {
               const selection = selectionAfterOutsideWrite(
                 finalView.state,

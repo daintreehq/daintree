@@ -1,5 +1,5 @@
 import { makeDraftKey } from "@/lib/draftKey";
-import type { TextChange } from "@/lib/textRangeMapping";
+import { minimalDocChange, type TextChange } from "@/lib/textRangeMapping";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 
 /**
@@ -56,6 +56,22 @@ export function takeLandedCorrection(
   landed.delete(key);
   const { from, correctedText } = correction;
   return draft.slice(from, from + correctedText.length) === correctedText ? correction : null;
+}
+
+/**
+ * The change that brings a composer showing `shown` up to `draft`. A landed
+ * correction that is exactly the write between them goes in passage by
+ * passage, so the chips between its passages stay; anything else is the one
+ * span that differs.
+ */
+export function outsideWriteChange(
+  shown: string,
+  draft: string,
+  landed: LandedCorrection | null
+): TextChange | readonly TextChange[] | null {
+  const write = landed?.write;
+  if (write && write.before === shown && write.after === draft) return write.changes;
+  return minimalDocChange(shown, draft);
 }
 
 /**
