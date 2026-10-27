@@ -1305,6 +1305,8 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
       request: {
         rawText: string;
         recentContext?: string[];
+        /** The prompts last sent to `terminalId`, oldest first, bounded: sent to OpenAI with the passage, never logged. */
+        recentPrompts?: string[];
         /** The panel the passage was dictated into: it picks the project vocabulary and the agent's commands. */
         terminalId?: string;
         /** Nothing but whitespace comes before the passage in the draft. */

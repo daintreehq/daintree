@@ -441,6 +441,9 @@ export function useTokenResolution({
         // the instruction was part of what was sent.
         const authored = options?.compose ? options.compose(text) : text;
         latest.addToHistory(latest.terminalId, authored, latest.projectId);
+        // Apart from recall history, which reorders repeats: cleanup reads the
+        // sends to this terminal in the order they went.
+        useTerminalInputStore.getState().recordSentPrompt(latest.terminalId, authored);
         latest.resetHistoryIndex(latest.terminalId, latest.projectId);
         if (latest.projectId) {
           useCommandHistoryStore

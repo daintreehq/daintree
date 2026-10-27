@@ -2,6 +2,7 @@ import { yieldToScheduler } from "@/lib/schedulerYield";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
+import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { terminalClient } from "@/clients";
 import {
   peek as peekTerminalService,
@@ -150,6 +151,8 @@ function noteRejected(terminalId: string): void {
 interface ResolvedSubmission {
   terminalId: string;
   payload: string;
+  /** What the user wrote for this target, before its recipe variables were filled. */
+  authored: string;
 }
 
 function resolveSubmissions(
@@ -163,11 +166,20 @@ function resolveSubmissions(
     const baseResolved = isCrossHostTargetId(terminalId)
       ? draft
       : replaceRecipeVariables(draft, buildFleetBroadcastRecipeContext(terminalId) ?? {});
+    const override = perTargetOverrides?.[terminalId];
     return {
       terminalId,
-      payload: perTargetOverrides?.[terminalId] ?? baseResolved,
+      payload: override ?? baseResolved,
+      authored: override ?? draft,
     };
   });
+}
+
+// A send that landed is one its terminal's dictations can be cleaned up
+// against. Another host's agent keeps its own.
+function noteSent(submission: ResolvedSubmission): void {
+  if (isCrossHostTargetId(submission.terminalId)) return;
+  useTerminalInputStore.getState().recordSentPrompt(submission.terminalId, submission.authored);
 }
 
 function shouldBatchAcrossTargets(resolved: ResolvedSubmission[]): boolean {
@@ -287,6 +299,7 @@ export async function executeFleetBroadcast(
             // `onEnterPressed` is a no-op if the canonical state machine has
             // already transitioned the terminal to working from PTY echo.
             noteSubmitted(terminalId);
+            noteSent(batch[j]!);
           } else {
             // Submit rejected — the PTY never received bytes, so revert
             // the synthetic `directing` we set above rather than leaving
@@ -315,6 +328,7 @@ export async function executeFleetBroadcast(
         const terminalId = resolved[j]!.terminalId;
         if (r.status === "fulfilled") {
           noteSubmitted(terminalId);
+          noteSent(resolved[j]!);
         } else {
           noteRejected(terminalId);
         }
