@@ -402,7 +402,10 @@ describe("voiceInput — the target agent's commands", () => {
       expect(sent.filter((p) => p.commandText)).toEqual([
         expect.objectContaining({ commandText: "/compact" }),
       ]);
-      expect(new Set(sent.map((p) => p.itemId))).toEqual(new Set(["A", "B"]));
+      expect(sent.map((p) => ({ itemId: p.itemId, text: p.text }))).toEqual([
+        { itemId: "B", text: "" },
+        { itemId: "A", text: "Slash. compact." },
+      ]);
     }
   );
 

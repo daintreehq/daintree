@@ -1369,7 +1369,12 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         !this.isSpeaking;
       const endsAtPause = !settled && this.pauseItemIds.has(itemId);
       this.pauseItemIds.delete(itemId);
-      this.emitCompletion(transcript, itemId, endOfSpeech, endsAtPause);
+      this.emitCompletion(transcript, itemId, {
+        ...(endOfSpeech ? { endOfSpeech: true } : {}),
+        ...(endsAtPause ? { endsAtPause: true } : {}),
+        // Its transcript never came, so words around it may be missing.
+        ...(settled ? { incomplete: true } : {}),
+      });
     }
     const blockingItemId = this.heldCompletions.size > 0 ? (this.commitOrder[0] ?? null) : null;
     if (this.heldCompletionTimer && this.heldCompletionTimerItemId === blockingItemId) return;
@@ -1398,19 +1403,13 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   private emitCompletion(
     transcript: string,
     itemId?: string,
-    endOfSpeech = false,
-    endsAtPause = false
+    boundary: { endOfSpeech?: true; endsAtPause?: true; incomplete?: true } = {}
   ): void {
-    const boundary = {
-      ...(endOfSpeech ? { endOfSpeech: true } : {}),
-      ...(endsAtPause ? { endsAtPause: true } : {}),
-    };
     if (transcript) {
       logDebug(`${P} Emitting complete transcript to renderer`, {
         itemId,
         length: transcript.length,
-        endOfSpeech,
-        endsAtPause,
+        ...boundary,
       });
       this.emit({
         type: "complete",

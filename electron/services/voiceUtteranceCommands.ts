@@ -11,9 +11,9 @@
  * there; only end of speech can carry a send.
  */
 import {
-  extractSendCommand,
   pendingCommandStart,
   trailingDictationCommands,
+  trailingSendCommand,
 } from "./voiceDictationCommands.js";
 import {
   classifySpokenCommandOpening,
@@ -82,10 +82,6 @@ export class UtteranceCommands {
   // with the clause they opened, and a command never opens after them.
   private said = "";
   private held: HeldSegment[] = [];
-
-  get holding(): boolean {
-    return this.held.length > 0;
-  }
 
   push(
     segment: UtteranceSegment,
@@ -190,24 +186,26 @@ export class UtteranceCommands {
     const opens = this.said === "";
     const open = (emissions: UtteranceEmission[]) =>
       opens ? openUtterance(emissions, options.vocabulary) : emissions;
+    // Words the renderer already has can open a command's clause, but never
+    // be the command: one they ended in was read, or kept as words, then.
+    const held = this.said.length;
     let cut = full.length;
     let send = false;
     if (decide.send && options.spokenCommands) {
-      const command = extractSendCommand(full);
-      if (command.send) {
-        cut = command.text.length;
+      const command = trailingSendCommand(full);
+      if (command && command.phraseAt >= held) {
+        cut = command.cut;
         send = true;
       }
     }
     const read = (end: number) => {
+      const text = full.slice(0, end);
       const chain =
-        decide.breaks && options.spokenCommands
-          ? trailingDictationCommands(full.slice(0, end))
-          : null;
-      // Words the renderer already has stay as they landed.
-      return chain
-        ? { cut: Math.max(chain.start, this.said.length), replacement: chain.replacement }
-        : { cut: Math.max(end, this.said.length), replacement: "" };
+        decide.breaks && options.spokenCommands ? trailingDictationCommands(text) : null;
+      const wordAt = chain ? chain.start + text.slice(chain.start).search(/\S/) : -1;
+      return chain && wordAt >= held
+        ? { cut: Math.max(chain.start, held), replacement: chain.replacement }
+        : { cut: Math.max(end, held), replacement: "" };
     };
     const decided = read(cut);
     const emissions = open(edit(segments, starts, decided));

@@ -85,8 +85,8 @@ export function trailingDictationCommands(
 
 const BREAK_COMMAND_WORDS = COMMAND_MAP.map(([phrase]) => phrase.split(" "));
 const SEND_COMMAND_WORDS = ["send", "it"];
-// A word as the command patterns see one: anything between their separators.
-const COMMAND_WORD_RE = /[^\s.,;:!?]+/g;
+// A word as the command patterns' `\b` sees one, so "this—new" ends in "new".
+const COMMAND_WORD_RE = /\w+/g;
 // More than any chain of commands anyone says in one breath.
 const MAX_PENDING_COMMAND_WORDS = 12;
 
@@ -177,9 +177,19 @@ export interface SendCommandResult {
  *   extractSendCommand("let me review it before you send it") → unchanged, send: false
  */
 export function extractSendCommand(text: string): SendCommandResult {
+  const command = trailingSendCommand(text);
+  return command ? { text: text.slice(0, command.cut), send: true } : { text, send: false };
+}
+
+/**
+ * Where a trailing "send it" that stands as an order sits in `text`: `cut` is
+ * where the text it leaves ends, `phraseAt` where "send" starts. Null when
+ * `text` doesn't end in one.
+ */
+export function trailingSendCommand(text: string): { cut: number; phraseAt: number } | null {
   const match = SEND_COMMAND_RE.exec(text);
-  if (!match) return { text, send: false };
-  const phraseStart = match.index + match[0].search(/send/i);
-  if (isSentenceSendIt(text, phraseStart, text.slice(phraseStart))) return { text, send: false };
-  return { text: text.slice(0, match.index).trimEnd(), send: true };
+  if (!match) return null;
+  const phraseAt = match.index + match[0].search(/send/i);
+  if (isSentenceSendIt(text, phraseAt, text.slice(phraseAt))) return null;
+  return { cut: text.slice(0, match.index).trimEnd().length, phraseAt };
 }

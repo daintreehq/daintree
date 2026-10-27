@@ -3146,7 +3146,80 @@ describe("OpenAITranscriptionProvider — item identity and ordering (#13109)", 
     });
 
     expect(events.filter((e) => e.type === "complete")).toEqual([
-      expect.objectContaining({ text: "", itemId: "item-A", endOfSpeech: true }),
+      { type: "complete", text: "", itemId: "item-A", endOfSpeech: true, endsAtPause: true },
+    ]);
+    service.stop();
+  });
+
+  it("marks an empty segment closed at a pause, but not ending speech once speech resumed", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+
+    const { socket } = await bringSessionReady(service);
+    const worker = latestVadWorker();
+    vadCommitSegment(service, worker);
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    worker.emitSpeechStart();
+    socket.simulateMessage("conversation.item.input_audio_transcription.completed", {
+      item_id: "item-A",
+      transcript: "",
+    });
+
+    expect(events.filter((e) => e.type === "complete")).toEqual([
+      { type: "complete", text: "", itemId: "item-A", endsAtPause: true },
+    ]);
+    service.stop();
+  });
+
+  // Flags follow commits in the order they were sent, however many await an ack.
+  it("matches each acknowledged item to its own commit's pause", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+
+    const { socket } = await bringSessionReady(service);
+    const worker = latestVadWorker();
+    vadCommitSegment(service, worker);
+    feedCommittableAudio(service);
+    worker.emitSpeechStart();
+    vi.advanceTimersByTime(8_000);
+    feedCommittableAudio(service);
+    vi.advanceTimersByTime(8_000);
+    expect(socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")).toHaveLength(3);
+
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    socket.simulateMessage("input_audio_buffer.committed", {
+      item_id: "item-B",
+      previous_item_id: "item-A",
+    });
+    socket.simulateMessage("input_audio_buffer.committed", {
+      item_id: "item-C",
+      previous_item_id: "item-B",
+    });
+    socket.simulateMessage("conversation.item.done", done("item-A", "fix the bug new line"));
+    socket.simulateMessage("conversation.item.done", done("item-B", "and the"));
+    socket.simulateMessage("conversation.item.done", done("item-C", "tests"));
+
+    expect(pauses(events)).toEqual([true, false, false]);
+    service.stop();
+  });
+
+  it("marks a failed segment incomplete, with no boundary of its own", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+
+    const { socket } = await bringSessionReady(service);
+    vadCommitSegment(service, latestVadWorker());
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    socket.simulateMessage("conversation.item.input_audio_transcription.failed", {
+      item_id: "item-A",
+      error: { code: "server_error" },
+    });
+
+    expect(events.filter((e) => e.type === "complete")).toEqual([
+      { type: "complete", text: "", itemId: "item-A", incomplete: true },
     ]);
     service.stop();
   });

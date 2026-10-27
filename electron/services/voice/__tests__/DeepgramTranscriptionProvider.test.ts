@@ -820,13 +820,11 @@ describe("DeepgramTranscriptionProvider", () => {
     socket.simulateMessage(resultsMessage("um", { is_final: false }));
     socket.simulateMessage(resultsMessage("", { is_final: true, speech_final: true }));
 
+    expect(events).toHaveLength(2);
     const [delta, complete] = events;
-    expect(complete).toEqual(
-      expect.objectContaining({ type: "complete", text: "", endOfSpeech: true })
-    );
-    expect(complete && "itemId" in complete ? complete.itemId : null).toBe(
-      delta && "itemId" in delta ? delta.itemId : undefined
-    );
+    const itemId = delta && "itemId" in delta ? delta.itemId : undefined;
+    expect(itemId).toEqual(expect.any(String));
+    expect(complete).toEqual({ type: "complete", text: "", itemId, endOfSpeech: true });
     provider.stop();
   });
 

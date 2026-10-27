@@ -1492,6 +1492,10 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         case "paragraph_boundary":
           releaseHeldSend(session, "literal");
           return;
+        case "error":
+          // Ahead of the error itself, which ends the renderer's dictation.
+          if (voiceEvent.error.severity === "fatal") releaseHeldSend(session, "strip");
+          return;
         case "status":
           // A provider that dies ends the dictation, like a stop.
           if (voiceEvent.status === "error" || voiceEvent.status === "idle") {
@@ -1506,10 +1510,13 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     };
 
     // Runs ahead of forwarding each provider event too: a segment held for
-    // its commands lands before a status or boundary that follows it.
+    // its commands lands before a status or boundary that follows it, and the
+    // utterance read so far is let go, its clause with it.
     const settleUtterance = (voiceEvent: VoiceSessionEvent) => {
-      if (!session.utterance.holding) return;
-      if (voiceEvent.type === "paragraph_boundary") {
+      if (voiceEvent.type === "complete" && voiceEvent.incomplete) {
+        // Its words may be missing, so no command is read across it.
+        session.flushUtterance?.("literal");
+      } else if (voiceEvent.type === "paragraph_boundary") {
         session.flushUtterance?.("literal");
       } else if (voiceEvent.type === "error" && voiceEvent.error.severity === "fatal") {
         session.flushUtterance?.("literal");
@@ -1586,12 +1593,12 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           },
           commandOptions()
         );
-        if (!release) return;
-        if (release.send && sendSettleMs > 0 && session.phase === "active") {
+        if (release?.send && sendSettleMs > 0 && session.phase === "active") {
           holdSend(release);
-        } else {
+        } else if (release) {
           emitRelease(release.emissions, release.send);
         }
+        if (voiceEvent.incomplete) session.flushUtterance?.("literal");
       } else if (voiceEvent.type === "paragraph_boundary") {
         if (session.intent === "rewrite") return;
         target.send(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, {

@@ -344,44 +344,42 @@ export function classifySpokenCommandOpening(
 ): "none" | "pending" | "extendable" | "complete" {
   if (vocabulary.entries.length === 0) return "none";
   const trimmed = text.trim();
-  const match = matchExplicit(trimmed, vocabulary);
-  if (match) {
-    if (trimmed.slice(match.end).trim()) return "complete";
-    const { prefix, key } = match.entry;
-    const longer = vocabulary.entries.some(
-      (entry) =>
-        entry.prefix === prefix && entry.key.length > key.length && entry.key.startsWith(key)
-    );
-    return longer ? "extendable" : "complete";
-  }
-  const from = afterHesitations(trimmed);
-  const words = wordSpans(trimmed, from);
-  if (words.length === 0) return "none";
-  for (const prefix of vocabulary.prefixes) {
-    // Part of a prefix said in more than one word: "forward" of "forward slash".
+  const growing = couldStillName(trimmed, vocabulary);
+  if (matchExplicit(trimmed, vocabulary)) return growing ? "extendable" : "complete";
+  return growing ? "pending" : "none";
+}
+
+/**
+ * Whether more words could still make `text` name a command: a prefix said in
+ * part ("forward" of "forward slash"), or one followed by every word so far of
+ * a longer name ("slash review PR" while `/review-pr-comments` exists).
+ */
+function couldStillName(text: string, vocabulary: VoiceCommandVocabulary): boolean {
+  const from = afterHesitations(text);
+  const words = wordSpans(text, from);
+  if (words.length === 0) return false;
+  return vocabulary.prefixes.some((prefix) => {
     const partial = prefix.spoken.some(
       (form) =>
         words.length < form.length && words.every((span, index) => span.word === form[index])
     );
-    if (partial) return "pending";
-    for (const nameStart of matchPrefix(trimmed, from, prefix)) {
-      const spans = wordSpans(trimmed, nameStart);
-      if (spans.some((span) => span.symbolic) || spans.length > MAX_NAME_WORDS) continue;
+    if (partial) return true;
+    return matchPrefix(text, from, prefix).some((nameStart) => {
+      const spans = wordSpans(text, nameStart);
+      if (spans.some((span) => span.symbolic) || spans.length > MAX_NAME_WORDS) return false;
       const skip = spans.length > 0 && SPOKEN_JOINERS.has(spans[0]!.word) ? 1 : 0;
       const said = spans
         .slice(skip)
         .map((span) => span.word)
         .join("");
-      const named = vocabulary.entries.some(
+      return vocabulary.entries.some(
         (entry) =>
           entry.prefix === prefix.prefix &&
           entry.key.length > said.length &&
           entry.key.startsWith(said)
       );
-      if (named) return "pending";
-    }
-  }
-  return "none";
+    });
+  });
 }
 
 /**

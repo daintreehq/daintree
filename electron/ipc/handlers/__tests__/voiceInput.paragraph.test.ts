@@ -24,6 +24,7 @@ type MockTranscriptionEvent = {
   replace?: boolean;
   endOfSpeech?: boolean;
   endsAtPause?: boolean;
+  incomplete?: boolean;
   uncertain?: Array<{ from: number; to: number }>;
   status?: string;
   message?: string;
@@ -930,6 +931,21 @@ describe("voiceInput — spoken send on Deepgram's short endpoint", () => {
     ]);
   });
 
+  it("lands a held send's words, stripped and unsent, ahead of a fatal error", () => {
+    sentenceEndingInSend();
+    emitTranscriptionEvent({
+      type: "error",
+      error: { severity: "fatal", code: "deepgram_server_error", message: "boom" },
+    });
+    vi.advanceTimersByTime(5000);
+
+    expect(toRenderer().map((m) => m.channel)).toEqual([
+      "voice-input:transcription-complete",
+      "voice-input:error",
+    ]);
+    expect(toRenderer()[0]).toEqual(completion("Fix the login bug"));
+  });
+
   it("waits for a transcript after speech starts, and sends when none comes", () => {
     sentenceEndingInSend();
     vi.advanceTimersByTime(400);
@@ -1183,16 +1199,62 @@ describe.each(["openai", "deepgram"] as const)(
       expect(completes().at(-1)?.send).toBe(true);
     });
 
+    // Deepgram closes with a bare end of speech; OpenAI with its last item, empty.
     it("sends a 'send it' whose end of speech arrives as an empty segment", () => {
       emitTranscriptionEvent({
         type: "complete",
         text: "Fix the login bug, send it.",
         itemId: "A",
       });
-      emitTranscriptionEvent({ type: "complete", text: "", endOfSpeech: true });
+      emitTranscriptionEvent({
+        type: "complete",
+        text: "",
+        endOfSpeech: true,
+        ...(provider === "openai" ? { itemId: "B" } : {}),
+      });
       settle();
 
-      expect(landed()).toBe("Fix the login bug");
+      const sent = completes().map(({ text, itemId, send }) => ({ text, itemId, send }));
+      expect(sent).toEqual([
+        ...(provider === "openai" ? [{ text: "", itemId: "B", send: undefined }] : []),
+        { text: "Fix the login bug", itemId: "A", send: true },
+      ]);
+    });
+
+    it("never sends a 'send it' that already landed as words", () => {
+      emitTranscriptionEvent({
+        type: "complete",
+        text: "Fix the login bug, send it",
+        itemId: "A",
+        endsAtPause: true,
+      });
+      emitTranscriptionEvent({ type: "complete", text: "", itemId: "B", endOfSpeech: true });
+      settle();
+
+      expect(landed()).toBe("Fix the login bug, send it");
+      expect(sends()).toBe(0);
+    });
+
+    it("reads no command across a segment whose transcript never came", () => {
+      emitTranscriptionEvent({
+        type: "complete",
+        text: "Fix the login bug, send it",
+        itemId: "A",
+      });
+      emitTranscriptionEvent({ type: "complete", text: "", itemId: "B", incomplete: true });
+      expect(landed()).toBe("Fix the login bug, send it");
+
+      emitTranscriptionEvent({ type: "complete", text: "", itemId: "C", endOfSpeech: true });
+      settle();
+      expect(sends()).toBe(0);
+    });
+
+    it("reads a send after a dropped socket without the clause before it", () => {
+      emitTranscriptionEvent({ type: "complete", text: "Don't change the API", itemId: "A" });
+      emitTranscriptionEvent({ type: "status", status: "reconnecting" });
+      emitTranscriptionEvent({ type: "complete", text: "send it", itemId: "B", endOfSpeech: true });
+      settle();
+
       expect(sends()).toBe(1);
     });
 
@@ -1256,8 +1318,10 @@ describe.each(["openai", "deepgram"] as const)(
       emitTranscriptionEvent({ type: "complete", text: "it.", itemId: "B", endOfSpeech: true });
       settle();
 
-      const retired = new Set(completes().map((c) => c.itemId));
-      expect(retired).toEqual(new Set(["A", "B"]));
+      expect(completes().map(({ text, itemId }) => ({ text, itemId }))).toEqual([
+        { text: "", itemId: "B" },
+        { text: "Fix the login bug", itemId: "A" },
+      ]);
     });
 
     it("carries the provider's unsure words into the words that land", () => {

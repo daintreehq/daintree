@@ -226,6 +226,16 @@ describe("classifySpokenCommandOpening", () => {
     expect(classifySpokenCommandOpening("Slash compact", claude)).toBe("complete");
   });
 
+  it("waits while the words after a name still spell out a longer one", () => {
+    const withLonger = buildVoiceCommandVocabulary(
+      [...getBuiltinSlashCommands("claude"), custom("claude", "/review-pr-comments")],
+      sourcesOf("claude")
+    );
+    expect(classifySpokenCommandOpening("slash review PR", withLonger)).toBe("extendable");
+    expect(classifySpokenCommandOpening("slash review PR comments", withLonger)).toBe("complete");
+    expect(classifySpokenCommandOpening("slash review PR 123", withLonger)).toBe("complete");
+  });
+
   it("waits on a prefix said in words for a codex skill", () => {
     expect(classifySpokenCommandOpening("Dollar plugin", codex)).toBe("pending");
     expect(classifySpokenCommandOpening("slash prompts colon", codex)).toBe("pending");

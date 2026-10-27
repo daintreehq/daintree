@@ -197,6 +197,7 @@ describe("pendingCommandStart", () => {
     ["hello new line new", "new line new"],
     ["hello new line send", "new line send"],
     ["send it new paragraph", "new paragraph"],
+    ["Fix this—new", "new"],
   ])("finds where %j could still end in commands", (text, tail) => {
     expect(text.slice(pendingCommandStart(text))).toBe(tail);
   });

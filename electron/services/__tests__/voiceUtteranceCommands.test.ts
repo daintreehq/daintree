@@ -94,6 +94,7 @@ describe("UtteranceCommands — however the provider cut the utterance", () => {
       "then send it to the API",
     ],
     ["breaks, then sends, on a chain closing the utterance", "hello new line send it", "hello¶⏎"],
+    ["breaks on a command run up against punctuation", "Fix this—new line", "Fix this—¶"],
   ])("%s", (_, sentence, expected) => {
     for (const segments of segmentations(sentence)) {
       expect(written(feed(segments).releases), JSON.stringify(segments)).toBe(expected);
@@ -139,7 +140,7 @@ describe("UtteranceCommands — holding and releasing", () => {
     const release = utterance.push({ text: "" }, END, dictation);
     expect(shown(release?.emissions)).toEqual([{ itemId: "i0", text: "Fix it" }]);
     expect(release?.send).toBe(true);
-    expect(utterance.holding).toBe(false);
+    expect(utterance.flush("stop", dictation)).toBeNull();
   });
 
   it("breaks at a pause the speaker talked past, but never sends there", () => {
@@ -148,6 +149,15 @@ describe("UtteranceCommands — holding and releasing", () => {
       ["then send it", PAUSE],
     ]);
     expect(written(releases)).toBe("fix the bug¶ then send it");
+  });
+
+  it("never reads a command out of words that already landed", () => {
+    const { releases } = feed([
+      ["Fix the login bug, send it", PAUSE],
+      ["", END],
+    ]);
+    expect(written(releases)).toBe("Fix the login bug, send it");
+    expect(releases[1]).toMatchObject({ emissions: [{ itemId: "i1", text: "" }], send: false });
   });
 
   it("reads a send with the clause earlier segments opened", () => {
@@ -184,12 +194,21 @@ describe("UtteranceCommands — holding and releasing", () => {
     expect(release?.send).toBe(false);
   });
 
+  it("keeps a trailing 'send it' as words when the utterance ends without end of speech", () => {
+    for (const mode of ["stop", "literal"] as const) {
+      const { utterance } = feed([["Fix the bug, send it", CUT]]);
+      const release = utterance.flush(mode, dictation);
+      expect(shown(release?.emissions)).toEqual([{ itemId: "i0", text: "Fix the bug, send it" }]);
+      expect(release?.send).toBe(false);
+    }
+  });
+
   it("keeps held words as said when the connection is lost", () => {
     const { utterance } = feed([["fix the bug new line", CUT]]);
     expect(shown(utterance.flush("literal", dictation)?.emissions)).toEqual([
       { itemId: "i0", text: "fix the bug new line" },
     ]);
-    expect(utterance.holding).toBe(false);
+    expect(utterance.flush("literal", dictation)).toBeNull();
   });
 
   it("forgets everything it held when cleared", () => {
@@ -326,7 +345,11 @@ describe("UtteranceCommands — the provider's unsure words", () => {
 
   it("moves each segment's spans into a command they merge into", () => {
     const utterance = new UtteranceCommands();
-    utterance.push({ itemId: "i0", text: "Slash.", uncertain: [] }, END, withCommands);
+    utterance.push(
+      { itemId: "i0", text: "Slash.", uncertain: [{ from: 0, to: 5 }] },
+      END,
+      withCommands
+    );
     const release = utterance.push(
       { itemId: "i1", text: "review the lgin page.", uncertain: [{ from: 11, to: 15 }] },
       END,
@@ -335,7 +358,10 @@ describe("UtteranceCommands — the provider's unsure words", () => {
     expect(release?.emissions.at(-1)).toEqual({
       itemId: "i0",
       text: "Slash. review the lgin page.",
-      uncertain: [{ from: 18, to: 22 }],
+      uncertain: [
+        { from: 0, to: 5 },
+        { from: 18, to: 22 },
+      ],
       opensUtterance: true,
     });
   });
