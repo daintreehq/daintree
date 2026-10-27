@@ -1,6 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterAll, describe, expect, it } from "vitest";
 import { REPLAY_CLIPS } from "../../../e2e/helpers/voiceReplayFixtures";
-import { CLEANUP_CORPUS, REPLAY_TRANSCRIPTS, type CleanupCase } from "../lib/voiceCleanupCorpus";
+import {
+  CLEANUP_CORPUS,
+  REPLAY_TRANSCRIPTS,
+  type CleanupCase,
+  type FixKind,
+} from "../lib/voiceCleanupCorpus";
 import {
   corpusProblems,
   locateUncertain,
@@ -9,8 +17,11 @@ import {
   scoreText,
   seededShuffle,
   summariseVariant,
+  VOICE_CLEANUP_SCHEMA_VERSION,
+  VOICE_CLEANUP_SCORING_VERSION,
   type Trial,
 } from "../lib/voiceCleanupScore";
+import { inputHash, renderReport, rescore } from "../voice-cleanup";
 
 function makeCase(overrides: Partial<CleanupCase>): CleanupCase {
   return {
@@ -19,7 +30,7 @@ function makeCase(overrides: Partial<CleanupCase>): CleanupCase {
     source: "context",
     raw: "um invalidate the cash when the branch changes",
     reference: "Invalidate the cache when the branch changes.",
-    fixes: ["the cache"],
+    fixes: { "the cache": "misread" },
     drops: ["um"],
     ...overrides,
   };
@@ -63,13 +74,23 @@ describe("cleanup corpus", () => {
 describe("corpusProblems", () => {
   it("flags fixes the raw transcript already has, drops with nothing to drop and keeps that go missing", () => {
     const problems = corpusProblems([
-      makeCase({ id: "a", raw: "invalidate the cache", fixes: ["the cache"], drops: [] }),
+      makeCase({
+        id: "a",
+        raw: "invalidate the cache",
+        fixes: { "the cache": "misread" },
+        drops: [],
+      }),
       makeCase({ id: "b", raw: "invalidate the cash", drops: ["um"] }),
       makeCase({ id: "c", keep: ["branch changes now"] }),
       makeCase({ id: "d", uncertain: ["cash"] }),
       makeCase({ id: "d", style: "deepgram", uncertain: ["cache"] }),
       makeCase({ id: "e", keep: ["the branch"], reference: "Invalidate the cache on change." }),
-      makeCase({ id: "f", fixes: ["the cache", "rebuild"], raw: "um rerun --watch", drops: [] }),
+      makeCase({
+        id: "f",
+        fixes: { "the cache": "misread", rebuild: "form" },
+        raw: "um rerun --watch",
+        drops: [],
+      }),
     ]);
     expect(problems).toEqual([
       'a: fix "the cache" is already in the raw transcript',
@@ -84,6 +105,15 @@ describe("corpusProblems", () => {
     ]);
   });
 
+  it("flags a fix that isn't classed as a misread or a form", () => {
+    const unclassed = (id: string, kind: unknown) =>
+      makeCase({ id, fixes: { "the cache": kind as FixKind } });
+    expect(corpusProblems([unclassed("u", undefined), unclassed("v", "typo")])).toEqual([
+      'u: fix "the cache" is not classed as a misread or a form',
+      'v: fix "the cache" is not classed as a misread or a form',
+    ]);
+  });
+
   it("flags a reference with a number the speaker never gave, but not a list's item numbers", () => {
     expect(
       corpusProblems([
@@ -91,14 +121,14 @@ describe("corpusProblems", () => {
           id: "g",
           raw: "deepgram nova three is slow",
           reference: "Deepgram Nova-3 is slow.",
-          fixes: [],
+          fixes: {},
           drops: [],
         }),
         makeCase({
           id: "h",
           raw: "first read it second fix it in e two e",
           reference: "1. Read it.\n2. Fix it in e2e.",
-          fixes: [],
+          fixes: {},
           drops: [],
         }),
         makeCase({
@@ -106,7 +136,7 @@ describe("corpusProblems", () => {
           raw: "retry 3 times then 3 more",
           reference: "Retry 3 times, then 3 more.",
           alsoAccept: ["Retry 3 times, then more."],
-          fixes: [],
+          fixes: {},
           drops: [],
         }),
       ])
@@ -126,7 +156,8 @@ describe("scoreText", () => {
       repairable: 1,
       broken: 0,
       novelWords: 0,
-      fixesLanded: 1,
+      misreadsLanded: 1,
+      formsLanded: 0,
       dropsLanded: 1,
       matchesReference: true,
       untouched: false,
@@ -177,7 +208,7 @@ describe("scoreText", () => {
     const entry = makeCase({
       raw: "um bring the umbrella",
       reference: "Bring the umbrella.",
-      fixes: [],
+      fixes: {},
     });
     expect(scoreText(entry, "Bring the umbrella.").missedDrops).toEqual([]);
     expect(scoreText(entry, "Bring the umbrella and the umbrella.").missedDrops).toEqual([]);
@@ -188,7 +219,7 @@ describe("scoreText", () => {
     const entry = makeCase({
       raw: "I don't, I don't want it",
       reference: "I don't want it.",
-      fixes: [],
+      fixes: {},
       drops: ["I don't, I don't"],
     });
     expect(scoreText(entry, "I don\u2019t, I don\u2019t want it.").missedDrops).toEqual([
@@ -205,7 +236,7 @@ describe("scoreText", () => {
     const entry = makeCase({
       raw: "can you, can you check the logs",
       reference: "Can you check the logs?",
-      fixes: [],
+      fixes: {},
       drops: ["can you, can you"],
     });
     expect(scoreText(entry, "Can you check the logs?").missedDrops).toEqual([]);
@@ -222,7 +253,7 @@ describe("scoreText", () => {
       raw: "um in @src/App.tsx rename `isOpen` and run it with --watch twice, 3 times in shared/config",
       reference:
         "In @src/App.tsx rename `isOpen` and run it with --watch twice, 3 times in shared/config.",
-      fixes: [],
+      fixes: {},
     });
     const kept = scoreText(entry, entry.reference);
     expect(kept.lostKeeps).toEqual([]);
@@ -246,7 +277,7 @@ describe("scoreText", () => {
     const entry = makeCase({
       raw: "run --watch then --watch on 3 files and 3 dirs in package.json",
       reference: "Run --watch, then --watch on 3 files and 3 dirs in package.json.",
-      fixes: [],
+      fixes: {},
       drops: [],
       // A keep that is also a protected span gets the span's exact check.
       keep: ["package.json"],
@@ -272,7 +303,7 @@ describe("scoreText", () => {
     const entry = makeCase({
       raw: "don't stop and don't wait for src/App.tsx",
       reference: "Don't stop and don't wait for src/App.tsx.",
-      fixes: [],
+      fixes: {},
       drops: [],
       keep: ["don't", "src/App.tsx"],
     });
@@ -287,7 +318,7 @@ describe("scoreText", () => {
     const entry = makeCase({
       raw: "run it with dash dash watch",
       reference: "Run it with --watch.",
-      fixes: ["--watch"],
+      fixes: { "--watch": "form" },
       drops: [],
     });
     expect(scoreText(entry, "Run it with -- watch.").missedFixes).toEqual(["--watch"]);
@@ -299,13 +330,44 @@ describe("scoreText", () => {
     const entry = makeCase({
       raw: "run dash dash watch then dash dash watch again",
       reference: "Run --watch, then --watch again.",
-      fixes: ["--watch"],
+      fixes: { "--watch": "form" },
       drops: [],
     });
-    expect(scoreText(entry, "Run --watch, then dash dash watch again.").missedFixes).toEqual([
-      "--watch",
-    ]);
-    expect(scoreText(entry, entry.reference).missedFixes).toEqual([]);
+    expect(scoreText(entry, "Run --watch, then dash dash watch again.")).toMatchObject({
+      formsLanded: 0,
+      missedFixes: ["--watch"],
+    });
+    expect(scoreText(entry, entry.reference)).toMatchObject({ formsLanded: 1, missedFixes: [] });
+  });
+
+  it("scores a passage's misread and form fixes apart", () => {
+    const entry = makeCase({
+      raw: "ask codecs to check the work tree",
+      reference: "Ask Codex to check the worktree.",
+      fixes: { Codex: "misread", worktree: "form" },
+      drops: [],
+    });
+    const landed = (text: string) => {
+      const { misreadsLanded, formsLanded, missedFixes } = scoreText(entry, text);
+      return { misreadsLanded, formsLanded, missedFixes };
+    };
+    expect(landed(entry.raw)).toEqual({
+      misreadsLanded: 0,
+      formsLanded: 0,
+      missedFixes: ["Codex", "worktree"],
+    });
+    // Joined and cased, with the wrong word still in it.
+    expect(landed("Ask codecs to check the worktree.")).toEqual({
+      misreadsLanded: 0,
+      formsLanded: 1,
+      missedFixes: ["Codex"],
+    });
+    expect(landed("Ask Codex to check the work tree.")).toEqual({
+      misreadsLanded: 1,
+      formsLanded: 0,
+      missedFixes: ["worktree"],
+    });
+    expect(landed(entry.reference)).toEqual({ misreadsLanded: 1, formsLanded: 1, missedFixes: [] });
   });
 
   it("matches a reference by words and lines, and takes any accepted alternative", () => {
@@ -313,7 +375,7 @@ describe("scoreText", () => {
       raw: "first read the test second find the race",
       reference: "1. Read the test.\n2. Find the race.",
       alsoAccept: ["First, read the test. Second, find the race."],
-      fixes: [],
+      fixes: {},
       drops: [],
     });
     expect(scoreText(entry, "1. read the test\n\n2. find the race").matchesReference).toBe(true);
@@ -381,9 +443,9 @@ describe("summariseVariant", () => {
     id: "long",
     raw: `um ${"the cash is stale ".repeat(10).trim()}`,
     reference: "The cache is stale.",
-    fixes: [],
+    fixes: {},
   });
-  const corpus = [{ ...short, fixes: [], drops: [] }, long];
+  const corpus = [{ ...short, fixes: {}, drops: [] }, long];
 
   function trial(overrides: Partial<Trial> & Pick<Trial, "caseId" | "landed">): Trial {
     const entry = corpus.find((candidate) => candidate.id === overrides.caseId)!;
@@ -485,7 +547,7 @@ describe("summariseVariant", () => {
       raw: "um so can you check it",
       reference: "Can you check it?",
       alsoAccept: ["So can you check it?"],
-      fixes: [],
+      fixes: {},
       drops: [],
     });
     const rows = [
@@ -508,5 +570,208 @@ describe("summariseVariant", () => {
     expect(a!.landed.rawWer).toBe(b!.landed.rawWer);
     expect(a!.landed.wer).toBe(0);
     expect(b!.landed.wer).toBe(0);
+  });
+
+  it("pools misread and form fixes apart, for what landed and what was proposed", () => {
+    const mixed = makeCase({
+      id: "mixed",
+      raw: "ask codecs to check the work tree",
+      reference: "Ask Codex to check the worktree.",
+      fixes: { Codex: "misread", worktree: "form" },
+      drops: [],
+    });
+    const forms = makeCase({
+      id: "forms",
+      raw: "run n p m test dash dash watch",
+      reference: "Run npm test --watch.",
+      fixes: { "npm test": "form", "--watch": "form" },
+      drops: [],
+    });
+    const entries = [mixed, forms];
+    const row = (
+      variant: string,
+      entry: CleanupCase,
+      landed: string,
+      proposal = landed
+    ): Trial => ({
+      caseId: entry.id,
+      variant,
+      repeat: 1,
+      disposition: proposal === landed ? "applied" : "rejected",
+      landed,
+      proposal,
+      landedScore: scoreText(entry, landed),
+      proposalScore: scoreText(entry, proposal),
+      roundTripMs: 1_000,
+      totalMs: 1_000,
+      costUsd: 0.001,
+    });
+    const trials = [
+      // Turned down whole, so the misread it fixed never landed.
+      row("a", mixed, mixed.raw, mixed.reference),
+      row("a", mixed, "Ask codecs to check the worktree."),
+      row("a", forms, forms.reference),
+      row("b", mixed, mixed.reference),
+    ];
+    const summary = summariseVariant("a", trials, entries);
+    expect(summary.landed).toMatchObject({
+      totals: { misreads: 2, forms: 4 },
+      misreadRate: 0,
+      formRate: 0.75,
+    });
+    expect(summary.proposed).toMatchObject({
+      totals: { misreads: 2, forms: 4 },
+      misreadRate: 0.5,
+      formRate: 1,
+    });
+    expect(summariseVariant("b", trials, entries).landed).toMatchObject({
+      totals: { misreads: 1, forms: 1 },
+      misreadRate: 1,
+      formRate: 1,
+    });
+    // A kind the integrity check would refuse counts as neither.
+    const odd = { ...forms, id: "odd", fixes: { ...forms.fixes, Run: "typo" as FixKind } };
+    expect(summariseVariant("c", [row("c", odd, odd.reference)], [odd]).landed).toMatchObject({
+      totals: { misreads: 0, forms: 2 },
+      formRate: 1,
+    });
+  });
+});
+
+describe("rescore", () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "voice-cleanup-rescore-"));
+  afterAll(() => rmSync(directory, { recursive: true, force: true }));
+
+  const codex = makeCase({
+    id: "codex",
+    style: "deepgram",
+    source: "context",
+    raw: "ask codecs to review the diff",
+    reference: "Ask Codex to review the diff.",
+    fixes: { Codex: "misread" },
+    drops: [],
+  });
+  const zustand = makeCase({
+    id: "zustand",
+    style: "deepgram",
+    source: "replay",
+    raw: "the zoo stand selector in the work tree store needs use shallow",
+    reference: "The Zustand selector in the worktree store needs useShallow.",
+    fixes: { Zustand: "misread", worktree: "form", useShallow: "form" },
+    drops: [],
+  });
+  const LUNA = "gpt-6-luna:none";
+  const TERRA = "gpt-6.1-terra:none";
+
+  // A run saved under scoring v2, before fixes had a kind, with v2's scores.
+  function savedRun(): string {
+    const legacyScore = { fixesLanded: 0, missedFixes: [] };
+    const saved = (variant: string, caseId: string, landed: string, proposal = landed) => ({
+      caseId,
+      variant,
+      repeat: 1,
+      disposition: proposal === landed ? "applied" : "rejected",
+      ...(proposal === landed ? {} : { rejectReason: "edit_size" }),
+      landed,
+      proposal,
+      landedScore: legacyScore,
+      proposalScore: legacyScore,
+      roundTripMs: 900,
+      totalMs: 950,
+      costUsd: 0.001,
+    });
+    const run = {
+      schemaVersion: VOICE_CLEANUP_SCHEMA_VERSION,
+      scoringVersion: 2,
+      complete: true,
+      label: "saved",
+      startedAt: "2026-10-27T00:00:00.000Z",
+      finishedAt: "2026-10-27T00:10:00.000Z",
+      git: { revision: "d9fb374140562949f69da5315595785413ab7b56", dirty: false },
+      node: "v22.23.2",
+      platform: "darwin-arm64",
+      seed: 14793,
+      repeats: 1,
+      stream: true,
+      variants: [
+        { id: LUNA, model: "gpt-6-luna", effort: "none" },
+        { id: TERRA, model: "gpt-6.1-terra", effort: "none" },
+      ],
+      profile: { customDictionary: [], projectName: "daintree", projectPath: "/p", language: "en" },
+      promptHash: "prompt",
+      corpusHash: "corpus",
+      corpus: [
+        ...[codex, zustand].map((entry) => ({
+          id: entry.id,
+          style: entry.style,
+          source: entry.source,
+          chars: entry.raw.length,
+          inputHash: inputHash(entry),
+          sent: {},
+        })),
+        { id: "gone", style: "openai", source: "context", chars: 5, inputHash: "x", sent: {} },
+      ],
+      prices: {},
+      predictionProbes: [],
+      trials: [
+        saved(LUNA, "codex", codex.reference),
+        saved(LUNA, "zustand", "The zoo stand selector in the worktree store needs useShallow."),
+        saved(LUNA, "gone", "Gone."),
+        saved(TERRA, "codex", codex.reference),
+        // Turned down whole: the proposal had every fix, the raw text landed.
+        saved(TERRA, "zustand", zustand.raw, zustand.reference),
+      ],
+      summaries: [],
+    };
+    const file = path.join(directory, "saved.json");
+    writeFileSync(file, JSON.stringify(run));
+    return file;
+  }
+
+  it("keeps a passage's input when only its fixes' kinds change", () => {
+    const reclassed = { ...zustand, fixes: { Zustand: "form", worktree: "form" } } as const;
+    expect(inputHash(reclassed)).toBe(inputHash(zustand));
+    expect(inputHash({ ...zustand, fixes: {} })).toBe(inputHash(zustand));
+  });
+
+  it("gives a run saved before fixes had a kind both scores, landed and proposed", () => {
+    const { run, corpus } = rescore(savedRun(), [codex, zustand]);
+    expect(run.scoringVersion).toBe(VOICE_CLEANUP_SCORING_VERSION);
+    expect(run.rescoreExclusions).toEqual([{ id: "gone", reason: "removed", trials: 1 }]);
+    const [luna, terra] = run.summaries;
+    expect(luna!.landed).toMatchObject({
+      totals: { misreads: 2, forms: 2 },
+      misreadRate: 0.5,
+      formRate: 1,
+    });
+    expect(luna!.proposed).toMatchObject({ misreadRate: 0.5, formRate: 1 });
+    expect(terra!.landed).toMatchObject({ misreadRate: 0.5, formRate: 0 });
+    expect(terra!.proposed).toMatchObject({ misreadRate: 1, formRate: 1 });
+
+    const report = renderReport(run, corpus);
+    expect(report).toContain("Rescored with scoring v3, leaving out gone (removed, 1 trials).");
+    const section = (heading: string) => report.split(`## ${heading}`)[1]!.split("\n## ")[0]!;
+    // Misreads and Forms, the columns after Repaired.
+    const fixCells = (heading: string, variant: string) =>
+      section(heading)
+        .split("\n")
+        .find((line) => line.startsWith(`| ${variant} |`))
+        ?.split(" | ")
+        .slice(2, 4);
+    expect(section("What landed")).toContain("| Variant | Repaired | Misreads | Forms | Drops |");
+    expect(fixCells("What landed", LUNA)).toEqual(["50.0%", "100.0%"]);
+    expect(fixCells("What landed", TERRA)).toEqual(["50.0%", "0.0%"]);
+    expect(fixCells("What the model proposed", LUNA)).toEqual(["50.0%", "100.0%"]);
+    expect(fixCells("What the model proposed", TERRA)).toEqual(["100.0%", "100.0%"]);
+
+    const bySource = section("Misreads, forms and reference matches landed by source");
+    expect(bySource).toContain("| context | 1 | 1/1 · – · 1/1 | 1/1 · – · 1/1 |");
+    expect(bySource).toContain("| replay | 1 | 0/1 · 2/2 · 0/1 | 0/1 · 0/2 · 0/1 |");
+    expect(section("Misreads, forms and reference matches landed by style")).toContain(
+      "| deepgram | 2 | 1/2 · 2/2 · 1/2 | 1/2 · 0/2 · 1/2 |"
+    );
+    expect(report).toContain(
+      "rejected (edit_size); missed misreads Zustand; missed forms worktree, useShallow"
+    );
   });
 });

@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { contentHash } from "../../e2e/helpers/voiceReplayScore";
 import {
   buildCorrectionSystemPrompt,
@@ -14,9 +15,16 @@ import type {
   VoiceCorrectionService as VoiceCorrectionServiceType,
   VoiceCorrectionSettings,
 } from "../../electron/services/VoiceCorrectionService";
-import { CLEANUP_CORPUS, type CleanupCase, type TranscriptStyle } from "./lib/voiceCleanupCorpus";
+import {
+  CLEANUP_CORPUS,
+  FIX_KINDS,
+  type CleanupCase,
+  type FixKind,
+  type TranscriptStyle,
+} from "./lib/voiceCleanupCorpus";
 import {
   corpusProblems,
+  fixesOf,
   locateUncertain,
   MODEL_PRICES,
   PROMPT_LENGTH_MIN_CHARS,
@@ -346,12 +354,12 @@ const usd = (value: number | null, digits = 5) =>
 function qualityRow(variant: string, quality: QualitySummary): string {
   const { totals } = quality;
   const rate = (value: number, of: number) => (of === 0 ? "–" : pct(value));
-  return `| ${variant} | ${rate(quality.repairRate, totals.repairable)} | ${rate(quality.fixRate, totals.fixes)} | ${rate(quality.dropRate, totals.drops)} | ${rate(quality.keepRate, totals.keeps)} | ${pct(quality.referenceMatchRate)} | ${pct(quality.rawWer)} → ${pct(quality.wer)} | ${quality.broken} | ${quality.novelWords} | ${quality.addedWords} | ${quality.trialsWithMeaningRisk} |`;
+  return `| ${variant} | ${rate(quality.repairRate, totals.repairable)} | ${rate(quality.misreadRate, totals.misreads)} | ${rate(quality.formRate, totals.forms)} | ${rate(quality.dropRate, totals.drops)} | ${rate(quality.keepRate, totals.keeps)} | ${pct(quality.referenceMatchRate)} | ${pct(quality.rawWer)} → ${pct(quality.wer)} | ${quality.broken} | ${quality.novelWords} | ${quality.addedWords} | ${quality.trialsWithMeaningRisk} |`;
 }
 
 const QUALITY_HEADER = [
-  "| Variant | Repaired | Fixes | Drops | Keeps | Matches ref | WER raw → clean | Broken | Novel | Added | Risky trials |",
-  "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+  "| Variant | Repaired | Misreads | Forms | Drops | Keeps | Matches ref | WER raw → clean | Broken | Novel | Added | Risky trials |",
+  "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
 ];
 
 function latencyCells(latency: LatencySummary): string {
@@ -359,7 +367,7 @@ function latencyCells(latency: LatencySummary): string {
   return `${latency.count} | ${ms(latency.p50)} | ${ms(latency.p95)} | ${ms(latency.max)} | ${pct(latency.overTarget)}`;
 }
 
-interface RunRecord {
+export interface RunRecord {
   schemaVersion: number;
   scoringVersion: number;
   complete: boolean;
@@ -394,7 +402,7 @@ interface RunRecord {
   summaries: VariantSummary[];
 }
 
-function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): string {
+export function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): string {
   const lines: string[] = [];
   const longCases = corpus.filter((entry) => entry.raw.length >= PROMPT_LENGTH_MIN_CHARS).length;
   lines.push(
@@ -403,18 +411,19 @@ function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): string {
     `${run.startedAt} · ${run.git.revision.slice(0, 10)}${run.git.dirty ? " (dirty)" : ""} · ${corpus.length} passages (${longCases} of ${PROMPT_LENGTH_MIN_CHARS}+ chars) × ${run.repeats} repeat(s) · seed ${run.seed}${run.complete ? "" : " · **incomplete**"}`,
     ""
   );
-  if (run.rescoreExclusions?.length) {
+  if (run.rescoreExclusions) {
+    const excluded = run.rescoreExclusions
+      .map((exclusion) => `${exclusion.id} (${exclusion.reason}, ${exclusion.trials} trials)`)
+      .join(", ");
     lines.push(
-      `Rescored with scoring v${run.scoringVersion}, leaving out ${run.rescoreExclusions
-        .map((excluded) => `${excluded.id} (${excluded.reason}, ${excluded.trials} trials)`)
-        .join(", ")}.`,
+      `Rescored with scoring v${run.scoringVersion}${excluded ? `, leaving out ${excluded}` : ""}.`,
       ""
     );
   }
   lines.push(
     "## What landed",
     "",
-    "The text the service handed back, the checks applied. Repaired: reference words the raw transcript had wrong that came back right. Fixes: written forms landed exactly. Keeps: the case's own, plus every code span, reference, flag, path and number in the raw transcript. Broken: words the raw had right that were lost or changed. Novel: words in neither the raw nor the reference. Added: words inserted beyond any the raw already had extra. Risky trials: any broken, novel or added word.",
+    "The text the service handed back, the checks applied. Repaired: reference words the raw transcript had wrong that came back right. Misreads: fixes for a word the raw transcript got wrong, one an agent would take for something else, landed exactly; a model or prompt choice rests on these. Forms: fixes that only write the speaker's own words the way they would have typed them, landed exactly; an agent reads those right either way. Keeps: the case's own, plus every code span, reference, flag, path and number in the raw transcript. Broken: words the raw had right that were lost or changed. Novel: words in neither the raw nor the reference. Added: words inserted beyond any the raw already had extra. Risky trials: any broken, novel or added word.",
     "",
     ...QUALITY_HEADER,
     ...run.summaries.map((summary) => qualityRow(summary.variant, summary.landed)),
@@ -483,7 +492,9 @@ function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): string {
   for (const [name, key] of groups) {
     const values = [...new Set(corpus.map(key))];
     lines.push(
-      `## Fixes landed and reference matches by ${name}`,
+      `## Misreads, forms and reference matches landed by ${name}`,
+      "",
+      "Each cell: misread fixes landed · form fixes landed · trials that matched a reference.",
       "",
       `| ${name} | passages | ${run.variants.map((variant) => variant.id).join(" | ")} |`,
       `| --- | --- | ${run.variants.map(() => "---").join(" | ")} |`
@@ -493,10 +504,18 @@ function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): string {
         const rows = run.trials.filter(
           (trial) => trial.variant === variant.id && key(byId.get(trial.caseId)!) === value
         );
-        const fixes = rows.reduce((n, trial) => n + byId.get(trial.caseId)!.fixes.length, 0);
-        const landed = rows.reduce((n, trial) => n + trial.landedScore.fixesLanded, 0);
+        const landed = (kind: FixKind) => {
+          let count = 0;
+          let total = 0;
+          for (const trial of rows) {
+            total += fixesOf(byId.get(trial.caseId)!, kind).length;
+            count +=
+              kind === "misread" ? trial.landedScore.misreadsLanded : trial.landedScore.formsLanded;
+          }
+          return total ? `${count}/${total}` : "–";
+        };
         const matches = rows.filter((trial) => trial.landedScore.matchesReference).length;
-        return `${fixes ? `${landed}/${fixes}` : "–"} · ${matches}/${rows.length}`;
+        return `${landed("misread")} · ${landed("form")} · ${matches}/${rows.length}`;
       });
       const count = corpus.filter((entry) => key(entry) === value).length;
       lines.push(`| ${value} | ${count} | ${cells.join(" | ")} |`);
@@ -547,9 +566,10 @@ function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): string {
       if (!trial) continue;
       const notes = [
         trial.disposition + (trial.rejectReason ? ` (${trial.rejectReason})` : ""),
-        trial.landedScore.missedFixes.length
-          ? `missed ${trial.landedScore.missedFixes.join(", ")}`
-          : "",
+        ...FIX_KINDS.map((kind) => {
+          const missed = trial.landedScore.missedFixes.filter((fix) => entry.fixes[fix] === kind);
+          return missed.length ? `missed ${kind}s ${missed.join(", ")}` : "";
+        }),
         trial.landedScore.lostKeeps.length ? `lost ${trial.landedScore.lostKeeps.join(", ")}` : "",
         trial.landedScore.broken ? `${trial.landedScore.broken} broken` : "",
         trial.landedScore.novelWords ? `${trial.landedScore.novelWords} novel` : "",
@@ -566,21 +586,24 @@ function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): string {
   return lines.join("\n");
 }
 
-function inputHash(entry: CleanupCase): string {
+export function inputHash(entry: CleanupCase): string {
   return contentHash(JSON.stringify(requestFor(entry)));
 }
 
 // A saved run scored again with today's references and checks. A passage the
 // corpus no longer has, or no longer sends exactly as it did, can't be: its
 // replies answered a different input. Those are left out and named.
-function rescore(file: string): { run: RunRecord; corpus: CleanupCase[] } {
+export function rescore(
+  file: string,
+  today: readonly CleanupCase[] = CLEANUP_CORPUS
+): { run: RunRecord; corpus: CleanupCase[] } {
   const run = JSON.parse(readFileSync(file, "utf8")) as RunRecord;
   if (run.schemaVersion !== VOICE_CLEANUP_SCHEMA_VERSION) {
     throw new Error(
       `${file}: schema ${run.schemaVersion}, this script reads ${VOICE_CLEANUP_SCHEMA_VERSION}`
     );
   }
-  const current = new Map(CLEANUP_CORPUS.map((entry) => [entry.id, entry]));
+  const current = new Map(today.map((entry) => [entry.id, entry]));
   const corpus: CleanupCase[] = [];
   run.rescoreExclusions = [];
   for (const saved of run.corpus) {
@@ -799,10 +822,12 @@ async function main(): Promise<number> {
   return 0;
 }
 
-main().then(
-  (code) => process.exit(code),
-  (error) => {
-    console.error("[voice-cleanup] fatal:", error);
-    process.exit(1);
-  }
-);
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().then(
+    (code) => process.exit(code),
+    (error) => {
+      console.error("[voice-cleanup] fatal:", error);
+      process.exit(1);
+    }
+  );
+}

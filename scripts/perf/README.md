@@ -326,18 +326,24 @@ What the numbers can't claim: the audio is synthetic or pre-recorded through a f
 
 The corpus is 90 passages: the 18 replay clips as OpenAI and as Deepgram mishear them, mishearings from a real afternoon of dictation that only the rest of the sentence fixes ("we'd" for "would", "Tara" for "Terra", "WhisperFlow"), words that need the draft or the terminal to read right, prompt-length rambles with filler, self-corrections and spoken lists, passages that must come back untouched (including a person called Tara and a beta channel), and the 22 cleanup regression prompts from `electron/services/__tests__/fixtures/dictatedPrompts.ts`. No provider transcript of a replay clip has been saved yet, so each raw transcript is written in its provider's error style, which the corpus header describes. Deepgram passages carry the unsure-word spans cleanup sees as `<uncertain>`. Grok joins with #14769.
 
-Each passage has a reference (the message the speaker would have typed) and any of `fixes` (written forms cleanup must land, character for character), `drops` (filler and retracted words that must go: whole words, any case, whatever punctuation is left between them), `keep` (spans already right that must survive, every copy), unsure words, draft history and terminal output. Every code span, @-reference, URL, flag, path and number in the raw transcript is a keep too, found with the meaning guard's own `scanProtectedSpans`, since the word scores can't see a lost backtick or a `three` turned into `3`.
+Each passage has a reference (the message the speaker would have typed) and any of `fixes` (written forms cleanup must land, character for character, each classed as a misread or a form), `drops` (filler and retracted words that must go: whole words, any case, whatever punctuation is left between them), `keep` (spans already right that must survive, every copy), unsure words, draft history and terminal output. Every code span, @-reference, URL, flag, path and number in the raw transcript is a keep too, found with the meaning guard's own `scanProtectedSpans`, since the word scores can't see a lost backtick or a `three` turned into `3`.
 
 | Score | Meaning |
 | --- | --- |
 | Repaired | Reference words the raw transcript had wrong that came back right, over normalised words (`normaliseWords` from the replay benchmark) |
-| Fixes, drops, keeps | Share of those checks that held |
+| Misreads | Share of the misread fixes that landed: words the raw transcript got wrong in a way an agent would take for something else ("codecs" for Codex, "shin" for shim, "Tara" for Terra, "on beta" for about) |
+| Forms | Share of the form fixes that landed: the speaker's own words, written the way they'd have typed them ("work tree", "use shallow", "origin slash develop", "N P M", a spoken list). An agent reads these right either way |
+| Drops, keeps | Share of those checks that held |
 | Matches ref | The same words, order and lines as an accepted reference, ignoring case and punctuation |
 | Broken | Reference words the raw had right that were lost or changed: what a summary or a wrong "fix" costs |
 | Novel | Words in neither the raw nor the reference: what an answer or a rewrite adds |
 | Added | Inserted words the raw transcript didn't have extra already: a repeated phrase, or the misheard word put back beside its fix |
 | Risky trials | Trials with any broken, novel or added word |
 | Dispositions | Applied, declined (the model returned the passage as it was), rejected (with the check that fired), failed, skipped |
+
+A fix is a misread when the raw transcript has a different word in its place: the letters differ even with case, spacing, punctuation and spoken symbols, letters and numbers set aside ("cash" for cache, "VTest" for Vitest, "whisper flow" for Wispr Flow). It is a form when only the writing differs: "terra" for Terra, "sig winch" for SIGWINCH, "dash dash watch" for `--watch`. The kind is set by hand on every fix, per fix rather than per passage since one passage can hold both ("Zoo stand selector in the work tree store" has one of each), and the integrity check refuses a fix without one. A misread is a wrong word, not a measured change in what an agent did: an agent may well read "cash" as cache from the sentence around it.
+
+Pick a model or a prompt on what landed for misreads, read beside broken, novel and added words and risky trials: together they say whether the agent now reads what the speaker meant, and whether anything was lost or invented on the way. Forms say how much came back written the way the speaker would have typed it, which is worth having but doesn't change what the agent does; a variant that wins on forms alone, joining and recasing identifiers while the wrong word stays put, hasn't made the text any more agent-ready. Repaired and Matches ref count both kinds together, so neither settles a choice on its own. The proposed scores say what the guards held back.
 
 Every score is reported twice: for what landed, and for what the model proposed before the checks. Latency is the service's own round trip (request out, reply read) over the requests that came back readable, at p50, p95 and max with the sample count, overall and for passages of 140 characters and up, with the share over 2 s; the same for all of `correct()` across every trial, failures and the wait for a preconnect included; and, for a streamed run, the time to the first corrected text over the replies that showed any (a declined reply shows none). Since #14780 a send waits for cleanup however long it takes, so 2 s is a yardstick, not a deadline. Cost per cleanup comes from the billed tokens at the prices in `lib/voiceCleanupScore.ts`, cached input at the cached rate.
 
@@ -352,7 +358,7 @@ Every score is reported twice: for what landed, and for what the model proposed 
 | `--no-stream` | streamed | Asks for the whole reply at once, as cleanup did before it streamed |
 | `--probe-prediction` | off | Asks each model for Predicted Outputs on both endpoints and records the answer |
 | `--dictionary` | none | Custom dictionary terms, the same for every variant |
-| `--rescore <run.json>` |  | Scores a saved run again with today's references and checks, sending nothing; a passage whose input changed or went away since is left out and named |
+| `--rescore <run.json>` |  | Scores a saved run again with today's references and checks, sending nothing; a passage whose input changed or went away since is left out and named. A run saved before fixes had a kind (scoring v2) gets the misread and form split this way, since the kinds change nothing a passage sends |
 
 `OPENAI_ORG_ID` and `OPENAI_PROJECT_ID` are sent when set. Results land in `.tmp/perf-results/voice-cleanup/<label>-<timestamp>.json`, rewritten after every request with `complete: false` until the run finishes (Ctrl+C keeps what was paid for), and the Markdown report beside it at the end. The report closes with every passage the variants landed differently on the first pass, raw, reference and each result side by side.
 
