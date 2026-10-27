@@ -1,16 +1,9 @@
 import type { VoiceCorrectionVerdict } from "../../shared/types/voiceSessionSummary.js";
 import {
   checkVoiceCommandEdit,
-  voiceCommandBaseline,
   type VoiceCommandEditRejection,
   type VoiceCommandVocabulary,
 } from "../../shared/utils/voiceAgentCommands.js";
-import {
-  CORRECTION_GUARD_LIMITS,
-  validateCorrection,
-  type CorrectionGuardLimits,
-  type CorrectionRejectReason,
-} from "./voiceCorrectionGuard.js";
 
 /**
  * What the model proposed for a passage, read from a reply that parsed: its
@@ -23,8 +16,7 @@ export interface VoiceCorrectionProposal {
   confidence: "low" | "medium" | "high";
 }
 
-export type VoiceCorrectionRejectReason =
-  CorrectionRejectReason | VoiceCommandEditRejection | "low_confidence";
+export type VoiceCorrectionRejectReason = VoiceCommandEditRejection | "low_confidence";
 
 export interface VoiceCorrectionOutcome {
   action: "no_change" | "replace";
@@ -39,33 +31,13 @@ export interface VoiceCorrectionChecks {
   vocabulary: VoiceCommandVocabulary;
   /** Nothing comes before the passage in the draft, so it may open with a command. */
   startsPrompt: boolean;
-  limits?: CorrectionGuardLimits;
-}
-
-function rejectionVerdict(rejection: VoiceCorrectionRejectReason): VoiceCorrectionVerdict {
-  switch (rejection) {
-    case "edit_size":
-      return "rejected_edit_size";
-    case "negation":
-      return "rejected_negation";
-    case "number":
-      return "rejected_number";
-    case "protected_span":
-      return "rejected_protected_span";
-    case "low_confidence":
-      return "rejected_low_confidence";
-    default:
-      return "rejected_command";
-  }
 }
 
 /**
- * Decides what a proposal becomes: the cleanup, or the raw text and why. A
- * command the cleanup wrote in place of its spoken request is measured as that
- * command, so "can you please run the review skill on…" isn't over the edit
- * budget for the words the command replaced. Pure, so the cleanup benchmark
- * can land the replies it recorded under other edit budgets exactly as the
- * service would have.
+ * Decides what a proposal becomes: the cleanup as the model wrote it, unless
+ * it invents or rewrites an agent command the speaker didn't say, or the model
+ * itself marked it low-confidence. Pure, so the cleanup benchmark lands the
+ * replies it recorded exactly as the service would have.
  */
 export function correctionOutcome(
   rawText: string,
@@ -75,30 +47,14 @@ export function correctionOutcome(
   let confirmedText = rawText;
   if (proposal.action === "replace" && proposal.correctedText.trim()) {
     const candidate = proposal.correctedText.trim();
-    const commandRejection = checkVoiceCommandEdit(
-      rawText,
-      candidate,
-      checks.vocabulary,
-      checks.startsPrompt
-    );
-    const baseline = commandRejection
-      ? rawText
-      : (voiceCommandBaseline(rawText, candidate, checks.vocabulary) ?? rawText);
-    let rejection: VoiceCorrectionRejectReason | null = commandRejection;
-    if (!rejection && proposal.confidence === "low") rejection = "low_confidence";
-    if (!rejection) {
-      const verdict = validateCorrection(
-        baseline,
-        candidate,
-        checks.limits ?? CORRECTION_GUARD_LIMITS
-      );
-      if (!verdict.ok) rejection = verdict.reason;
-    }
+    const rejection: VoiceCorrectionRejectReason | null =
+      checkVoiceCommandEdit(rawText, candidate, checks.vocabulary, checks.startsPrompt) ??
+      (proposal.confidence === "low" ? "low_confidence" : null);
     if (rejection) {
       return {
         action: "no_change",
         confirmedText: rawText,
-        verdict: rejectionVerdict(rejection),
+        verdict: rejection === "low_confidence" ? "rejected_low_confidence" : "rejected_command",
         rejected: { reason: rejection, candidate },
       };
     }

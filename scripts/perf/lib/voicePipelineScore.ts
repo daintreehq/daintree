@@ -77,7 +77,7 @@ export interface CleanupRecord {
   verdict: string;
   /** What the draft holds once the cleanup lands. */
   text: string;
-  /** The model's reply before the guard, for landing it again offline; absent when none parsed. */
+  /** The model's reply before any check, kept with the record; absent when none parsed. */
   proposal?: { action: string; correctedText: string; confidence: string };
   failed: boolean;
   speculation: SpeculationFate;
@@ -473,7 +473,7 @@ const statCell = (s: Stat) => `${ms(s.p50)} / ${ms(s.p95)}`;
 /** What reached the draft, raw and after cleanup. */
 export function renderAccuracyTable(summaries: readonly ArmSummary[]): string {
   const lines = [
-    "| Arm | n | Prompts as written, raw → final | Form WER raw → final | Terms verbatim raw → final | WER raw → final | Broken words (sessions) | Cleanup applied | Rejected by guard |",
+    "| Arm | n | Prompts as written, raw → final | Form WER raw → final | Terms verbatim raw → final | WER raw → final | Broken words (sessions) | Cleanup applied | Turned down |",
     "| --- | --: | --- | --- | --- | --- | --: | --: | --: |",
   ];
   for (const s of summaries) {

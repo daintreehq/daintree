@@ -342,8 +342,8 @@ export const REPLAY_TRANSCRIPTS: Readonly<Record<string, ReplayTranscripts>> = {
       fixes: { keyterm: "form" },
       keep: ["Deepgram", "three"],
     },
-    // As heard, "Nova 3": the guard reads "Nova-3" as a signed number, so the
-    // clip's written reference could never land.
+    // As heard, "Nova 3": the reference was written while a meaning guard read
+    // "Nova-3" as a signed number and refused it, so it keeps the space.
     deepgram: {
       raw: "Deepgram Nova 3 rejects the key term parameter when the list is too long, so cap it before building the URL.",
       reference:
@@ -977,8 +977,8 @@ const NAMES: readonly AuthoredCase[] = [
     source: "names",
     raw: "So using transcription, I just had an issue where a whole bunch of my text was actually lost. so yeah, catastrophic loss unacceptable. yeah, we need to figure out how to fix this. So, the thing that I know I did do was I said that it needed to use the github create issue/command. And then, for some reason, something got lost. yeah, so investigate this really deeply. this would have been the, I don't know if you can check my logs, the previous thing I, I transcribed, but I, I really don't know how much is actually being logged. And yeah, if you can figure it out, please go ahead and, and create an issue on GitHub. ask Codex for its ideas on what might have happened to.",
     // The speaker would have typed "/github-create-issue command", but the
-    // guard reads "issue/command" as a path and refuses any cleanup that
-    // changes it, so the best cleanup that can land keeps it.
+    // keep checks read "issue/command" as a path that must come back as it
+    // was, so the reference keeps it.
     reference:
       "Using transcription, I just had an issue where a whole bunch of my text was actually lost. Catastrophic loss is unacceptable. We need to figure out how to fix this. The thing I know I did was say that it needed to use the github create issue/command, and then, for some reason, something got lost. Investigate this really deeply. It would have been the previous thing I transcribed. I don't know if you can check my logs, but I really don't know how much is actually being logged. If you can figure it out, please go ahead and create an issue on GitHub. Ask Codex for its ideas on what might have happened.",
     alsoAccept: [

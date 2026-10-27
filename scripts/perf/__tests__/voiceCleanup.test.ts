@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { REPLAY_CLIPS } from "../../../e2e/helpers/voiceReplayFixtures";
-import { validateCorrection } from "../../../electron/services/voiceCorrectionGuard";
 import {
   buildCorrectionSystemPrompt,
   type CorrectionInstructions,
@@ -17,12 +16,10 @@ import {
   type CleanupCase,
   type FixKind,
 } from "../lib/voiceCleanupCorpus";
-import { ADVERSARIAL_PROPOSALS, GUARD_VARIANTS } from "../lib/voiceCleanupGuards";
 import { PROMPT_VARIANTS, revise } from "../lib/voiceCleanupPrompts";
 import {
   corpusProblems,
   locateUncertain,
-  hasMeaningRisk,
   longestSentence,
   percentile,
   requestCost,
@@ -662,7 +659,7 @@ describe("run-ons and agent-ready text", () => {
   });
 });
 
-describe("prompt and guard variants", () => {
+describe("prompt variants", () => {
   it("keeps v11 frozen apart from production's constants and revises it edit by edit", () => {
     const v11 = PROMPT_VARIANTS.v11!.instructionsFor("gpt-6.1-terra");
     expect(v11.core).toContain("MEANING IS FIXED");
@@ -708,7 +705,7 @@ describe("prompt and guard variants", () => {
     });
   });
 
-  it("sends Luna the frozen v11 rules told about recent prompts, and Terra the names6 ones", () => {
+  it("sends Luna the frozen v11 rules told about recent prompts, and Terra the code names ones", () => {
     // #14855 named <recent_prompts> in both models' rules, after the rounds that chose them.
     const withRecentPrompts = (instructions: CorrectionInstructions) =>
       revise(instructions, {
@@ -732,7 +729,7 @@ describe("prompt and guard variants", () => {
       withRecentPrompts(PROMPT_VARIANTS.final!.instructionsFor("gpt-6.1-terra"))
     );
     expect(production.instructionsFor("gpt-6.1-terra")).toEqual(
-      PROMPT_VARIANTS.names6!.instructionsFor("gpt-6.1-terra")
+      PROMPT_VARIANTS.codenames!.instructionsFor("gpt-6.1-terra")
     );
   });
 
@@ -742,28 +739,6 @@ describe("prompt and guard variants", () => {
       expect(core.length, name).toBeGreaterThan(4_800);
       expect(suffix, name).toContain("JSON object");
     }
-  });
-
-  it("names a passage the corpus has for every harmful cleanup, and does it harm", () => {
-    const byId = new Map(CLEANUP_CORPUS.map((entry) => [entry.id, entry]));
-    for (const { caseId, harm, proposal } of ADVERSARIAL_PROPOSALS) {
-      const entry = byId.get(caseId);
-      expect(entry, caseId).toBeDefined();
-      expect(hasMeaningRisk(scoreText(entry!, proposal)), harm).toBe(true);
-    }
-  });
-
-  it("refuses under v11 every harmful cleanup a word count can see", () => {
-    const landed = ADVERSARIAL_PROPOSALS.filter(({ caseId, proposal }) => {
-      const entry = CLEANUP_CORPUS.find((candidate) => candidate.id === caseId)!;
-      return validateCorrection(entry.raw, proposal, GUARD_VARIANTS.v11!.limits).ok;
-    }).map(({ harm }) => harm);
-    expect(landed).toEqual([
-      "drops the branch it names",
-      "swaps who does what",
-      "drops the Yeah that answers the agent",
-      "drops the just that means only",
-    ]);
   });
 });
 
@@ -856,10 +831,9 @@ describe("summariseVariant", () => {
   });
   const corpus = [{ ...short, fixes: {}, drops: [] }, long, kept];
 
-  type TrialOverrides = Partial<Omit<Trial, "landings">> &
+  type TrialOverrides = Partial<Omit<Trial, "landing">> &
     Pick<Trial, "caseId"> & { landed: string; disposition?: Disposition; rejectReason?: string };
 
-  // One landing, under the guard "g".
   function trial({
     landed,
     disposition = "applied",
@@ -873,13 +847,11 @@ describe("summariseVariant", () => {
       repeat: 1,
       proposal,
       proposalScore: scoreText(entry, proposal),
-      landings: {
-        g: {
-          disposition,
-          ...(rejectReason ? { rejectReason } : {}),
-          landed,
-          landedScore: scoreText(entry, landed),
-        },
+      landing: {
+        disposition,
+        ...(rejectReason ? { rejectReason } : {}),
+        landed,
+        landedScore: scoreText(entry, landed),
       },
       roundTripMs: 1_000,
       totalMs: 1_010,
@@ -909,7 +881,7 @@ describe("summariseVariant", () => {
         landed: long.raw,
         proposal: "The cache is stale.",
         disposition: "rejected",
-        rejectReason: "edit_size",
+        rejectReason: "low_confidence",
         roundTripMs: 2_500,
         usage: usage(3_000, 2_700, 30),
       }),
@@ -917,7 +889,7 @@ describe("summariseVariant", () => {
       trial({ caseId: "long", landed: long.raw, disposition: "failed", roundTripMs: 100 }),
       trial({ caseId: "short", landed: "x", variant: "b" }),
     ];
-    const summary = summariseVariant("a", "g", trials, corpus);
+    const summary = summariseVariant("a", trials, corpus);
 
     expect(summary.trials).toBe(5);
     expect(summary.dispositions).toEqual({
@@ -927,7 +899,7 @@ describe("summariseVariant", () => {
       failed: 1,
       skipped: 0,
     });
-    expect(summary.rejectReasons).toEqual({ edit_size: 1 });
+    expect(summary.rejectReasons).toEqual({ low_confidence: 1 });
     expect(summary.cleanUntouched).toEqual({ kept: 2, of: 3 });
     expect(summary.roundTrip).toMatchObject({ count: 4, max: 2_500, overTarget: 0.25 });
     expect(summary.promptLengthRoundTrip).toMatchObject({ count: 1, p50: 2_500 });
@@ -938,38 +910,6 @@ describe("summariseVariant", () => {
     expect(summary.landed.repairRate).toBe(0);
   });
 
-  it("tells a guard's catches from what it let through and held back", () => {
-    const refused = (caseId: string, proposal: string, rejectReason: string) =>
-      trial({
-        caseId,
-        landed: corpus.find((entry) => entry.id === caseId)!.raw,
-        proposal,
-        disposition: "rejected",
-        rejectReason,
-      });
-    const trials = [
-      // Meaning risks refused: words lost, and only a code span lost.
-      refused("short", "push", "edit_size"),
-      refused("kept", "Run npm test now.", "protected_span"),
-      // One landed.
-      trial({ caseId: "short", landed: "push" }),
-      // Sound cleanups refused: one agent-ready, one not.
-      refused("long", "The cache is stale.", "edit_size"),
-      refused("long", long.raw.replace(/^um /, ""), "number"),
-      // Refused by a check no guard decided, or never landed at all.
-      refused("long", "The cache.", "low_confidence"),
-      refused("short", "/push", "unknown_command"),
-      trial({ caseId: "long", landed: long.raw, disposition: "failed" }),
-      trial({ caseId: "long", landed: long.raw, disposition: "declined" }),
-    ];
-    expect(summariseVariant("a", "g", trials, corpus).guardChecks).toEqual({
-      caught: 2,
-      letThrough: 1,
-      heldBack: 2,
-      heldBackReady: 1,
-    });
-  });
-
   it("times the first streamed text over the replies that showed some", () => {
     const trials = [
       trial({ caseId: "short", landed: "commit and push", firstTextMs: 400 }),
@@ -978,7 +918,7 @@ describe("summariseVariant", () => {
       trial({ caseId: "short", landed: "commit and push" }),
       trial({ caseId: "long", landed: long.raw, disposition: "failed", firstTextMs: 50 }),
     ];
-    const summary = summariseVariant("a", "g", trials, corpus);
+    const summary = summariseVariant("a", trials, corpus);
     expect(summary.firstText).toMatchObject({ count: 2, p50: 400, max: 900 });
     expect(summary.promptLengthFirstText).toMatchObject({ count: 1, p50: 900 });
   });
@@ -989,11 +929,11 @@ describe("summariseVariant", () => {
       trial({ caseId: "short", landed: "commit and push", costUsd: 0.003 }),
       trial({ caseId: "short", landed: "commit and push", costUsd: null }),
     ];
-    expect(summariseVariant("a", "g", trials, corpus)).toMatchObject({
+    expect(summariseVariant("a", trials, corpus)).toMatchObject({
       meanCostUsd: null,
       totalCostUsd: null,
     });
-    const priced = summariseVariant("a", "g", trials.slice(0, 2), corpus);
+    const priced = summariseVariant("a", trials.slice(0, 2), corpus);
     expect(priced.meanCostUsd).toBeCloseTo(0.002);
     expect(priced.totalCostUsd).toBeCloseTo(0.004);
   });
@@ -1016,14 +956,12 @@ describe("summariseVariant", () => {
       repeat: 1,
       proposal: landed,
       proposalScore: scoreText(entry, landed),
-      landings: {
-        g: { disposition: "applied", landed, landedScore: scoreText(entry, landed) },
-      },
+      landing: { disposition: "applied", landed, landedScore: scoreText(entry, landed) },
       roundTripMs: 1_000,
       totalMs: 1_000,
       costUsd: 0.001,
     }));
-    const [a, b] = ["a", "b"].map((variant) => summariseVariant(variant, "g", rows, [entry]));
+    const [a, b] = ["a", "b"].map((variant) => summariseVariant(variant, rows, [entry]));
     expect(a!.landed.rawWer).toBe(b!.landed.rawWer);
     // "um" over the five words of the closer reference.
     expect(a!.landed.rawWer).toBeCloseTo(1 / 5);
@@ -1047,7 +985,7 @@ describe("summariseVariant", () => {
       drops: [],
     });
     const entries = [mixed, forms];
-    // Landed under the guard "g": a proposal that differs from what landed was turned down.
+    // A proposal that differs from what landed was turned down.
     const row = (
       variant: string,
       entry: CleanupCase,
@@ -1059,12 +997,10 @@ describe("summariseVariant", () => {
       repeat: 1,
       proposal,
       proposalScore: scoreText(entry, proposal),
-      landings: {
-        g: {
-          disposition: proposal === landed ? "applied" : "rejected",
-          landed,
-          landedScore: scoreText(entry, landed),
-        },
+      landing: {
+        disposition: proposal === landed ? "applied" : "rejected",
+        landed,
+        landedScore: scoreText(entry, landed),
       },
       roundTripMs: 1_000,
       totalMs: 1_000,
@@ -1077,7 +1013,7 @@ describe("summariseVariant", () => {
       row("a", forms, forms.reference),
       row("b", mixed, mixed.reference),
     ];
-    const summary = summariseVariant("a", "g", trials, entries);
+    const summary = summariseVariant("a", trials, entries);
     expect(summary.landed).toMatchObject({
       totals: { misreads: 2, forms: 4 },
       misreadRate: 0,
@@ -1088,14 +1024,14 @@ describe("summariseVariant", () => {
       misreadRate: 0.5,
       formRate: 1,
     });
-    expect(summariseVariant("b", "g", trials, entries).landed).toMatchObject({
+    expect(summariseVariant("b", trials, entries).landed).toMatchObject({
       totals: { misreads: 1, forms: 1 },
       misreadRate: 1,
       formRate: 1,
     });
     // A kind the integrity check would refuse counts as neither.
     const odd = { ...forms, id: "odd", fixes: { ...forms.fixes, Run: "typo" as FixKind } };
-    expect(summariseVariant("c", "g", [row("c", odd, odd.reference)], [odd]).landed).toMatchObject({
+    expect(summariseVariant("c", [row("c", odd, odd.reference)], [odd]).landed).toMatchObject({
       totals: { misreads: 0, forms: 2 },
       formRate: 1,
     });
@@ -1124,7 +1060,8 @@ describe("rescore", () => {
     fixes: { Zustand: "misread", worktree: "form", useShallow: "form" },
     drops: [],
   });
-  // Lands under the spoken-symbols guard and not under v11's.
+  // Symbols typed for their spoken names: a cleanup that rewrites a third of
+  // the words, and lands.
   const symbols = makeCase({
     id: "symbols",
     style: "openai",
@@ -1135,8 +1072,6 @@ describe("rescore", () => {
     fixes: { project_id: "form", "db:generate": "form", "electron/ipc/handlers": "form" },
     drops: [],
   });
-  // A passage a harmful cleanup is written for.
-  const scroll = CLEANUP_CORPUS.find((entry) => entry.id === "tics-scroll-runon:deepgram")!;
   const LUNA = "gpt-6-luna:none/production";
   const TERRA = "gpt-6.1-terra:none/production";
 
@@ -1157,7 +1092,7 @@ describe("rescore", () => {
     proposal: correctedText ?? "",
     proposalScore: stale,
     // A request that failed is known by its landing; the rest land again.
-    landings: correctedText === null ? { v11: { disposition: "failed" } } : {},
+    ...(correctedText === null ? { landing: { disposition: "failed" } } : {}),
     roundTripMs: 900,
     totalMs: 950,
     ...billed,
@@ -1170,8 +1105,11 @@ describe("rescore", () => {
   function writeRun(
     name: string,
     entries: readonly CleanupCase[],
-    trials: ReadonlyArray<ReturnType<typeof saved>>,
-    extraCorpus: readonly Record<string, unknown>[] = []
+    trials: readonly object[],
+    {
+      extraCorpus = [],
+      overrides = {},
+    }: { extraCorpus?: readonly object[]; overrides?: Record<string, unknown> } = {}
   ): string {
     const run = {
       schemaVersion: VOICE_CLEANUP_SCHEMA_VERSION,
@@ -1188,15 +1126,6 @@ describe("rescore", () => {
       stream: true,
       variants: [variant(LUNA), variant(TERRA)],
       prompts: {},
-      guards: {
-        v11: GUARD_VARIANTS.v11,
-        symbols: GUARD_VARIANTS.symbols,
-        // Saved looser than today's remove20, as an older run's would be.
-        remove20: {
-          ...GUARD_VARIANTS.remove20,
-          limits: { ...GUARD_VARIANTS.remove20!.limits, minRemoved: 1_000 },
-        },
-      },
       profile: { customDictionary: [], projectName: "daintree", projectPath: "/p", language: "en" },
       corpusHash: "corpus",
       corpus: [
@@ -1211,11 +1140,11 @@ describe("rescore", () => {
         ...extraCorpus,
       ],
       parityMisses: 0,
-      adversarial: [],
       prices: {},
       predictionProbes: [],
       trials,
       summaries: [],
+      ...overrides,
     };
     const file = path.join(directory, name);
     writeFileSync(file, JSON.stringify(run));
@@ -1225,7 +1154,7 @@ describe("rescore", () => {
   const savedRun = () =>
     writeRun(
       "saved.json",
-      [codex, zustand, symbols, scroll],
+      [codex, zustand, symbols],
       [
         saved(LUNA, "codex", codex.reference),
         saved(LUNA, "zustand", "The zoo stand selector in the worktree store needs useShallow."),
@@ -1236,7 +1165,11 @@ describe("rescore", () => {
         saved(LUNA, "symbols", symbols.reference),
         saved(TERRA, "symbols", null),
       ],
-      [{ id: "gone", style: "openai", source: "context", chars: 5, inputHash: "x", sent: {} }]
+      {
+        extraCorpus: [
+          { id: "gone", style: "openai", source: "context", chars: 5, inputHash: "x", sent: {} },
+        ],
+      }
     );
 
   it("keeps a passage's input when only its fixes' kinds change", () => {
@@ -1245,26 +1178,23 @@ describe("rescore", () => {
     expect(inputHash({ ...zustand, fixes: {} })).toBe(inputHash(zustand));
   });
 
-  it("lands a saved run's replies again under each of its guards and scores them by kind", () => {
-    const { run, corpus } = rescore(savedRun(), null, [codex, zustand, symbols, scroll]);
+  it("lands a saved run's replies again as production lands them, and scores them by kind", () => {
+    const { run, corpus } = rescore(savedRun(), [codex, zustand, symbols]);
     expect(run.scoringVersion).toBe(VOICE_CLEANUP_SCORING_VERSION);
     expect(run.rescoreExclusions).toEqual([{ id: "gone", reason: "removed", trials: 1 }]);
-    const summary = (variant: string, guard: string) =>
-      run.summaries.find((entry) => entry.variant === variant && entry.guard === guard)!;
-    expect(summary(LUNA, "v11").landed).toMatchObject({
+    const summary = (variant: string) => run.summaries.find((entry) => entry.variant === variant)!;
+    expect(run.summaries).toHaveLength(2);
+    expect(summary(LUNA).landed).toMatchObject({
       totals: { misreads: 2, forms: 5 },
       misreadRate: 0.5,
-      formRate: 0.4,
+      formRate: 1,
     });
-    expect(summary(LUNA, "v11").rejectReasons).toEqual({ edit_size: 1 });
-    expect(summary(LUNA, "symbols").landed).toMatchObject({ misreadRate: 0.5, formRate: 1 });
-    expect(summary(LUNA, "symbols").rejectReasons).toEqual({});
-    expect(summary(LUNA, "v11").proposed).toMatchObject({ misreadRate: 0.5, formRate: 1 });
-    for (const guard of ["v11", "symbols"]) {
-      expect(summary(TERRA, guard).landed).toMatchObject({ misreadRate: 0.5, formRate: 0 });
-      expect(summary(TERRA, guard).dispositions).toMatchObject({ failed: 1, rejected: 1 });
-    }
-    expect(summary(TERRA, "v11").proposed).toMatchObject({ misreadRate: 1, formRate: 0.4 });
+    expect(summary(LUNA).rejectReasons).toEqual({});
+    expect(summary(LUNA).proposed).toMatchObject({ misreadRate: 0.5, formRate: 1 });
+    expect(summary(TERRA).landed).toMatchObject({ misreadRate: 0.5, formRate: 0 });
+    expect(summary(TERRA).dispositions).toMatchObject({ failed: 1, rejected: 1 });
+    expect(summary(TERRA).rejectReasons).toEqual({ low_confidence: 1 });
+    expect(summary(TERRA).proposed).toMatchObject({ misreadRate: 1, formRate: 0.4 });
 
     const report = renderReport(run, corpus);
     expect(report).toContain(
@@ -1272,43 +1202,93 @@ describe("rescore", () => {
     );
     const section = (heading: string) => report.split(`## ${heading}`)[1]!.split("\n## ")[0]!;
     // Misreads and Forms, the columns after Ready and Repaired.
-    const fixCells = (heading: string, arm: string) =>
+    const fixCells = (heading: string, variant: string) =>
       section(heading)
         .split("\n")
-        .find((line) => line.startsWith(`| ${arm} |`))
+        .find((line) => line.startsWith(`| ${variant} |`))
         ?.split(" | ")
         .slice(3, 5);
     expect(section("What landed")).toContain(
-      "| Arm | Ready | Repaired | Misreads | Forms | Drops |"
+      "| Variant | Ready | Repaired | Misreads | Forms | Drops |"
     );
-    expect(fixCells("What landed", `${LUNA} · v11`)).toEqual(["50.0%", "40.0%"]);
-    expect(fixCells("What landed", `${LUNA} · symbols`)).toEqual(["50.0%", "100.0%"]);
-    expect(fixCells("What landed", `${TERRA} · v11`)).toEqual(["50.0%", "0.0%"]);
+    expect(fixCells("What landed", LUNA)).toEqual(["50.0%", "100.0%"]);
+    expect(fixCells("What landed", TERRA)).toEqual(["50.0%", "0.0%"]);
     expect(fixCells("What the model proposed", LUNA)).toEqual(["50.0%", "100.0%"]);
     expect(fixCells("What the model proposed", TERRA)).toEqual(["100.0%", "40.0%"]);
+    // Applied, declined, rejected, failed, skipped, the reasons, clean passages kept.
+    expect(section("Dispositions")).toContain(
+      `| ${TERRA} | 1 | 0 | 1 | 1 | 0 | low_confidence 1 | 0/0 |`
+    );
 
-    // Under the run's first guard, v11: ready · misreads · forms.
+    // Ready · misreads · forms.
     const bySource = section("Ready, misreads and forms landed, by source");
     expect(bySource).toContain("| context | 1 | 1/1 · 1/1 · – | 1/1 · 1/1 · – |");
     expect(bySource).toContain("| replay | 1 | 0/1 · 0/1 · 2/2 | 0/1 · 0/1 · 0/2 |");
-    expect(bySource).toContain("| ramble | 1 | 0/1 · – · 0/3 | 0/1 · – · 0/3 |");
+    expect(bySource).toContain("| ramble | 1 | 1/1 · – · 3/3 | 0/1 · – · 0/3 |");
     expect(section("Ready, misreads and forms landed, by style")).toContain(
-      "| deepgram | 3 | 1/2 · 1/2 · 2/2 | 1/2 · 1/2 · 0/2 |"
+      "| deepgram | 2 | 1/2 · 1/2 · 2/2 | 1/2 · 1/2 · 0/2 |"
     );
     expect(report).toContain(
       "rejected (low_confidence); missed misreads Zustand; missed forms worktree, useShallow"
     );
-    expect(report).toMatch(
-      /production · v11: ".*" \(rejected \(edit_size\); missed forms project_id/
-    );
+    expect(report).toContain(`- ${LUNA}: ${JSON.stringify(symbols.reference)} (applied; ready)`);
+  });
 
-    // Harmful cleanups land under the limits the run saved, not today's.
-    const closing = (guard: string) =>
-      run.adversarial.find(
-        (entry) => entry.guard === guard && entry.harm === "drops the closing constraint"
-      )?.refusedBy;
-    expect(closing("v11")).toBe("edit_size");
-    expect(closing("remove20")).toBeNull();
+  it("lands each reply of a run saved with a landing per guard once, as production lands it now", () => {
+    const entries = [codex, zustand, symbols];
+    const trials = [
+      saved(LUNA, "codex", codex.reference),
+      saved(LUNA, "symbols", symbols.reference),
+      saved(TERRA, "zustand", zustand.reference, "low"),
+      // Skipped, so not the failure a request with no landing at all is taken for.
+      { ...saved(TERRA, "symbols", null), landing: { disposition: "skipped" } },
+    ];
+    // Schema 3 landed each reply under every guard the run named, kept the
+    // guards beside the trials, and landed hand-written cleanups under them.
+    const refused = {
+      disposition: "rejected",
+      rejectReason: "edit_size",
+      landed: "",
+      landedScore: stale,
+    };
+    const perGuard = trials.map(({ landing, ...trial }) => ({
+      ...trial,
+      landings: landing ? { v11: landing, remove20: landing } : { v11: refused, remove20: refused },
+    }));
+    const limits = { removedRatio: 0.15, addedRatio: 0.15, minRemoved: 4, minAdded: 2 };
+    const legacy = rescore(
+      writeRun("schema3.json", entries, perGuard, {
+        overrides: {
+          schemaVersion: 3,
+          guards: {
+            v11: { description: "v11", limits },
+            remove20: { description: "remove20", limits: { ...limits, removedRatio: 0.2 } },
+          },
+          adversarial: [{ guard: "v11", caseId: "codex", harm: "x", refusedBy: "edit_size" }],
+        },
+      }),
+      entries
+    );
+    const current = rescore(writeRun("schema4.json", entries, trials), entries);
+
+    expect(legacy.run.schemaVersion).toBe(VOICE_CLEANUP_SCHEMA_VERSION);
+    expect(legacy.run).not.toHaveProperty("guards");
+    expect(legacy.run).not.toHaveProperty("adversarial");
+    expect(legacy.run.trials).toEqual(current.run.trials);
+    expect(legacy.run.summaries).toEqual(current.run.summaries);
+    const summary = (variant: string) =>
+      legacy.run.summaries.find((entry) => entry.variant === variant)!;
+    expect(summary(LUNA).dispositions).toMatchObject({ applied: 2, rejected: 0 });
+    expect(summary(TERRA).dispositions).toMatchObject({ rejected: 1, failed: 0, skipped: 1 });
+    expect(summary(TERRA).rejectReasons).toEqual({ low_confidence: 1 });
+    expect(renderReport(legacy.run, legacy.corpus)).not.toMatch(/guard|edit_size/);
+  });
+
+  it("refuses a run saved in a shape it can't read", () => {
+    const file = writeRun("schema2.json", [codex], [saved(LUNA, "codex", codex.reference)], {
+      overrides: { schemaVersion: 2 },
+    });
+    expect(() => rescore(file, [codex])).toThrow(/schema 2, this script reads/);
   });
 
   it("sets the passages sent with recent prompts beside their bare twins, repeat by repeat", () => {
@@ -1336,8 +1316,8 @@ describe("rescore", () => {
       usage: ReturnType<typeof billed>
     ) => ({ ...saved(variant, caseId, landed, "high", usage), repeat });
     const fixedZustand = "The Zustand selector in the worktree store needs useShallow.";
-    // Clean: kept as it was with the prompts, broken without them by a swap
-    // the guard lets through (a dropped negation it would refuse).
+    // Clean: kept as it was with the prompts, broken without them by a
+    // swapped word.
     const merge = makeCase({
       id: "merge",
       raw: "Merge it into develop, not main.",
@@ -1358,7 +1338,7 @@ describe("rescore", () => {
       trial(LUNA, "codex", codex.reference, 1, billed(3_000, 2_944, 0.00003)),
       trial(LUNA, "codex-prompts", codex.reference, 1, billed(3_100, 2_944, 0.00004)),
     ]);
-    const { run, corpus } = rescore(file, null, passages);
+    const { run, corpus } = rescore(file, passages);
     const section = renderReport(run, corpus)
       .split("## With and without recent prompts")[1]!
       .split("\n## ")[0]!;

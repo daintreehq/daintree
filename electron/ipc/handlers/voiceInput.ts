@@ -43,6 +43,7 @@ import {
   type UtteranceRelease,
 } from "../../services/voiceUtteranceCommands.js";
 import {
+  correctionInstructionsFor,
   isVoiceCleanupModel,
   VOICE_CLEANUP_AI_MODEL,
   type CorrectionWorktreeContext,
@@ -117,6 +118,12 @@ import {
   createAudioBufferOverflowError,
 } from "../../services/voice/TranscriptionProvider.js";
 import { voiceFileLinkResolver } from "../../services/VoiceFileLinkResolver.js";
+import { fileSearchService } from "../../services/FileSearchService.js";
+import {
+  buildCodeNameIndex,
+  matchCodeNames,
+  type CodeNameIndex,
+} from "../../services/voiceCodeNames.js";
 import { mayReferenceFile } from "../../../shared/utils/voiceFileLinkCommands.js";
 import { createTimeoutSignal } from "../../../shared/utils/timeoutSignal.js";
 import { typedHandle, typedHandleWithContextValidated } from "../utils.js";
@@ -485,6 +492,10 @@ interface PrefetchRun {
   inputs: Promise<string | null>;
   reply: Promise<CorrectReply>;
 }
+
+// The project's file listing is cached once read, but the first read of a
+// large repository can take a while; past this a passage goes without names.
+const CODE_NAME_READ_BUDGET_MS = 300;
 
 // A pause's prefetch covers the passage so far, so a session's dictation pays
 // for its opening again at each one. Past these a stop just sends its own.
@@ -892,12 +903,18 @@ interface CorrectionSessionContext {
   names: string[];
   repositoryNames: string[];
   worktree: CorrectionWorktreeContext | null;
+  /**
+   * The root of the repository the names were read from, whose files' code
+   * names cleanup may be told; null wherever the repository names are withheld.
+   */
+  codeNameRoot: string | null;
 }
 
 const NO_SESSION_CONTEXT: CorrectionSessionContext = {
   names: [],
   repositoryNames: [],
   worktree: null,
+  codeNameRoot: null,
 };
 
 // Each recent dictation's context, kept whether or not cleanup was on at its
@@ -1516,6 +1533,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         names: flattenDictationNames(screenDictationNames(read.names)),
         repositoryNames: screenCorrectionRepositoryNames(reads.repoNames),
         worktree: screenDictationWorktree(read.worktree),
+        codeNameRoot: keytermTarget.projectPath ?? null,
       }),
       () => NO_SESSION_CONTEXT
     );
@@ -2422,6 +2440,37 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     session.prefetchesStarted += started;
   };
 
+  // Each listing's code names, held only as long as FileSearchService holds the
+  // listing, and rebuilt when the repository names it was built with change.
+  const codeNameIndexes = new WeakMap<
+    readonly string[],
+    { namesKey: string; index: CodeNameIndex }
+  >();
+
+  // The code names a passage spells out word by word, from its repository's
+  // files and names; none when the listing isn't ready in time.
+  const readCodeNames = async (
+    root: string,
+    repositoryNames: readonly string[],
+    text: string
+  ): Promise<string[]> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const files = await Promise.race([
+      fileSearchService.listFiles(root),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), CODE_NAME_READ_BUDGET_MS);
+      }),
+    ]).finally(() => clearTimeout(timer));
+    if (!files) return [];
+    const namesKey = repositoryNames.join("\n");
+    let cached = codeNameIndexes.get(files);
+    if (!cached || cached.namesKey !== namesKey) {
+      cached = { namesKey, index: buildCodeNameIndex(files, repositoryNames) };
+      codeNameIndexes.set(files, cached);
+    }
+    return matchCodeNames(text, cached.index);
+  };
+
   // Everything a cleanup's reply depends on: what goes to OpenAI.
   const cleanupInputsKey = (prepared: PreparedCleanup) =>
     prefetchKey(prepared.request, prepared.settings);
@@ -2471,12 +2520,20 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     }
     const context = sessionContext ? await sessionContext : NO_SESSION_CONTEXT;
     const recentPrompts = ownRecentPrompts(ctx.projectId, request);
+    // Read where the repository names were, and only for rules that say what
+    // code names are: Luna's never learned of them.
+    const codeNames =
+      context.codeNameRoot &&
+      correctionInstructionsFor(settings.correctionModel).core.includes("<code_names>")
+        ? await readCodeNames(context.codeNameRoot, context.repositoryNames, request.rawText)
+        : [];
     return {
       request: {
         rawText: request.rawText,
         recentContext: request.recentContext,
         ...(recentPrompts ? { recentPrompts } : {}),
         ...(terminalOutput ? { terminalOutput } : {}),
+        ...(codeNames.length > 0 ? { codeNames } : {}),
         reason: "stop",
         startsPrompt: request.startsPrompt === true,
         ...(request.uncertain ? { uncertain: request.uncertain } : {}),

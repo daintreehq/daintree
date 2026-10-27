@@ -11,7 +11,6 @@ import {
   opensWithVoiceCommand,
   planSpokenCommand,
   rewriteSpokenCommand,
-  voiceCommandBaseline,
   voiceCommandKeyterms,
 } from "../voiceAgentCommands.js";
 
@@ -310,11 +309,9 @@ describe("checkVoiceCommandEdit", () => {
     ).toBeNull();
   });
 
-  it("measures the rest of a polite request against the command it became", () => {
+  it("accepts the command a polite request became", () => {
     const raw = "can you please run the review skill on auth";
     expect(checkVoiceCommandEdit(raw, "/review on auth", claude, true)).toBeNull();
-    expect(voiceCommandBaseline(raw, "/review on auth", claude)).toBe("/review on auth");
-    expect(voiceCommandBaseline("the review was good", "/review was good", claude)).toBeNull();
   });
 
   it("rejects a command with punctuation stuck to it", () => {
@@ -503,7 +500,6 @@ describe("a bare imperative that shares a command's name", () => {
     ["Frontend component for the header", "/frontend:component for the header"],
   ])("stays prose with nothing that runs a command before it: %j", (raw, corrected) => {
     expect(checkVoiceCommandEdit(raw, corrected, claude, true)).toBe("unprompted_command");
-    expect(voiceCommandBaseline(raw, corrected, claude)).toBeNull();
   });
 
   it.each([
@@ -539,7 +535,6 @@ describe("a bare imperative that shares a command's name", () => {
       checkVoiceCommandEdit("Slash clear the build cache", "/clear the build cache", claude, true)
     ).toBeNull();
     expect(checkVoiceCommandEdit("Run clear", "/clear", claude, true)).toBeNull();
-    expect(voiceCommandBaseline("Run clear", "/clear", claude)).toBe("/clear");
     expect(
       checkVoiceCommandEdit(
         "Please run archive on the old release branches",
@@ -548,16 +543,6 @@ describe("a bare imperative that shares a command's name", () => {
         true
       )
     ).toBeNull();
-    expect(
-      voiceCommandBaseline(
-        "Please run archive on the old release branches",
-        "/archive on the old release branches",
-        codex
-      )
-    ).toBe("/archive on the old release branches");
-    expect(
-      voiceCommandBaseline("Slash clear the build cache", "/clear the build cache", claude)
-    ).toBe("/clear the build cache");
   });
 });
 

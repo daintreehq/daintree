@@ -23,6 +23,11 @@ import { VOICE_CLEANUP_AI_MODEL } from "../../shared/config/voiceCorrection";
 import { getBuiltinSlashCommands } from "../../shared/types/slashCommands";
 import { buildVoiceCommandVocabulary } from "../../shared/utils/voiceAgentCommands";
 import { formatErrorMessage } from "../../shared/utils/errorMessage";
+import {
+  buildCodeNameIndex,
+  matchCodeNames,
+  type CodeNameIndex,
+} from "../../electron/services/voiceCodeNames";
 import { shiftSpans, type VoiceTextSpan } from "../../shared/utils/voiceUncertainWords";
 import { CorrectionStreamAligner } from "../../src/services/voiceCorrectionStream";
 import { seededShuffle } from "./lib/voiceCleanupScore";
@@ -78,7 +83,8 @@ voices REPLICATE_API_TOKEN. Costs cents.
   --clips <list>        only these clip ids (default every replay and long-speech clip)
   --terms               send each clip's terms as Grok keyterms (default none)
   --repo                dictate as into a pane on this repository: its names read as production
-                        reads them, sent to Grok as keyterms and to cleanup as repository names
+                        reads them, sent to Grok as keyterms and to cleanup as repository names,
+                        and the code names each passage spells out
   --seed <n>            order seed (default 14900)
   --label <name>        result file prefix (default run)
   --rescore <run.json>  score a saved run again, sending nothing`;
@@ -167,9 +173,11 @@ function claudeCodeTarget(): VoiceCommandTarget {
 interface RepoContext {
   keyterms: string[];
   repositoryNames: string[];
+  /** The repository's code names, as main indexes a local pane's project. */
+  codeNames: CodeNameIndex;
 }
 
-const NO_REPO_CONTEXT: RepoContext = { keyterms: [], repositoryNames: [] };
+const NO_REPO_CONTEXT: RepoContext = { keyterms: [], repositoryNames: [], codeNames: new Map() };
 
 async function readRepoContext(): Promise<RepoContext> {
   // Computed specifiers keep these main-process modules out of the perf
@@ -187,14 +195,22 @@ async function readRepoContext(): Promise<RepoContext> {
     }) => Promise<string[]>;
     screenCorrectionRepositoryNames: (names: readonly unknown[]) => string[];
   };
+  const searchModule = "../../electron/services/FileSearchService";
+  const { fileSearchService } = (await import(searchModule)) as {
+    fileSearchService: { listFiles: (cwd: string) => Promise<readonly string[]> };
+  };
   const { names } = await deriveRepoNames(REPO_ROOT);
+  const repositoryNames = screenCorrectionRepositoryNames(names);
+  // The listing production reads for a pane's repository.
+  const files = await fileSearchService.listFiles(REPO_ROOT);
   return {
     keyterms: await assembleKeyterms({
       customDictionary: [],
       projectName: "daintree",
       paneReads: { repoNames: names, branchName: null, terminalTerms: [] },
     }),
-    repositoryNames: screenCorrectionRepositoryNames(names),
+    repositoryNames,
+    codeNames: buildCodeNameIndex(files, repositoryNames),
   };
 }
 
@@ -296,11 +312,13 @@ async function dictate(
   const sendCleanup = (text: string, uncertain: VoiceTextSpan[]) => {
     const controller = new AbortController();
     const aligner = new CorrectionStreamAligner(text);
+    const codeNames = matchCodeNames(text, runtime.repo.codeNames);
     const request: VoiceCorrectionRequest = {
       rawText: text,
       reason: "stop",
       startsPrompt: true,
       ...(uncertain.length > 0 ? { uncertain } : {}),
+      ...(codeNames.length > 0 ? { codeNames } : {}),
     };
     const attempt: CleanupAttempt = {
       text,
@@ -640,7 +658,7 @@ async function main(): Promise<number> {
   };
   if (options.repo) {
     console.error(
-      `[voice-pipeline] repository context: ${runtime.repo.keyterms.length} keyterms, ${runtime.repo.repositoryNames.length} names for cleanup`
+      `[voice-pipeline] repository context: ${runtime.repo.keyterms.length} keyterms, ${runtime.repo.repositoryNames.length} names for cleanup, ${runtime.repo.codeNames.size} code names`
     );
   }
 

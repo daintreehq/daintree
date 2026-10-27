@@ -73,7 +73,7 @@ export type VoiceSessionReport = z.infer<typeof VoiceSessionReportSchema>;
 
 /**
  * What main made of one passage's cleanup: a code, never text. A rejection
- * names the guard that kept the raw words; `skipped` is a passage it never sent.
+ * names the check that kept the raw words; `skipped` is a passage it never sent.
  */
 export const VOICE_CORRECTION_VERDICTS = [
   "replaced",
@@ -81,10 +81,6 @@ export const VOICE_CORRECTION_VERDICTS = [
   "unchanged",
   // Cleanup off, nothing to clean, or a passage over the length cap.
   "skipped",
-  "rejected_edit_size",
-  "rejected_negation",
-  "rejected_number",
-  "rejected_protected_span",
   // Any of the agent-command checks.
   "rejected_command",
   "rejected_low_confidence",
@@ -105,10 +101,6 @@ export const VoiceCorrectionPassagesSchema = z
     applied: count,
     unchanged: count,
     skipped: count,
-    rejectedEditSize: count,
-    rejectedNegation: count,
-    rejectedNumber: count,
-    rejectedProtectedSpan: count,
     rejectedCommand: count,
     rejectedLowConfidence: count,
     failed: count,

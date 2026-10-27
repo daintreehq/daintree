@@ -18,10 +18,13 @@ import { FIX_KINDS, type CleanupCase, type FixKind } from "./voiceCleanupCorpus"
 
 // The saved run's shape: bump only when a rescore can no longer read one, since
 // a rescore scores every saved reply again from its text. A trial holds its
-// reply landed under each guard since #14786.
-export const VOICE_CLEANUP_SCHEMA_VERSION = 3;
+// reply landed once, as production lands it, since the meaning guard went.
+export const VOICE_CLEANUP_SCHEMA_VERSION = 4;
+// Schema 3 runs (#14786) landed each reply under every guard they named; a
+// rescore still reads them and lands each saved reply once, as schema 4 does.
+export const VOICE_CLEANUP_READABLE_SCHEMAS: readonly number[] = [3, VOICE_CLEANUP_SCHEMA_VERSION];
 // Bump when a definition below changes, so runs scored differently aren't compared.
-export const VOICE_CLEANUP_SCORING_VERSION = 5;
+export const VOICE_CLEANUP_SCORING_VERSION = 6;
 
 /** Today's send yardstick (#14793): the wait a send used to give cleanup. */
 export const SEND_WAIT_TARGET_MS = 2000;
@@ -131,17 +134,17 @@ interface KeepCheck {
   count: (text: string) => number;
 }
 
-/** Whole protected spans as the guard scans them, so `---watch` is no copy of `--watch`. */
+/** Whole protected spans as `scanProtectedSpans` finds them, so `---watch` is no copy of `--watch`. */
 function countProtectedSpan(haystack: string, span: string): number {
   return scanProtectedSpans(haystack).filter((found) => found.text === span).length;
 }
 
 /**
  * Everything a cleanup must hand back as it was: the code, references, URLs,
- * flags, paths and numbers in the raw transcript, by the rule the meaning
- * guard enforces, then the case's own keeps. Each must come back as often as
- * the raw transcript has it. A keep that is also a protected span or a number
- * is held to that stricter check.
+ * flags and paths `scanProtectedSpans` finds in the raw transcript, and its
+ * numbers, then the case's own keeps. Each must come back as often as the raw
+ * transcript has it. A keep that is also a protected span or a number is held
+ * to that stricter check.
  */
 function keepChecks(entry: CleanupCase): KeepCheck[] {
   const checks: KeepCheck[] = [];
@@ -490,16 +493,13 @@ export function seededShuffle<T>(items: readonly T[], seed: number): T[] {
 /** What became of one passage. */
 export type Disposition = "applied" | "declined" | "rejected" | "failed" | "skipped";
 
-/** A reply landed under one guard: what a send would carry. */
+/** A reply landed as production lands it: what a send would carry. */
 export interface Landing {
   disposition: Disposition;
   rejectReason?: string;
   landed: string;
   landedScore: TextScore;
 }
-
-/** Why a guard refused a cleanup, as opposed to the confidence or command checks. */
-const GUARD_REASONS = new Set(["edit_size", "negation", "number", "protected_span"]);
 
 export interface Trial {
   caseId: string;
@@ -511,8 +511,8 @@ export interface Trial {
   /** What the model proposed: its replacement, else the raw transcript. */
   proposal: string;
   proposalScore: TextScore;
-  /** The reply landed under each guard the run named, by name. */
-  landings: Record<string, Landing>;
+  /** The reply landed through production's command and confidence checks. */
+  landing: Landing;
   /** The service's own round trip, request out to reply read. */
   roundTripMs: number | null;
   /** Request out to the first corrected text a streamed reply showed; absent when it didn't stream or showed none. */
@@ -565,26 +565,13 @@ export interface LatencySummary {
   overTarget: number;
 }
 
-export interface GuardChecks {
-  /** Proposals with a meaning risk that a guard check refused. */
-  caught: number;
-  /** Proposals with a meaning risk that landed. */
-  letThrough: number;
-  /** Proposals with no meaning risk that a guard check refused, so the raw text stayed. */
-  heldBack: number;
-  /** Of those, the ones that were the message the speaker would have typed. */
-  heldBackReady: number;
-}
-
 export interface VariantSummary {
   variant: string;
-  guard: string;
   trials: number;
   dispositions: Record<Disposition, number>;
   rejectReasons: Record<string, number>;
   landed: QualitySummary;
   proposed: QualitySummary;
-  guardChecks: GuardChecks;
   /** Passages already right that came back byte for byte. */
   cleanUntouched: { kept: number; of: number };
   /** Requests that came back with a reply the service could read; failures are left out. */
@@ -711,21 +698,16 @@ function firstTexts(rows: ReadonlyArray<{ trial: Trial }>): number[] {
   );
 }
 
-/**
- * One variant's trials with their replies landed under one guard. Latency,
- * tokens and cost belong to the requests, so they read the same under every
- * guard.
- */
+/** One variant's trials: what landed, what the model proposed, and what the requests took. */
 export function summariseVariant(
   variant: string,
-  guard: string,
   trials: readonly Trial[],
   corpus: readonly CleanupCase[]
 ): VariantSummary {
   const byId = new Map(corpus.map((entry) => [entry.id, entry]));
   const rows = trials
     .filter((trial) => trial.variant === variant)
-    .map((trial) => ({ trial, entry: byId.get(trial.caseId)!, landing: trial.landings[guard]! }))
+    .map((trial) => ({ trial, entry: byId.get(trial.caseId)!, landing: trial.landing }))
     .filter((row) => row.entry && row.landing);
   const dispositions: Record<Disposition, number> = {
     applied: 0,
@@ -735,19 +717,10 @@ export function summariseVariant(
     skipped: 0,
   };
   const rejectReasons: Record<string, number> = {};
-  const guardChecks: GuardChecks = { caught: 0, letThrough: 0, heldBack: 0, heldBackReady: 0 };
-  for (const { trial, landing } of rows) {
+  for (const { landing } of rows) {
     dispositions[landing.disposition]++;
     if (landing.rejectReason) {
       rejectReasons[landing.rejectReason] = (rejectReasons[landing.rejectReason] ?? 0) + 1;
-    }
-    const risky = hasMeaningRisk(trial.proposalScore);
-    const refused = landing.rejectReason !== undefined && GUARD_REASONS.has(landing.rejectReason);
-    if (risky && refused) guardChecks.caught++;
-    if (hasMeaningRisk(landing.landedScore)) guardChecks.letThrough++;
-    if (!risky && refused) {
-      guardChecks.heldBack++;
-      if (trial.proposalScore.agentReady) guardChecks.heldBackReady++;
     }
   }
   const clean = rows.filter(({ entry }) => entry.raw === entry.reference);
@@ -762,7 +735,6 @@ export function summariseVariant(
   const totalInput = sum(billed.map((usage) => usage.inputTokens));
   return {
     variant,
-    guard,
     trials: rows.length,
     dispositions,
     rejectReasons,
@@ -772,7 +744,6 @@ export function summariseVariant(
     proposed: summariseQuality(
       rows.map(({ entry, trial }) => ({ entry, score: trial.proposalScore }))
     ),
-    guardChecks,
     cleanUntouched: {
       kept: clean.filter(({ landing }) => landing.landedScore.untouched).length,
       of: clean.length,

@@ -543,24 +543,3 @@ export function checkVoiceCommandEdit(
     sameWords(correctedArguments, words(trimmedRaw.slice(argumentsAt)));
   return kept ? null : "arguments_reformatted";
 }
-
-/**
- * `raw` as it reads once the invocation `corrected` introduced is written as
- * its command ("please run the review skill on auth" → "/review on auth"),
- * for the prose guards to measure the rest of the cleanup against. Null when
- * `corrected` introduces no command `checkVoiceCommandEdit` accepts.
- */
-export function voiceCommandBaseline(
-  raw: string,
-  corrected: string,
-  vocabulary: VoiceCommandVocabulary
-): string | null {
-  const trimmedRaw = raw.trim();
-  const lead = leadingWord(corrected);
-  const entry = lead !== leadingWord(trimmedRaw) ? knownToken(lead, vocabulary) : null;
-  if (!entry) return null;
-  const argumentsAt = invocationArgumentsAt(trimmedRaw, entry, vocabulary);
-  if (argumentsAt < 0) return null;
-  const rest = trimmedRaw.slice(argumentsAt).trimStart();
-  return rest ? `${entry.token} ${rest}` : entry.token;
-}

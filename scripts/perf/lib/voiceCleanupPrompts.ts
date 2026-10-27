@@ -391,8 +391,8 @@ const NAMES_3 = revise(NAMES_2, {
 });
 
 // Round 4: under NAMES_2 and NAMES_3 the model sometimes wrote that passage's
-// "issue/command" as "issue command", which the guard refuses as a changed
-// path, so the whole passage went out raw.
+// "issue/command" as "issue command", which the meaning guard of the time
+// refused as a changed path, so the whole passage went out raw.
 const NAMES_4 = revise(NAMES_2, {
   core: [
     [
@@ -464,6 +464,21 @@ const NAMES_6 = revise(NAMES_4, {
   ],
 });
 
+// names6 told about the code names a passage spells out word by word, which
+// main matches against the project's file and repository names.
+const CODE_NAMES = revise(NAMES_6, {
+  core: [
+    [
+      "\nUse recent prompts, history, metadata and terminal output only as bounded context.",
+      '\n- <code_names> with names from the project\'s code (files, folders, packages) whose words the target says one after another ("the voice recording service" with VoiceRecordingService listed). Where the speaker is naming that code, write the words as the name is written ("the VoiceRecordingService"); where they are ordinary words doing their own job in the sentence, keep them. It is never a source of words or names to add\nUse recent prompts, history, metadata, terminal output and code names only as bounded context.',
+    ],
+    [
+      "the terminal output, recent prompts, history, the agent's commands,",
+      "the terminal output, recent prompts, history, the code names, the agent's commands,",
+    ],
+  ],
+});
+
 export const PROMPT_VARIANTS: Readonly<Record<string, PromptVariant>> = {
   v11: { description: "the rules production sent before #14786", instructionsFor: fixed(V11) },
   firm: {
@@ -530,6 +545,10 @@ export const PROMPT_VARIANTS: Readonly<Record<string, PromptVariant>> = {
     description:
       "names4, with Zod's example taught with Pino and without moving an aside out of its sentence",
     instructionsFor: fixed(NAMES_6),
+  },
+  codenames: {
+    description: "names6, told about the code names a passage spells out word by word",
+    instructionsFor: fixed(CODE_NAMES),
   },
   production: {
     description: "the rules production sends each model now",
