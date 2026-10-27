@@ -11,6 +11,9 @@ import type {
 // Draft text before a passage sent as correction context, so a dictation that
 // continues a typed sentence isn't recased as if it stood alone.
 const CONTEXT_CHARS = 500;
+// Draft text after a passage dictated into the middle of one, so its casing and
+// end punctuation can fit what follows.
+const FOLLOWING_CHARS = 200;
 
 /**
  * A run of one dictation's words that correction may rewrite: everything
@@ -24,6 +27,8 @@ export interface CorrectionPassage {
   text: string;
   /** The draft before the passage, bounded, without the passage's separator. */
   context: string;
+  /** The draft after the passage, bounded, without its separator; empty at the end of the draft. */
+  following: string;
   /** Nothing but whitespace comes before the passage, so it may open with a command. */
   startsPrompt: boolean;
   /** The words in `text` the recogniser was unsure of, when there are any. */
@@ -40,6 +45,16 @@ function leftContext(draft: string, from: number): string {
   // A trailing newline says the dictation starts a new line, so it stays.
   context = context.trimStart().replace(/[^\S\n]+$/, "");
   return context.trim() ? context : "";
+}
+
+function rightContext(draft: string, to: number): string {
+  const end = Math.min(draft.length, to + FOLLOWING_CHARS);
+  let following = draft.slice(to, end);
+  // Drop the word the bound cut through, if it cut one.
+  if (end < draft.length && /\S/.test(draft.charAt(end))) following = following.replace(/\S+$/, "");
+  // A leading newline says the dictation ends its line, so it stays.
+  following = following.trimEnd().replace(/^[^\S\n]+/, "");
+  return following.trim() ? following : "";
 }
 
 /**
@@ -109,6 +124,7 @@ export function collectCorrectionPassages(
       to,
       text: draft.slice(from, to),
       context: leftContext(draft, from),
+      following: rightContext(draft, to),
       startsPrompt: draft.slice(0, from).trim() === "",
       ...(uncertain.length > 0 ? { uncertain } : {}),
       ...(pauses.length > 0 ? { pauses } : {}),
