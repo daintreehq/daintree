@@ -28,6 +28,8 @@ export interface CorrectionPassage {
   startsPrompt: boolean;
   /** The words in `text` the recogniser was unsure of, when there are any. */
   uncertain?: DictationTextSpan[];
+  /** Where the speaker paused in `text`, each straight after a word, when they did. */
+  pauses?: number[];
 }
 
 function leftContext(draft: string, from: number): string {
@@ -96,6 +98,11 @@ export function collectCorrectionPassages(
         .filter((span) => span.from < span.to && span.to <= range.to - range.from)
         .map((span) => ({ from: range.from - from + span.from, to: range.from - from + span.to }))
     );
+    const pauses = utterances.flatMap(({ range, pauses: positions = [] }) =>
+      positions
+        .filter((at) => at > 0 && at <= range.to - range.from)
+        .map((at) => range.from - from + at)
+    );
     return {
       utteranceIds: utterances.map((utterance) => utterance.id),
       from,
@@ -104,6 +111,7 @@ export function collectCorrectionPassages(
       context: leftContext(draft, from),
       startsPrompt: draft.slice(0, from).trim() === "",
       ...(uncertain.length > 0 ? { uncertain } : {}),
+      ...(pauses.length > 0 ? { pauses } : {}),
     };
   });
 }
@@ -136,16 +144,18 @@ export function locatePassage(
 /**
  * A passage as the transcriber produced it, before any heard-as rule: each
  * utterance's heard words in place of what the rules wrote, with the
- * session's own separators between them, and the words in it the recogniser
- * was unsure of. Read from the same draft the passage was collected from.
+ * session's own separators between them, the words in it the recogniser was
+ * unsure of, and where the speaker paused. Read from the same draft the
+ * passage was collected from.
  */
 export function transcribedPassage(
   record: DictationRecord,
   passage: CorrectionPassage,
   draft: string
-): { text: string; uncertain: DictationTextSpan[] } {
+): { text: string; uncertain: DictationTextSpan[]; pauses: number[] } {
   let text = "";
   const uncertain: DictationTextSpan[] = [];
+  const pauses: number[] = [];
   let at = passage.from;
   for (const id of passage.utteranceIds) {
     const utterance = record.utterances.find((u) => u.id === id);
@@ -160,10 +170,14 @@ export function transcribedPassage(
         uncertain.push({ from: text.length + span.from, to: text.length + span.to });
       }
     }
+    const paused = (utterance.heard === undefined ? utterance.pauses : utterance.heardPauses) ?? [];
+    for (const position of paused) {
+      if (position > 0 && position <= words.length) pauses.push(text.length + position);
+    }
     text += words;
     at = to;
   }
-  return { text, uncertain };
+  return { text, uncertain, pauses };
 }
 
 /** Where one passage's cleanup ended: main's verdict, or what became of it here. */
