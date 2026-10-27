@@ -62,15 +62,34 @@ const draft = () => useTerminalInputStore.getState().getDraftInput(PANEL_ID);
 
 const originalRangeRects = Object.getOwnPropertyDescriptor(Range.prototype, "getClientRects");
 const originalRangeBounds = Range.prototype.getBoundingClientRect;
+// jsdom has no Web Animations, and a wait that outlasts the progress gate on a
+// slow runner animates the composer's fill.
+const originalAnimate = Object.getOwnPropertyDescriptor(Element.prototype, "animate");
+const originalGetAnimations = Object.getOwnPropertyDescriptor(Element.prototype, "getAnimations");
 beforeAll(() => {
   Object.defineProperty(Range.prototype, "getClientRects", { configurable: true, value: () => [] });
   Range.prototype.getBoundingClientRect = () => new DOMRect();
+  Object.defineProperty(Element.prototype, "animate", {
+    configurable: true,
+    value: () => ({ cancel: () => {}, pause: () => {}, onfinish: null }),
+  });
+  Object.defineProperty(Element.prototype, "getAnimations", {
+    configurable: true,
+    value: () => [],
+  });
 });
 afterAll(() => {
   if (originalRangeRects)
     Object.defineProperty(Range.prototype, "getClientRects", originalRangeRects);
   else delete (Range.prototype as Partial<Range>).getClientRects;
   Range.prototype.getBoundingClientRect = originalRangeBounds;
+  for (const [name, original] of [
+    ["animate", originalAnimate],
+    ["getAnimations", originalGetAnimations],
+  ] as const) {
+    if (original) Object.defineProperty(Element.prototype, name, original);
+    else delete (Element.prototype as Partial<Element>)[name];
+  }
 });
 
 let unsubscribeRanges: () => void;
