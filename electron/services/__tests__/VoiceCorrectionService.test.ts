@@ -829,6 +829,23 @@ describe("VoiceCorrectionService", () => {
     expect(body.input[1].content).not.toContain("<uncertain>");
   });
 
+  // Carried for the prompt to use later (#14897); until then nothing sent changes.
+  it("sends OpenAI the same request whether or not the passage carries pauses", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(makeFetchResponse({ action: "no_change", corrected_text: "" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const svc = new VoiceCorrectionService();
+    await svc.correct({ rawText: "  fix it then ship\n", pauses: [8, 18] }, BASE_SETTINGS);
+    await svc.correct({ rawText: "  fix it then ship\n" }, BASE_SETTINGS);
+
+    const [withPauses, without] = fetchMock.mock.calls.map(
+      (call) => (call as unknown as [string, RequestInit])[1].body as string
+    );
+    expect(withPauses).toBe(without);
+  });
+
   async function targetFor(request: Parameters<VoiceCorrectionService["correct"]>[0]) {
     const fetchMock = vi
       .fn()

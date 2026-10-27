@@ -62,6 +62,9 @@ type CompletePayload = {
   uncertain?: Span[];
   heardUncertain?: Span[];
   commandUncertain?: Span[];
+  pauses?: number[];
+  heardPauses?: number[];
+  commandPauses?: number[];
 };
 type Span = { from: number; to: number };
 type CorrectResult = {
@@ -93,6 +96,7 @@ const correct =
       terminalId?: string;
       sessionId?: string;
       uncertain?: Span[];
+      pauses?: number[];
       streamId?: string;
     }) => Promise<CorrectResult>
   >();
@@ -958,6 +962,116 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
         rawText: "add Zustand stor Zustand",
         uncertain: [{ from: 12, to: 16 }],
       });
+    });
+  });
+
+  // Where the speaker paused (#14897), as main sends it on each completion.
+  describe("the speaker's pauses", () => {
+    const complete = (payload: Omit<CompletePayload, "willCorrect">) => {
+      if (payload.text) callbacks.delta!({ text: payload.heard ?? payload.text, itemId: payload.itemId });
+      callbacks.complete!({ willCorrect: false, ...payload });
+    };
+
+    it("sends correction each pause at its place in a passage of several utterances, a stripped break's included", async () => {
+      dictionary = [{ term: "Zustand", heardAs: ["zoo stand"], source: "manual", addedAt: 0 }];
+      const { service, voiceStore, draft } = await setup();
+      correct.mockResolvedValue({ action: "no_change", correctedText: "" });
+
+      voiceStore.getState().beginSession({ panelId: "panel-1" });
+      // "add zoo stand" + pause, "and fix the bug" cut mid-speech, "new line." +
+      // pause (main strips the command: its item retires with the pause after
+      // the words before it), "then run tests" cut at the cap, "and lint" + pause.
+      complete({
+        text: "add Zustand",
+        heard: "add zoo stand",
+        itemId: "a",
+        pauses: [11],
+        heardPauses: [13],
+      });
+      complete({ text: "and fix the bug", itemId: "b" });
+      complete({ text: "", itemId: "c", pauses: [0] });
+      callbacks.boundary!({ rawText: null });
+      complete({ text: "then run tests", itemId: "d" });
+      complete({ text: "and lint", itemId: "e", pauses: [8] });
+      await service.stop();
+
+      expect(draft("panel-1")).toBe("add Zustand and fix the bug\nthen run tests and lint");
+      expect(correct).toHaveBeenLastCalledWith({
+        rawText: "add Zustand and fix the bug\nthen run tests and lint",
+        terminalId: "panel-1",
+        startsPrompt: true,
+        sessionId: expect.any(String),
+        pauses: [11, 27, 51],
+        streamId: expect.any(String),
+      });
+    });
+
+    it("takes the command's own pauses when the command opens the prompt", async () => {
+      const { service, voiceStore, draft } = await setup();
+      correct.mockResolvedValue({ action: "no_change", correctedText: "" });
+
+      voiceStore.getState().beginSession({ panelId: "panel-1" });
+      complete({
+        text: "Slash. review the parser.",
+        itemId: "cmd",
+        commandText: "/review the parser.",
+        pauses: [6, 25],
+        commandPauses: [7, 19],
+      });
+      expect(draft("panel-1")).toBe("/review the parser.");
+      await service.stop();
+
+      expect(correct.mock.lastCall?.[0]).toMatchObject({
+        rawText: "/review the parser.",
+        pauses: [7, 19],
+      });
+    });
+
+    it("keeps a pause the stop-time heard-as rules wrote a term over at the term's end", async () => {
+      dictionary = [{ term: "Zustand", heardAs: ["zoo stand"], source: "manual", addedAt: 0 }];
+      const { service, voiceStore, draft } = await setup();
+      correct.mockResolvedValue({ action: "no_change", correctedText: "" });
+
+      voiceStore.getState().beginSession({ panelId: "panel-1" });
+      complete({ text: "fix it and add zoo", itemId: "a", pauses: [6, 18] });
+      complete({ text: "stand to the store", itemId: "b", pauses: [18] });
+      await service.stop();
+
+      expect(draft("panel-1")).toBe("fix it and add Zustand to the store");
+      expect(correct.mock.lastCall?.[0]).toMatchObject({
+        rawText: "fix it and add Zustand to the store",
+        pauses: [6, 22, 35],
+      });
+    });
+
+    it("marks a pause with no words on the words before it, leaving the live preview alone", async () => {
+      const { service, voiceStore, draft } = await setup();
+      correct.mockResolvedValue({ action: "no_change", correctedText: "" });
+
+      voiceStore.getState().beginSession({ panelId: "panel-1" });
+      complete({ text: "fix the bug", itemId: "a" });
+      callbacks.delta!({ text: "and the", itemId: "b" });
+      complete({ text: "", pauses: [0] });
+      expect(voiceStore.getState().panelBuffers["panel-1"]?.liveText).toBe("and the");
+      expect(voiceStore.getState().panelBuffers["panel-1"]?.completedSegments).toEqual([
+        "fix the bug",
+      ]);
+      complete({ text: "and the parser", itemId: "b" });
+      await service.stop();
+
+      expect(draft("panel-1")).toBe("fix the bug and the parser");
+      expect(correct.mock.lastCall?.[0]).toMatchObject({ pauses: [11] });
+    });
+
+    it("sends no pauses for a dictation the speaker never paused in", async () => {
+      const { service, voiceStore } = await setup();
+      correct.mockResolvedValue({ action: "no_change", correctedText: "" });
+
+      voiceStore.getState().beginSession({ panelId: "panel-1" });
+      complete({ text: "fix the bug", itemId: "a" });
+      await service.stop();
+
+      expect(correct.mock.lastCall?.[0]).not.toHaveProperty("pauses");
     });
   });
 

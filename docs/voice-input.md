@@ -88,6 +88,7 @@ Grok's utterance final restates the whole utterance, chunk finals (`is_final` al
 3. Add the `case` to `VoiceTranscriptionService.createProvider`.
 4. Give it an API-key field (`<issuer>ApiKey` on `VoiceInputSettings`) and an entry in `VOICE_TRANSCRIPTION_PROVIDERS` (`shared/config/voiceProviders.ts`); the configured check and the settings key row both read from there.
 5. If the backend scores each word, pass its words and your own cut-off to `flagUncertainWords` (`shared/utils/voiceUncertainWords.ts`) and put the spans on `complete` as `uncertain`. Calibration differs between providers, so don't borrow Deepgram's cut-off. Otherwise leave it off.
+6. Set `paused` on a `complete` the speaker paused after, as the backend heard it, short pauses inside speech included, and never on one a length cap cut, a stop forced or flushed, or that's `incomplete`. See [Pauses](#pauses).
 
 ## OpenAI session config
 
@@ -208,6 +209,12 @@ The spans travel by position at every hop, never as word text, and a span any re
 4. **Correction.** `collectCorrectionPassages` gives each passage its spans, `voiceInput.correct` carries them as `uncertain`, and `VoiceCorrectionService` shifts them past the whitespace it trims.
 
 They are transcript content: they go in the cleanup request and nowhere else. Logs carry a count at most.
+
+### Pauses
+
+Where the speaker paused reaches each passage's cleanup request as `pauses`: positions in its `rawText`, each straight after the word before the pause (#14897). Cleanup's prompt doesn't use them yet. A provider marks a completion the speaker paused after as `paused`, which drives no command: Deepgram on `speech_final` (a `Finalize` or `CloseStream` flush never sets it); Grok on a non-forced utterance final, except one completed after `audio.done` that ended within an endpoint of the stop, which the stop forced, and never on `transcript.done`'s tail; OpenAI on the transcript of a VAD speech-end or gap commit, never a cap, blind, paragraph or stop commit, however the silence after it reads. An incomplete transcript is never one.
+
+The positions travel as the unsure words do (`shared/utils/voicePausePositions.ts`), with one difference: a rewrite never drops one. A pause after or inside words a stripped command, a heard-as rule, an opening command's name or a file link replaced stays at the end of what replaced them, and one after a command that left no words of its own ends the words before it. A pause with no words of its own after words that already landed goes as a completion with no text and `pauses: [0]`; the renderer marks the session's latest unedited utterance with it (`markPause`), leaves the live preview alone, and redoes the pause's prefetch. Like the unsure words, they're dropped on a draft write nobody described and by a cleanup rewrite. OpenAI's ack-ordering race (a transcript that lands before its commit's ack) loses that commit's pause, as it does for commands.
 
 ### File-link resolution
 

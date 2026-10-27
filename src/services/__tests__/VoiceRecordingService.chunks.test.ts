@@ -627,6 +627,28 @@ describe("VoiceRecordingService — prefetching the stop's cleanup at a pause", 
     }
   });
 
+  // A pause main reports after the words landed changes what the stop sends (#14897).
+  it("prefetches again once a pause with no words marks the words already there", async () => {
+    const { service, sessionId, say } = await setup();
+    correct.mockResolvedValue({ action: "no_change", correctedText: "" });
+
+    say("Run the tests");
+    await settled();
+    emit("complete", { sessionId, text: "", willCorrect: false, pauses: [0] });
+    await settled();
+    expect(prefetchCorrections).toHaveBeenCalledTimes(2);
+    const prefetched = prefetchCorrections.mock.calls[1]![0];
+    expect(prefetched.requests).toEqual([
+      expect.objectContaining({ rawText: "Run the tests", pauses: [13] }),
+    ]);
+
+    await service.stop();
+    const { streamId: _streamId, ...sent } = correct.mock.calls[0]![0] as CorrectRequest & {
+      streamId?: string;
+    };
+    expect(sent).toEqual(prefetched.requests[0]);
+  });
+
   it("prefetches nothing while the stop drains, after the service goes, or with cleanup off", async () => {
     const { service, voiceStore, say } = await setup();
 

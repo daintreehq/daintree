@@ -29,7 +29,8 @@ const textOf = (range: { from: number; to: number }) => draft().slice(range.from
 function dictate(
   words: string,
   sessionTarget = target,
-  uncertain?: Array<{ from: number; to: number }>
+  uncertain?: Array<{ from: number; to: number }>,
+  pauses?: number[]
 ): void {
   const base = draft();
   const separator = base && !base.endsWith(" ") && !base.endsWith("\n") ? " " : "";
@@ -46,6 +47,7 @@ function dictate(
     insertion: { from: base.length, to: from + words.length },
     words: { from, to: from + words.length },
     ...(uncertain ? { uncertain } : {}),
+    ...(pauses ? { pauses } : {}),
   });
 }
 
@@ -431,6 +433,61 @@ describe("dictationRangeStore", () => {
       setDraft(next(draft()));
       expect(draft()).toBe(expected);
       expect(flaggedWords().flat()).toEqual([]);
+    });
+  });
+
+  describe("the speaker's pauses (#14897)", () => {
+    /** Where each of the dictation's passages pauses, as correction would read it. */
+    const pausedAt = () =>
+      collectCorrectionPassages(only(), draft()).map((passage) => passage.pauses ?? []);
+
+    it("hands correction each utterance's pauses at their place in the passage", () => {
+      dictate("fix the bug", target, undefined, [11]);
+      dictate("and the parser", target, undefined, [3, 14]);
+      expect(pausedAt()).toEqual([[11, 15, 26]]);
+    });
+
+    it("keeps them through the session's own writes, and drops them on an edit nobody described", () => {
+      dictate("foo", target, undefined, [3]);
+      dictate("foo");
+      paragraphBreak();
+      dictate("end");
+      expect(pausedAt()).toEqual([[3]]);
+      setDraft(`${draft()} today`);
+      expect(pausedAt()).toEqual([[]]);
+    });
+
+    it("marks a pause with no words of its own after the session's latest words, once", () => {
+      dictate("fix it");
+      dictate("and ship");
+      const store = useDictationRangeStore.getState();
+      expect(store.markPause(target)).toBe(true);
+      expect(store.markPause(target)).toBe(false);
+      expect(pausedAt()).toEqual([[15]]);
+    });
+
+    it("marks no pause on latest words that were edited, or for a session with none here", () => {
+      dictate("fix it");
+      dictate("and ship");
+      edit(12, 12, "x");
+      const store = useDictationRangeStore.getState();
+      expect(store.markPause(target)).toBe(false);
+      expect(store.markPause({ ...target, sessionId: "session-2" })).toBe(false);
+      expect(only().utterances.every((utterance) => !utterance.pauses)).toBe(true);
+    });
+
+    it("keeps a pause after words a file link swaps at the end of the link", () => {
+      dictate("fix the padding, link to the router", target, undefined, [16, 35]);
+      const from = draft().indexOf("link to the router");
+      useDictationRangeStore
+        .getState()
+        .rewriteWords(
+          only().id,
+          [{ from, to: from + "link to the router".length, text: "@a.ts" }],
+          (next) => setDraft(next)
+        );
+      expect(draft()).toBe("fix the padding, @a.ts");
+      expect(only().utterances[0]!.pauses).toEqual([16, 22]);
     });
   });
 
