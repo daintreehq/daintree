@@ -11,6 +11,7 @@ import { HANDBACK_CODE_PATTERN } from "../../shared/types/handback.js";
 import { COPY_TREE_RUN_SOURCES } from "../../shared/types/ipc/copyTreeHistory.js";
 import { MAX_TERMINALS_PER_RECIPE_ADMISSION_BATCH } from "../../shared/utils/recipeSanitizer.js";
 import {
+  VOICE_FOLLOWING_TEXT_MAX_CHARS,
   VOICE_RECENT_PROMPT_MAX_CHARS,
   VOICE_RECENT_PROMPTS_MAX,
   VOICE_REWRITE_MAX_INSTRUCTION_CHARS,
@@ -801,6 +802,11 @@ export const VoiceInputStartOptionsSchema = z
 export const VoiceInputCorrectPayloadSchema = z.object({
   rawText: z.string(),
   recentContext: z.array(z.string()).optional(),
+  /**
+   * The draft after the passage, already bounded: context cleanup never
+   * rewrites. Text that doesn't validate is dropped rather than failing the cleanup.
+   */
+  followingText: z.string().max(VOICE_FOLLOWING_TEXT_MAX_CHARS).optional().catch(undefined),
   /**
    * The prompts the view last sent to `terminalId`, oldest first, already
    * bounded. Ones that don't validate are dropped rather than failing the cleanup.

@@ -3052,6 +3052,7 @@ function buildElectronApi(): ElectronAPI {
       correct: (request: {
         rawText: string;
         recentContext?: string[];
+        followingText?: string;
         terminalId?: string;
         startsPrompt?: boolean;
         sessionId?: string;

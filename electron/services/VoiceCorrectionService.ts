@@ -211,6 +211,8 @@ export interface VoiceCorrectionSettings {
 export interface VoiceCorrectionRequest {
   rawText: string;
   recentContext?: string[];
+  /** The draft after the passage, bounded; context cleanup never rewrites. User content, so never logged. */
+  followingText?: string;
   /** The prompts last sent from the dictated composer, oldest first, bounded; user content, so never logged. */
   recentPrompts?: string[];
   /** What the dictated terminal recently printed, redacted and bounded; evidence for what was heard, never text to correct. */

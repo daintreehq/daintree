@@ -55,6 +55,13 @@ export const VOICE_RECENT_PROMPTS_MAX = 6;
  */
 export const VOICE_RECENT_PROMPT_MAX_CHARS = 1_000;
 
+/**
+ * The most draft text after a passage a cleanup request carries, in UTF-16
+ * units: enough to show whether the sentence carries on, or a bracket or quote
+ * already closes it.
+ */
+export const VOICE_FOLLOWING_TEXT_MAX_CHARS = 200;
+
 const SHARED_TERMS_BLOCK = `<terms>
 type script: TypeScript
 next jess: Next.js

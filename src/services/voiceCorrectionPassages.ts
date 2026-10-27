@@ -2,6 +2,7 @@ import type {
   VoiceCorrectionPassages,
   VoiceCorrectionVerdict,
 } from "@shared/types/voiceSessionSummary";
+import { VOICE_FOLLOWING_TEXT_MAX_CHARS } from "@shared/config/voiceCorrection";
 import type {
   DictationRecord,
   DictationTextSpan,
@@ -11,9 +12,6 @@ import type {
 // Draft text before a passage sent as correction context, so a dictation that
 // continues a typed sentence isn't recased as if it stood alone.
 const CONTEXT_CHARS = 500;
-// Draft text after a passage dictated into the middle of one, so its casing and
-// end punctuation can fit what follows.
-const FOLLOWING_CHARS = 200;
 
 /**
  * A run of one dictation's words that correction may rewrite: everything
@@ -48,7 +46,7 @@ function leftContext(draft: string, from: number): string {
 }
 
 function rightContext(draft: string, to: number): string {
-  const end = Math.min(draft.length, to + FOLLOWING_CHARS);
+  const end = Math.min(draft.length, to + VOICE_FOLLOWING_TEXT_MAX_CHARS);
   let following = draft.slice(to, end);
   // Drop the word the bound cut through, if it cut one.
   if (end < draft.length && /\S/.test(draft.charAt(end))) following = following.replace(/\S+$/, "");
