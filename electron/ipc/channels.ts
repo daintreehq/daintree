@@ -909,6 +909,7 @@ export const CHANNELS = {
   VOICE_INPUT_OPEN_MIC_SETTINGS: "voice-input:open-mic-settings",
   VOICE_INPUT_VALIDATE_API_KEY: "voice-input:validate-api-key",
   VOICE_INPUT_CORRECT: "voice-input:correct",
+  VOICE_INPUT_CORRECTION_PROGRESS: "voice-input:correction-progress",
   VOICE_INPUT_REWRITE: "voice-input:rewrite",
   VOICE_INPUT_FLUSH_PARAGRAPH: "voice-input:flush-paragraph",
   VOICE_INPUT_PARAGRAPH_BOUNDARY: "voice-input:paragraph-boundary",

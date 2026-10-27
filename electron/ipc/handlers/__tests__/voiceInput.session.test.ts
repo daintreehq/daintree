@@ -41,6 +41,7 @@ const shared = vi.hoisted(() => ({
   cleanups: [] as Array<{
     rawText: string;
     signal: AbortSignal | undefined;
+    onText: ((text: string) => void) | undefined;
     finish: (text: string) => void;
   }>,
   /** When set, the project vocabulary read waits on this. */
@@ -110,7 +111,8 @@ vi.mock("../../../services/VoiceCorrectionService.js", () => ({
     this.correct = function (
       request: { rawText: string },
       _settings: unknown,
-      signal?: AbortSignal
+      signal?: AbortSignal,
+      onText?: (text: string) => void
     ) {
       return new Promise((resolve) => {
         const fail = () =>
@@ -120,6 +122,7 @@ vi.mock("../../../services/VoiceCorrectionService.js", () => ({
         shared.cleanups.push({
           rawText: request.rawText,
           signal,
+          onText,
           finish: (text) => resolve({ action: "replace", confirmedText: text }),
         });
       });
@@ -960,6 +963,47 @@ describe("voiceInput — session identity", () => {
 
       ownerA.destroy();
       expect(requestA.signal?.aborted).toBe(false);
+    });
+
+    it("streams a cleanup's text so far back to the view that asked, under its id", async () => {
+      await start(ownerA, "a");
+      await stop(ownerA, "a");
+      const cleanupA = getHandler(CHANNELS.VOICE_INPUT_CORRECT)(
+        { sender: ownerA },
+        { rawText: "fix the bug", sessionId: "a", streamId: "s1" }
+      );
+      const requestA = await requestFor("fix the bug");
+      const progress = () =>
+        ownerA.sent.filter((s) => s.channel === CHANNELS.VOICE_INPUT_CORRECTION_PROGRESS);
+
+      requestA.onText!("Fix the");
+      expect(progress()).toEqual([
+        {
+          channel: CHANNELS.VOICE_INPUT_CORRECTION_PROGRESS,
+          payload: { streamId: "s1", text: "Fix the" },
+        },
+      ]);
+
+      requestA.finish("Fix the bug.");
+      await expect(cleanupA).resolves.toMatchObject({ correctedText: "Fix the bug." });
+    });
+
+    it("streams nothing for a cleanup that didn't ask, or to a view that went away", async () => {
+      await start(ownerA, "a");
+      await stop(ownerA, "a");
+      void correct(ownerA, "a", "fix the bug");
+      expect((await requestFor("fix the bug")).onText).toBeUndefined();
+
+      void getHandler(CHANNELS.VOICE_INPUT_CORRECT)(
+        { sender: ownerA },
+        { rawText: "ship it", sessionId: "a", streamId: "s2" }
+      );
+      const requestB = await requestFor("ship it");
+      ownerA.destroyed = true;
+      requestB.onText!("Ship");
+      expect(ownerA.sent.some((s) => s.channel === CHANNELS.VOICE_INPUT_CORRECTION_PROGRESS)).toBe(
+        false
+      );
     });
 
     it("cancels a cleanup still out when the handlers are unregistered", async () => {

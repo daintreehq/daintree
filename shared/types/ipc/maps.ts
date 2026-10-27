@@ -1309,6 +1309,8 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
         uncertain?: Array<{ from: number; to: number }>;
         /** Dictated into a terminal outside the asking view: cleaned up without its project's vocabulary. */
         outsideView?: true;
+        /** Streams the reply: its text so far comes back as `voice-input:correction-progress` under this id. */
+        streamId?: string;
       },
     ];
     // `failed`: the request failed or was cancelled, leaving the raw text.
@@ -2088,6 +2090,8 @@ export interface IpcEventMap {
     commandUncertain?: Array<{ from: number; to: number }>;
   };
   "voice-input:paragraph-boundary": { sessionId: string; rawText: string | null };
+  /** A streaming correction's text so far, cut at a word boundary; only ever grows. */
+  "voice-input:correction-progress": { streamId: string; text: string };
   "voice-input:file-token-resolved": {
     sessionId: string;
     transcriptId: string;
