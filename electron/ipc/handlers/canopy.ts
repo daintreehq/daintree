@@ -872,7 +872,10 @@ function heldTrash(runId: string, target: CanopyTrashTarget): CanopyTrashEntry {
 }
 
 /** The host's own word that the terminal is still in that trash, read just before acting on it. */
-async function assertHostHolds(runId: string, target: CanopyTrashTarget): Promise<void> {
+async function assertHostHolds(
+  runId: string,
+  target: CanopyTrashTarget
+): Promise<HostTerminalRecord> {
   const record = await requirePtyClient()
     .getTerminalAsync(runId)
     .catch(() => null);
@@ -886,7 +889,12 @@ async function assertHostHolds(runId: string, target: CanopyTrashTarget): Promis
   }
   // Restored, removed or expired elsewhere while the host answered.
   heldTrash(runId, target);
+  return record;
 }
+
+type HostTerminalRecord = NonNullable<
+  Awaited<ReturnType<ReturnType<typeof requirePtyClient>["getTerminalAsync"]>>
+>;
 
 /**
  * Puts back a run from Canopy's Trash, whoever trashed it. A trash Canopy
@@ -932,16 +940,17 @@ async function restoreTrashedRun(
  * trash's own expiry closes it, its session captured for resuming and handed
  * to the same journal. Not waited on: an agent may take seconds to quit.
  */
-function endOnHost(runId: string): void {
+function endOnHost(runId: string, info: HostTerminalRecord): void {
   const ptyClient = requirePtyClient();
   // The generation before the kill: a respawn under the same id must not take the record.
   const launchGeneration = getLifecycleLedger().currentGeneration(runId);
+  // Sent at once, with the record just checked: nothing may move between the check and the kill.
+  const closing = ptyClient.gracefulKill(runId);
   void (async () => {
-    const info = await ptyClient.getTerminalAsync(runId).catch(() => null);
-    const sessionId = await ptyClient.gracefulKill(runId);
+    const sessionId = await closing;
     // An agent that had exited is not killed by a graceful close: its record goes too.
-    if (info?.isExited === true) ptyClient.kill(runId, "canopy-trash-removed");
-    if (!sessionId || !info?.launchAgentId || info.isAssistantTerminal === true) return;
+    if (info.isExited === true) ptyClient.kill(runId, "canopy-trash-removed");
+    if (!sessionId || !info.launchAgentId || info.isAssistantTerminal === true) return;
     events.emit("agent-session:captured", {
       terminalId: runId,
       launchGeneration,
@@ -980,7 +989,7 @@ async function removeTrashedRun(
   mayRemove: (workspaceId: string) => boolean
 ): Promise<void> {
   const held = heldTrash(runId, target);
-  await assertHostHolds(runId, target);
+  const record = await assertHostHolds(runId, target);
   // Control can move while the host is asked.
   if (!mayRemove(held.run.workspaceId)) throw drivenElsewhere(held.run.workspaceId);
   const receipt = receiptFor(held);
@@ -991,7 +1000,7 @@ async function removeTrashedRun(
   forgetReceiptsFor(runId, target.spawnedAt);
   const views = getProjectPushTargets(held.run.workspaceId, CHANNELS.CANOPY_REMOVE_REQUESTED);
   if (views.length === 0 || savedOnly) {
-    endOnHost(runId);
+    endOnHost(runId, record);
     return;
   }
   for (const view of views) {
@@ -1001,13 +1010,18 @@ async function removeTrashedRun(
       // A view torn down mid-send has no pane left to remove.
     }
   }
-  // The view's close takes it out of the trash at once; still there, no view held it.
+  // The view's close takes it out of the trash at once; still there, no view
+  // held it. Checked again as at the request: that trash, and still this
+  // window's to change.
   const fallback = setTimeout(() => {
     removeFallbacks.delete(fallback);
-    const still = trashLedger?.get(runId);
-    if (still?.run.spawnedAt === target.spawnedAt && still.expiresAt === target.expiresAt) {
-      endOnHost(runId);
-    }
+    if (trashLedger?.get(runId) === undefined) return;
+    void assertHostHolds(runId, target).then(
+      (still) => {
+        if (mayRemove(held.run.workspaceId)) endOnHost(runId, still);
+      },
+      () => {}
+    );
   }, REMOVE_FALLBACK_MS);
   fallback.unref?.();
   removeFallbacks.add(fallback);

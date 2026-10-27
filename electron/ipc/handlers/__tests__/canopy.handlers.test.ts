@@ -1224,6 +1224,24 @@ describe("canopy IPC", () => {
       }
     });
 
+    it("ends no unheld removal once control has moved elsewhere", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        state.views = [{ send: vi.fn() }];
+        await trashedOnHost();
+        lease.holder = "self";
+        const removed = await outcome(
+          invoke(CANOPY_METHOD_CHANNELS.removeTrashed, fakeSender(1), "run-1", target)
+        );
+        expect(removed.ok).toBe(true);
+        lease.holder = "other";
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(ptyClient.gracefulKill).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("leaves a removal the view took to the view", async () => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       try {

@@ -92,11 +92,11 @@ export function CanopyTrashSection({
   terms,
   api,
   scopeKey,
-  dockAnnounces,
   onLeaveUp,
   onSearch,
-  onRestored,
-  isBackInFleet,
+  onRestoring,
+  restoringRunId,
+  acted,
 }: {
   ref?: Ref<CanopyTrashSectionHandle>;
   /** The host's trash as its snapshot has it, newest first. */
@@ -107,16 +107,19 @@ export function CanopyTrashSection({
   api: Pick<CanopyApi, "restoreTrashed" | "removeTrashed" | "emptyTrash">;
   /** The host or hosts shown: another's trash starts afresh, its departures unsaid. */
   scopeKey: string;
-  /** The dock beside the panel says this run's expiry itself: its own project's trash. */
-  dockAnnounces: (workspaceId: string) => boolean;
   /** Up off the Trash bar, back into the inbox. */
   onLeaveUp: () => void;
   /** "/" from a row. */
   onSearch: () => void;
-  /** A run put back from here: the inbox selects it once it is back. */
-  onRestored: (runId: string) => void;
-  /** The run is in the fleet again: it left the trash restored, whatever its deadline. */
-  isBackInFleet: (runId: string) => boolean;
+  /**
+   * A run is being put back from here: the inbox selects it once it is back,
+   * unless the user picks something first. Settled with whether main did it.
+   */
+  onRestoring: (runId: string) => (ok: boolean) => void;
+  /** The run whose restore the inbox is waiting for, to take the keyboard to. */
+  restoringRunId: string | null;
+  /** What the panel did itself, so its leaving the trash is said as no expiry. */
+  acted: TrashActed;
 }) {
   const expanded = useCanopyStore((s) => s.trashExpanded);
   const setExpanded = useCanopyStore((s) => s.setTrashExpanded);
@@ -143,65 +146,6 @@ export function CanopyTrashSection({
     const handle = setInterval(() => setNowMs(Date.now()), CLOCK_TICK_MS);
     return () => clearInterval(handle);
   }, [rowsShown]);
-
-  // Trashes this panel restored or removed: their leaving is no expiry.
-  const actedRef = useRef(new Set<string>());
-  // The host or hosts shown now, for an answer that comes back after a switch.
-  const scopeRef = useRef(scopeKey);
-  useLayoutEffect(() => {
-    scopeRef.current = scopeKey;
-  });
-  const isBackRef = useRef(isBackInFleet);
-  useLayoutEffect(() => {
-    isBackRef.current = isBackInFleet;
-  });
-  const confirmTimers = useRef(new Set<ReturnType<typeof setTimeout>>());
-  useEffect(() => {
-    const timers = confirmTimers.current;
-    return () => {
-      for (const timer of timers) clearTimeout(timer);
-      timers.clear();
-    };
-  }, []);
-  const announced = useRef<{ scope: string; held: Map<string, CanopyTrashItem> }>({
-    scope: scopeKey,
-    held: new Map(),
-  });
-  // A run leaving at its deadline was let go by the trash, not by anyone:
-  // said once, politely, as the dock says its own. Another host's list, or
-  // this one's first, has no departures to say. A restore elsewhere just
-  // before the deadline looks the same here until the run is back in the
-  // fleet, so it is said only once the fleet has had time to show it.
-  useEffect(() => {
-    const now = Date.now();
-    const current = new Map(items.map((item) => [trashKey(item), item]));
-    const before = announced.current;
-    const expired: CanopyTrashItem[] = [];
-    if (before.scope === scopeKey) {
-      for (const [key, item] of before.held) {
-        if (current.has(key)) continue;
-        if (actedRef.current.delete(key)) continue;
-        if (now < item.expiresAt - EXPIRY_SLACK_MS) continue;
-        if (dockAnnounces(item.row.run.workspaceId)) continue;
-        expired.push(item);
-      }
-    } else {
-      actedRef.current.clear();
-    }
-    announced.current = { scope: scopeKey, held: current };
-    if (expired.length === 0) return;
-    const timer = setTimeout(() => {
-      confirmTimers.current.delete(timer);
-      if (scopeRef.current !== scopeKey) return;
-      const gone = expired.filter((item) => !isBackRef.current(item.runId));
-      if (gone.length > 0) {
-        useAnnouncerStore
-          .getState()
-          .announce(expiredAnnouncement(gone.map((item) => item.subject)));
-      }
-    }, EXPIRY_CONFIRM_MS);
-    confirmTimers.current.add(timer);
-  }, [items, scopeKey, dockAnnounces]);
 
   const headerRef = useRef<HTMLButtonElement>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
@@ -248,21 +192,20 @@ export function CanopyTrashSection({
     const next = shown[Math.min(index, shown.length - 1)];
     if (next) focusRow(next.runId);
     else if (headerRef.current) headerRef.current.focus();
-    else onLeaveUp();
+    // Restored from here: the inbox takes the keyboard to it once it is back,
+    // and moving its selection meanwhile would read as the user's own choice.
+    else if (restoringRunId !== selectedRunId) onLeaveUp();
   });
 
   const restore = (item: CanopyTrashItem) => {
-    const key = trashKey(item);
-    const scope = scopeKey;
-    actedRef.current.add(key);
+    acted.mark(item);
+    const settle = onRestoring(item.runId);
     safeFireAndForget(
       api.restoreTrashed(item.runId, targetOf(item)).then(
-        () => {
-          // Another host shown by now: its runs are not this one.
-          if (scopeRef.current === scope) onRestored(item.runId);
-        },
+        () => settle(true),
         (error: unknown) => {
-          actedRef.current.delete(key);
+          acted.unmark(item);
+          settle(false);
           failed("Couldn't restore terminal", error);
         }
       )
@@ -274,11 +217,10 @@ export function CanopyTrashSection({
     const item = removing;
     setRemoving(null);
     if (!item) return;
-    const key = trashKey(item);
-    actedRef.current.add(key);
+    acted.mark(item);
     safeFireAndForget(
       api.removeTrashed(item.runId, targetOf(item)).catch((error: unknown) => {
-        actedRef.current.delete(key);
+        acted.unmark(item);
         failed("Couldn't remove terminal", error);
       })
     );
@@ -291,13 +233,12 @@ export function CanopyTrashSection({
     const targets = emptying;
     setEmptying(null);
     if (!targets || targets.length === 0) return;
-    const keys = targets.map(trashKey);
-    for (const key of keys) actedRef.current.add(key);
+    for (const item of targets) acted.mark(item);
     safeFireAndForget(
       api
         .emptyTrash(targets.map((item) => ({ runId: item.runId, ...targetOf(item) })))
         .catch((error: unknown) => {
-          for (const key of keys) actedRef.current.delete(key);
+          for (const item of targets) acted.unmark(item);
           failed("Couldn't empty trash", error);
         })
     );
@@ -468,6 +409,93 @@ export function CanopyTrashSection({
         </div>
       </ConfirmDialog>
     </>
+  );
+}
+
+export interface TrashActed {
+  mark: (item: { runId: string; expiresAt: number }) => void;
+  unmark: (item: { runId: string; expiresAt: number }) => void;
+}
+
+/**
+ * A run leaving the trash at its deadline was let go by it, not by anyone:
+ * said once, politely, as the dock says its own. Another host's list, or the
+ * panel's first, has no departures to say, and neither has what the panel did
+ * itself. A restore elsewhere just before the deadline looks the same until
+ * the run is back in the fleet, so it is said only once the fleet has had
+ * time to show it. Kept by the panel, not the section: the last run expiring
+ * takes the section with it.
+ */
+export function useTrashExpiryAnnouncer({
+  active,
+  entries,
+  workspaces,
+  scopeKey,
+  dockAnnounces,
+  isBackInFleet,
+}: {
+  /** The panel is open: a closed one says nothing. */
+  active: boolean;
+  entries: readonly CanopyTrashEntry[];
+  workspaces: ReadonlyMap<string, PilotWorkspaceMeta>;
+  scopeKey: string;
+  dockAnnounces: (workspaceId: string) => boolean;
+  /** The run is in the fleet again: it left the trash restored, whatever its deadline. */
+  isBackInFleet: (runId: string) => boolean;
+}): TrashActed {
+  const items = useMemo(
+    () => buildCanopyTrash(entries, workspaces, Date.now()),
+    [entries, workspaces]
+  );
+  const actedRef = useRef(new Set<string>());
+  const scopeRef = useRef(scopeKey);
+  const isBackRef = useRef(isBackInFleet);
+  useLayoutEffect(() => {
+    scopeRef.current = scopeKey;
+    isBackRef.current = isBackInFleet;
+  });
+  const timers = useRef(new Set<ReturnType<typeof setTimeout>>());
+  useEffect(() => {
+    const pending = timers.current;
+    return () => {
+      for (const timer of pending) clearTimeout(timer);
+      pending.clear();
+    };
+  }, []);
+  const held = useRef<{ scope: string; items: Map<string, CanopyTrashItem> } | null>(null);
+  useEffect(() => {
+    const current = new Map(items.map((item) => [trashKey(item), item]));
+    const before = held.current;
+    held.current = active ? { scope: scopeKey, items: current } : null;
+    if (before === null || before.scope !== scopeKey) {
+      actedRef.current.clear();
+      return;
+    }
+    const now = Date.now();
+    const expired: CanopyTrashItem[] = [];
+    for (const [key, item] of before.items) {
+      if (current.has(key)) continue;
+      if (actedRef.current.delete(key)) continue;
+      if (now < item.expiresAt - EXPIRY_SLACK_MS) continue;
+      if (dockAnnounces(item.row.run.workspaceId)) continue;
+      expired.push(item);
+    }
+    if (expired.length === 0) return;
+    const timer = setTimeout(() => {
+      timers.current.delete(timer);
+      if (scopeRef.current !== scopeKey) return;
+      const gone = expired.filter((item) => !isBackRef.current(item.runId));
+      if (gone.length === 0) return;
+      useAnnouncerStore.getState().announce(expiredAnnouncement(gone.map((item) => item.subject)));
+    }, EXPIRY_CONFIRM_MS);
+    timers.current.add(timer);
+  }, [active, items, scopeKey, dockAnnounces]);
+  return useMemo(
+    () => ({
+      mark: (item) => actedRef.current.add(trashKey(item)),
+      unmark: (item) => actedRef.current.delete(trashKey(item)),
+    }),
+    []
   );
 }
 

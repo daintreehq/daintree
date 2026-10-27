@@ -290,7 +290,12 @@ describe("CanopyView Trash", () => {
   });
 
   it("leaves the user's own newer selection be when a restored run comes back", async () => {
-    await open(TRASH, ["live", "other"]);
+    const canopy = await open(TRASH, ["live", "other"]);
+    // Main has not answered the restore when the user picks another run.
+    let answer: () => void = () => {};
+    canopy.restoreTrashed.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (answer = resolve))
+    );
     fireEvent.click(trashBar()!);
     await act(async () => {
       fireEvent.click(trashRows()[0]!.querySelector<HTMLElement>("[data-canopy-trash-restore]")!);
@@ -302,6 +307,7 @@ describe("CanopyView Trash", () => {
     await act(async () => {
       fireEvent.click(document.getElementById(`canopy-card-${picked}`)!);
     });
+    await act(async () => answer());
     await act(async () => {
       useFleetSnapshotStore.setState({ snapshot: fleet(["live", "other", "newer"]) });
       useCanopyStore.setState({ snapshot: { ...baseSnapshot, trash: [TRASH[1]!] } });
@@ -313,6 +319,30 @@ describe("CanopyView Trash", () => {
     expect(document.getElementById("canopy-card-newer")?.getAttribute("aria-selected")).toBe(
       "false"
     );
+  });
+
+  it("waits for the restored run with the keyboard, rather than moving the inbox's selection", async () => {
+    await open([TRASH[0]!], ["live", "other"]);
+    const selected = () =>
+      document.querySelector("[data-canopy-card][aria-selected=true]")?.id ?? null;
+    const before = selected();
+    fireEvent.click(trashBar()!);
+    fireEvent.keyDown(trashBar()!, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(trashRows()[0]);
+    await act(async () => {
+      fireEvent.keyDown(trashRows()[0]!, { key: "Enter" });
+    });
+    // Its trash entry goes before the fleet has it back: nothing else is picked meanwhile.
+    await act(async () => {
+      useCanopyStore.setState({ snapshot: { ...baseSnapshot, trash: [] } });
+    });
+    expect(selected()).toBe(before);
+    await act(async () => {
+      useFleetSnapshotStore.setState({ snapshot: fleet(["live", "other", "newer"]) });
+    });
+    await frames();
+    expect(selected()).toBe("canopy-card-newer");
+    expect(document.activeElement?.id).toBe("canopy-card-newer");
   });
 
   it("is reached from the inbox's last row by arrow, unfolded there, and Enter restores", async () => {
@@ -426,6 +456,33 @@ describe("CanopyView Trash", () => {
       { runId: "newer", spawnedAt: NOW - 3_600_000, expiresAt: TRASH[0]!.expiresAt },
       { runId: "older", spawnedAt: NOW - 3_600_000, expiresAt: TRASH[1]!.expiresAt },
     ]);
+  });
+
+  it("says the last run's expiry even as the Trash goes with it, the panel scoped to another project", async () => {
+    const announce = vi
+      .spyOn(useAnnouncerStore.getState(), "announce")
+      .mockImplementation(() => {});
+    const due = (runId: string): CanopyTrashEntry => ({
+      ...trashed(runId, "p2", 20_000),
+      expiresAt: Date.now(),
+    });
+    // "This project" shows none of these runs: the inbox is empty, only the Trash is up.
+    useCanopyStore.setState({ scope: "project" });
+    await open([due("expired"), due("restored")], []);
+    expect(trashBar()).not.toBeNull();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await act(async () => {
+      // Restored elsewhere at its time: back in the fleet, outside the panel's scope.
+      useFleetSnapshotStore.setState({ snapshot: fleet(["restored"]) });
+      useCanopyStore.setState({ snapshot: { ...baseSnapshot, trash: [] } });
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(EXPIRY_CONFIRMED_MS);
+    });
+    const expiries = announce.mock.calls
+      .map(([message]) => message)
+      .filter((message) => /expired/.test(message));
+    expect(expiries).toEqual(["'Fix expired' expired and was removed permanently"]);
   });
 
   it("says once, politely, that a run left the trash at its time, but not one restored", async () => {

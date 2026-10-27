@@ -44,7 +44,11 @@ import { CanopyCard, canopyCardDomId } from "./CanopyCard";
 import { CanopyRow } from "./CanopyRow";
 import { CanopyRowMenu } from "./CanopyRowMenu";
 import { SectionBar } from "./CanopySectionBar";
-import { CanopyTrashSection, type CanopyTrashSectionHandle } from "./CanopyTrashSection";
+import {
+  CanopyTrashSection,
+  useTrashExpiryAnnouncer,
+  type CanopyTrashSectionHandle,
+} from "./CanopyTrashSection";
 import { CanopyEmptyLine } from "./CanopyEmptyLine";
 import { CanopyStatusBar, formatModelBytes } from "./CanopyStatusBar";
 import { CanopyPlace } from "./CanopyPlace";
@@ -956,24 +960,37 @@ function CanopyInbox({
   // Canopy's Trash: every agent run the host's trash holds, any project's.
   const trashRef = useRef<CanopyTrashSectionHandle>(null);
   // A run put back from the Trash comes into the inbox selected, once it is
-  // back in the fleet. Anything the user selects first, another host or the
-  // panel closing, wins.
+  // back in the fleet. Anything the user selects from the press on, another
+  // host or the panel closing, wins.
   const shownRunId = selectedAssistant?.id ?? focusedItem?.runId ?? null;
   const shownRunIdRef = useRef(shownRunId);
   useLayoutEffect(() => {
     shownRunIdRef.current = shownRunId;
   });
-  const [restored, setRestored] = useState<{ runId: string; from: string | null } | null>(null);
-  const onRestored = useCallback(
-    (runId: string) => setRestored({ runId, from: shownRunIdRef.current }),
-    []
-  );
+  const [restored, setRestored] = useState<{
+    runId: string;
+    from: string | null;
+    request: number;
+  } | null>(null);
+  const restoreRequests = useRef(0);
+  const onRestoring = useCallback((runId: string) => {
+    const request = ++restoreRequests.current;
+    setRestored({ runId, from: shownRunIdRef.current, request });
+    return (ok: boolean) => {
+      if (!ok) setRestored((current) => (current?.request === request ? null : current));
+    };
+  }, []);
   useEffect(() => setRestored(null), [hostId, isOpen]);
   useEffect(() => {
     if (restored === null) return;
-    const handle = setTimeout(() => setRestored(null), RESTORED_SELECT_MS);
+    const handle = setTimeout(() => {
+      setRestored(null);
+      // It never came back: a keyboard left waiting for it goes to the search.
+      const active = document.activeElement;
+      if (active === null || active === document.body) searchRef.current?.focus();
+    }, RESTORED_SELECT_MS);
     return () => clearTimeout(handle);
-  }, [restored]);
+  }, [restored, searchRef]);
   useEffect(() => {
     if (restored === null) return;
     if (shownRunId !== restored.from) {
@@ -994,11 +1011,12 @@ function CanopyInbox({
       selectNow(restored.runId);
     }
   }, [restored, shownRunId, visible, focusCardNow, selectNow]);
-  // Back in the fleet: a run that left the trash near its deadline was restored, not let go.
+  // Back in the fleet, whatever the panel's filters show: a run that left the
+  // trash near its deadline was restored, not let go.
   const fleetRunIdsRef = useRef<ReadonlySet<string>>(new Set());
   useEffect(() => {
-    fleetRunIdsRef.current = new Set(baseItems.map((item) => item.runId));
-  }, [baseItems]);
+    fleetRunIdsRef.current = new Set((fleet?.runs ?? []).map((run) => run.runId));
+  }, [fleet]);
   const isBackInFleet = useCallback((runId: string) => fleetRunIdsRef.current.has(runId), []);
   const trashEntries = canopy?.trash ?? NO_TRASH;
   // This view's own project's trash is in its dock too, which says its expiries itself.
@@ -1012,6 +1030,14 @@ function CanopyInbox({
     },
     [otherHost, everyHost, ownHostId]
   );
+  const trashActed = useTrashExpiryAnnouncer({
+    active: isOpen,
+    entries: trashEntries,
+    workspaces,
+    scopeKey: hostId ?? "",
+    dockAnnounces,
+    isBackInFleet,
+  });
   // Up off the Trash bar: the inbox's last row, else the search.
   const leaveTrashUp = () => {
     const last = projection.navigation[projection.navigation.length - 1];
@@ -1968,14 +1994,14 @@ function CanopyInbox({
                   terms={terms}
                   api={api}
                   scopeKey={hostId ?? ""}
-                  dockAnnounces={dockAnnounces}
                   onLeaveUp={leaveTrashUp}
                   onSearch={() => {
                     searchRef.current?.focus();
                     searchRef.current?.select();
                   }}
-                  onRestored={onRestored}
-                  isBackInFleet={isBackInFleet}
+                  onRestoring={onRestoring}
+                  restoringRunId={restored?.runId ?? null}
+                  acted={trashActed}
                 />
               </div>
               {undoLine && (
