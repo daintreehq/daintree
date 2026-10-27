@@ -29,6 +29,8 @@ const UNAVAILABLE_REASON: Record<ReviewFileSinceUnavailableReason, string> = {
   "reviewed-content-missing":
     "Git doesn't hold the version you reviewed: it only ever lived in the working tree, or it has been cleaned up.",
   "reviewed-not-covered": "The review didn't cover this file's content.",
+  "reviewed-not-raw":
+    "The working tree's reviewed version was only known as git compares it, and line-ending or filter settings apply to this file.",
   "current-unreadable": "The current file couldn't be read as the comparison saw it.",
 };
 
@@ -78,6 +80,12 @@ export function describeSinceReviewNotice(
         description: `From ${view.from ?? "none"} to ${view.to ?? "none"}.`,
         replacesBody: true,
       };
+    case "empty-file":
+      return {
+        severity: "info",
+        title: `${side}: empty file ${view.change} since your review`,
+        replacesBody: true,
+      };
     case "binary":
     case "too-large":
       return { severity: "info", title: `${side} since your review`, replacesBody: false };
@@ -112,10 +120,12 @@ interface SinceReviewNoticeProps {
 }
 
 export function SinceReviewNotice({ outcome, view, onSideChange }: SinceReviewNoticeProps) {
+  // Both changed, or the chosen side went back to its reviewed state while the
+  // other kept a change: either way the other side has to stay reachable.
   const bothSides =
     outcome.status === "read" &&
-    outcome.changes.worktree !== "unchanged" &&
-    outcome.changes.index !== "unchanged";
+    ((outcome.changes.worktree !== "unchanged" && outcome.changes.index !== "unchanged") ||
+      outcome.changes[outcome.side] === "unchanged");
   return (
     <div data-testid="since-review-notice">
       <InlineStatusBanner

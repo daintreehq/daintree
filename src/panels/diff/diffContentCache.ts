@@ -57,6 +57,8 @@ export type DiffSubject =
       filePath: string;
       /** Absent: the host picks the side that changed. */
       side: ReviewFileSinceSide | undefined;
+      /** The mark's revision when asked, so a replaced mark is a new request. */
+      markRevision: number | undefined;
     };
 
 export function _resetDiffCacheForTests(): void {
@@ -70,7 +72,7 @@ export function diffCacheKey(subject: DiffSubject, ignoreWhitespace: boolean): s
     subject.source === "base-branch"
       ? `${subject.baseBranch}\u0000${subject.currentBranch}`
       : subject.source === "since-review"
-        ? `${subject.worktreeId}\u0000${subject.side ?? ""}`
+        ? `${subject.worktreeId}\u0000${subject.side ?? ""}\u0000${subject.markRevision ?? ""}`
         : subject.status;
   return [
     subject.source,

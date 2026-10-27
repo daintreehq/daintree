@@ -106,6 +106,8 @@ export type ReviewFileSinceUnavailableReason =
   | "reviewed-content-missing"
   /** The point didn't cover this path, or held no content for it to compare. */
   | "reviewed-not-covered"
+  /** Only known as git compares it, and line-ending or filter settings apply to this file. */
+  | "reviewed-not-raw"
   /** The current content couldn't be read as the comparison saw it. */
   | "current-unreadable";
 
@@ -115,6 +117,8 @@ export type ReviewFileSinceView =
   /** Exactly the reviewed content against the current one. */
   | { kind: "exact"; patch: string }
   | { kind: "mode-only"; from: string | null; to: string | null }
+  /** An empty file was added or deleted: there are no lines to show. */
+  | { kind: "empty-file"; change: "added" | "deleted" }
   | { kind: "binary" }
   | { kind: "too-large" }
   /** A submodule, a conflicted or intent-to-add index entry: no file content to compare. */

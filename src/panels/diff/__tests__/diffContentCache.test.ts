@@ -171,6 +171,7 @@ describe("diffContentCache — since-review subjects", () => {
     worktreeId: "/repo",
     filePath: "src/a.ts",
     side,
+    markRevision: 1,
   });
 
   it("asks the host, keeps its answer with the entry and never caches it", async () => {

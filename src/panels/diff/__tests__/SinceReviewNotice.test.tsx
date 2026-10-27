@@ -85,6 +85,26 @@ describe("SinceReviewNotice", () => {
     expect(onSideChange).toHaveBeenCalledWith("index");
   });
 
+  it("keeps the other side reachable when the chosen one went back to its reviewed state", () => {
+    const outcome = read({ kind: "unchanged" }, { worktree: "changed", index: "unchanged" });
+    if (outcome.status !== "read") throw new Error("expected read");
+    const index: ReviewMarkFileSinceOutcome = { ...outcome, side: "index" };
+    render(
+      <SinceReviewNotice
+        outcome={index}
+        view={describeSinceReviewNotice(index)!}
+        onSideChange={() => {}}
+      />
+    );
+    expect(screen.getByRole("radio", { name: "Working tree" })).toBeTruthy();
+  });
+
+  it("names an empty file added since review rather than saying nothing changed", () => {
+    expect(describeSinceReviewNotice(read({ kind: "empty-file", change: "added" }))?.title).toBe(
+      "Working tree: empty file added since your review"
+    );
+  });
+
   it("shows no side switch for a single changed side", () => {
     const outcome = read({ kind: "exact", patch: "@@" });
     render(

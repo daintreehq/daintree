@@ -70,7 +70,11 @@ export async function readFileSinceReview(
   if (before.kind === "unsupported" || now.kind === "unsupported") return { kind: "unsupported" };
   const changed = file[side] === "changed";
   const unavailable = (
-    reason: "reviewed-content-missing" | "reviewed-not-covered" | "current-unreadable",
+    reason:
+      | "reviewed-content-missing"
+      | "reviewed-not-covered"
+      | "reviewed-not-raw"
+      | "current-unreadable",
     standIn: Extract<ReviewFileSinceView, { kind: "unavailable" }>["standIn"] = null
   ): ReviewFileSinceView => ({ kind: "unavailable", reason, changed, standIn });
   if (now.kind === "uncovered") return unavailable("current-unreadable");
@@ -80,6 +84,18 @@ export async function readFileSinceReview(
   const current = await fetchEnd(env, now, "current");
   if (current.kind === "too-large") return { kind: "too-large" };
   if (current.kind !== "bytes") return unavailable("current-unreadable");
+
+  // Outside the point's change set, the working tree held what git compared
+  // equal to the committed entry. With line-ending or filter conversion in play
+  // that isn't the raw bytes that were on screen, so it can't be called exact.
+  if (
+    side === "worktree" &&
+    file.reviewed.kind === "unlisted" &&
+    before.kind === "content" &&
+    (await conversionApplies(env))
+  ) {
+    return unavailable("reviewed-not-raw", await standInFor(env, point, file, now, current.bytes));
+  }
 
   const reviewed = await fetchEnd(env, before, "reviewed");
   if (reviewed.kind === "too-large") return { kind: "too-large" };
@@ -178,22 +194,33 @@ async function readFromDisk(
     const stats = await lstatOrNull(target);
     if (!stats) return { kind: "unreadable" };
     let bytes: Buffer;
-    if (end.mode === "120000") {
-      if (!stats.isSymbolicLink()) return { kind: "unreadable" };
+    if (end.mode === "120000" && stats.isSymbolicLink()) {
       bytes = await fs.promises.readlink(target, { encoding: "buffer" });
+      if (bytes.length > MAX_SIDE_BYTES) return { kind: "too-large" };
     } else {
+      // Also a link that core.symlinks=false checked out as a file holding the link text.
       if (!stats.isFile()) return { kind: "unreadable" };
-      if (stats.size > BigInt(MAX_SIDE_BYTES)) return { kind: "too-large" };
       const flags =
         fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0);
       const handle = await fs.promises.open(target, flags);
       try {
-        bytes = await handle.readFile();
+        // The opened file, not the path: it may have been swapped since the lstat.
+        const opened = await handle.stat();
+        if (!opened.isFile()) return { kind: "unreadable" };
+        if (opened.size > MAX_SIDE_BYTES) return { kind: "too-large" };
+        const buffer = Buffer.allocUnsafe(MAX_SIDE_BYTES + 1);
+        let total = 0;
+        for (;;) {
+          const { bytesRead } = await handle.read(buffer, total, buffer.length - total, total);
+          if (bytesRead === 0) break;
+          total += bytesRead;
+          if (total > MAX_SIDE_BYTES) return { kind: "too-large" };
+        }
+        bytes = buffer.subarray(0, total);
       } finally {
         await handle.close().catch(() => {});
       }
     }
-    if (bytes.length > MAX_SIDE_BYTES) return { kind: "too-large" };
     return blobId(env.objectFormat, bytes) === end.oid
       ? { kind: "bytes", bytes }
       : { kind: "unreadable" };
@@ -210,8 +237,8 @@ async function standInFor(
   now: Extract<End, { kind: "content" | "absent" }>,
   current: Buffer | null
 ): Promise<Extract<ReviewFileSinceView, { kind: "unavailable" }>["standIn"]> {
-  if (point.head.kind === "unborn" || file.reviewed.kind !== "listed") return null;
-  const head = entryEnd(file.reviewed.head);
+  if (point.head.kind === "unborn" || file.reviewed.kind === "uncovered") return null;
+  const head = entryEnd(file.reviewed.kind === "listed" ? file.reviewed.head : file.reviewed.entry);
   if (head.kind !== "content") return null;
   const old = await catBlob(env, head.oid);
   if (old.kind !== "bytes") return null;
@@ -241,7 +268,11 @@ async function render(
   }
   const patch = await gitPatch(env, fromMode, old, toMode, current);
   if (patch === "too-large") return { kind: "too-large" };
-  return patch === null ? { kind: "unchanged" } : { kind: "exact", patch };
+  if (patch !== null) return { kind: "exact", patch };
+  // No hunks: an empty file came or went, which is still a change.
+  if (old === null) return { kind: "empty-file", change: "added" };
+  if (current === null) return { kind: "empty-file", change: "deleted" };
+  return { kind: "unchanged" };
 }
 
 function isBinary(bytes: Buffer | null): boolean {
@@ -308,17 +339,79 @@ async function gitPatch(
     const hunks = text.startsWith("@@") ? 0 : text.indexOf("\n@@");
     if (hunks === -1) return null;
     const body = text.slice(hunks === 0 ? 0 : hunks + 1);
-    const name = env.file.path;
-    const header = [`diff --git a/${name} b/${name}`];
+    const oldName = quotePath(`a/${env.file.path}`);
+    const newName = quotePath(`b/${env.file.path}`);
+    const header = [`diff --git ${oldName} ${newName}`];
     if (fromMode === null && toMode !== null) header.push(`new file mode ${toMode}`);
     else if (toMode === null && fromMode !== null) header.push(`deleted file mode ${fromMode}`);
     else if (fromMode !== toMode) header.push(`old mode ${fromMode}`, `new mode ${toMode}`);
     header.push(
-      fromMode === null ? "--- /dev/null" : `--- a/${name}`,
-      toMode === null ? "+++ /dev/null" : `+++ b/${name}`
+      fromMode === null ? "--- /dev/null" : `--- ${oldName}`,
+      toMode === null ? "+++ /dev/null" : `+++ ${newName}`
     );
     return `${header.join("\n")}\n${body}`;
   } finally {
     await fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/** A path as git writes it in a patch header: quoted when a byte needs escaping. */
+function quotePath(name: string): string {
+  const bytes = Buffer.from(name, "utf8");
+  let plain = true;
+  let out = "";
+  for (const byte of bytes) {
+    if (byte === 0x22 || byte === 0x5c) {
+      plain = false;
+      out += `\\${String.fromCharCode(byte)}`;
+    } else if (byte === 0x0a) {
+      plain = false;
+      out += "\\n";
+    } else if (byte === 0x09) {
+      plain = false;
+      out += "\\t";
+    } else if (byte < 0x20 || byte >= 0x7f) {
+      plain = false;
+      out += `\\${byte.toString(8).padStart(3, "0")}`;
+    } else {
+      out += String.fromCharCode(byte);
+    }
+  }
+  return plain ? name : `"${out}"`;
+}
+
+/** Whether git may convert line endings or run a filter on this path, as far as its settings say. */
+async function conversionApplies(env: ReadEnv): Promise<boolean> {
+  // A name that isn't UTF-8 can't be passed as an argument; assume the worst.
+  if (env.file.pathBytes) return true;
+  const run = (args: string[], okExitCodes?: number[]) =>
+    runGitForBytes(env.cwd, args, {
+      signal: env.signal,
+      timeoutMs: GIT_TIMEOUT_MS,
+      maxStdoutBytes: 64 * 1024,
+      okExitCodes,
+    });
+  try {
+    const config = await run(["config", "-z", "--get-regexp", "^core\\.(autocrlf|eol)$"], [1]);
+    for (const entry of config.stdout.toString("utf8").split("\0")) {
+      const [key, value = ""] = entry.split("\n");
+      if (key === "core.autocrlf" && value !== "false" && value !== "") return true;
+      if (
+        key === "core.eol" &&
+        (value === "crlf" || (value === "native" && process.platform === "win32"))
+      ) {
+        return true;
+      }
+    }
+    const attrs = await run(["check-attr", "-z", "eol", "filter", "--", env.file.path]);
+    const fields = attrs.stdout.toString("utf8").split("\0");
+    // path, attribute, value, repeated.
+    for (let i = 2; i < fields.length; i += 3) {
+      if (fields[i] !== undefined && fields[i] !== "" && fields[i] !== "unspecified") return true;
+    }
+    return false;
+  } catch (error) {
+    if (env.signal?.aborted) throw error;
+    return true;
   }
 }

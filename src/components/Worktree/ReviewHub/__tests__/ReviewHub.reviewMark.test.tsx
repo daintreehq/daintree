@@ -57,7 +57,6 @@ vi.mock("@/components/ui/tooltip", () => ({
   TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
 
-import { actionService } from "@/services/ActionService";
 import { usePanelDialogStore } from "@/store/panelDialogStore";
 import { ReviewHubContent } from "../ReviewHubContent";
 import { resetStagingStatusCacheForTests } from "../stagingStatusCache";

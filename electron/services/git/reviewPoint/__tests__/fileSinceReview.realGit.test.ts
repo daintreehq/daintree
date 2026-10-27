@@ -14,6 +14,8 @@ import type { ReviewFileSinceSide } from "../../../../../shared/types/ipc/review
 // Real repositories throughout, like the capture's own tests: the comparison is
 // only as good as what git actually reports after each kind of history change.
 
+const posixOnly = process.platform === "win32" ? it.skip : it;
+
 let root: string;
 
 function fixtureEnv(): NodeJS.ProcessEnv {
@@ -290,6 +292,94 @@ describe("readFileSinceReview", () => {
     const view = await sinceReview(repo, point, "a.txt", "worktree");
 
     expect(view).toEqual({ kind: "mode-only", from: "100644", to: "100755" });
+  });
+
+  it("diffs the index by its own entries, apart from the working tree", async () => {
+    const repo = topicRepo();
+    write(repo, "a.txt", "staged one\n");
+    git(repo, "add", "a.txt");
+    write(repo, "a.txt", "tree one\n");
+    const point = await review(repo);
+    write(repo, "a.txt", "staged two\n");
+    git(repo, "add", "a.txt");
+    write(repo, "a.txt", "tree two\n");
+
+    const index = await sinceReview(repo, point, "a.txt", "index");
+    const tree = await sinceReview(repo, point, "a.txt", "worktree");
+
+    expect(index.kind === "exact" && index.patch).toContain("-staged one\n+staged two\n");
+    expect(index.kind === "exact" && index.patch).not.toContain("tree");
+    // The tree never held the staged text, and its own reviewed bytes were never stored.
+    expect(tree.kind).toBe("unavailable");
+  });
+
+  it("does not pass invalid UTF-8 text through as a diff", async () => {
+    const repo = topicRepo();
+    write(repo, "a.txt", Buffer.from([0x61, 0xff, 0x0a]));
+    git(repo, "add", "a.txt");
+    const point = await review(repo);
+    write(repo, "a.txt", Buffer.from([0x62, 0xff, 0x0a]));
+
+    expect((await sinceReview(repo, point, "a.txt", "worktree")).kind).toBe("binary");
+  });
+
+  it("shows a file added after review as new, and an empty one as added", async () => {
+    const repo = topicRepo();
+    const point = await review(repo);
+    write(repo, "n.txt", "new\n");
+    write(repo, "e.txt", "");
+    fs.rmSync(path.join(repo, "b.txt"));
+    write(repo, "b.txt", "");
+
+    const added = await sinceReview(repo, point, "n.txt", "worktree");
+    const empty = await sinceReview(repo, point, "e.txt", "worktree");
+
+    expect(added.kind === "exact" && added.patch).toContain("new file mode 100644");
+    expect(added.kind === "exact" && added.patch).toContain("--- /dev/null");
+    expect(empty).toEqual({ kind: "empty-file", change: "added" });
+  });
+
+  it("shows a reviewed empty file that was deleted as deleted, not unchanged", async () => {
+    const repo = topicRepo();
+    write(repo, "z.txt", "");
+    git(repo, "add", "z.txt");
+    const point = await review(repo);
+    fs.rmSync(path.join(repo, "z.txt"));
+
+    expect(await sinceReview(repo, point, "z.txt", "worktree")).toEqual({
+      kind: "empty-file",
+      change: "deleted",
+    });
+  });
+
+  it("won't call an unlisted file's reviewed version exact when line endings are converted", async () => {
+    const repo = topicRepo();
+    git(repo, "config", "core.autocrlf", "true");
+    const point = await review(repo);
+    write(repo, "b.txt", "later\r\n");
+
+    const view = await sinceReview(repo, point, "b.txt", "worktree");
+
+    expect(view.kind).toBe("unavailable");
+    if (view.kind !== "unavailable") return;
+    expect(view.reason).toBe("reviewed-not-raw");
+    expect(view.standIn?.patch).toContain("-b\n");
+  });
+
+  posixOnly("quotes a path that would break a patch header", async () => {
+    const repo = topicRepo();
+    write(repo, 'we"ird\nname.txt', "one\n");
+    git(repo, "add", "-A");
+    const point = await review(repo);
+    write(repo, 'we"ird\nname.txt', "two\n");
+
+    const view = await sinceReview(repo, point, 'we"ird\nname.txt', "worktree");
+
+    expect(view.kind).toBe("exact");
+    if (view.kind !== "exact") return;
+    const header = view.patch.split("\n").slice(0, 3);
+    expect(header[0]).toBe('diff --git "a/we\\"ird\\nname.txt" "b/we\\"ird\\nname.txt"');
+    expect(header[1]).toBe('--- "a/we\\"ird\\nname.txt"');
   });
 
   it("leaves the repository and the working tree untouched", async () => {

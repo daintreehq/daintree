@@ -67,6 +67,7 @@ import { DiffViewer, FULL_FILE_MAX_LINES } from "@/components/Worktree/DiffViewe
 import type { FullFileUnavailableReason } from "@/components/Worktree/DiffViewer";
 import { FILE_READ_ERROR_MESSAGES } from "@/components/FileViewer/fileReadErrors";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
+import { useReviewMarksStore } from "@/store/reviewMarksStore";
 import type { ReviewFileSinceSide } from "@shared/types/ipc/reviewMarks";
 import { SinceReviewNotice, describeSinceReviewNotice } from "./SinceReviewNotice";
 import type { DiffViewerAnnotations } from "@/components/Worktree/DiffViewer";
@@ -205,12 +206,20 @@ function buildSubject(
   status: GitStatus | undefined,
   currentBranch: string,
   worktreeId?: string,
-  sinceReviewSide?: ReviewFileSinceSide
+  sinceReviewSide?: ReviewFileSinceSide,
+  markRevision?: number
 ): DiffSubject | null {
   if (!worktreePath || !filePath) return null;
   if (diffSource === "since-review") {
     if (!worktreeId) return null;
-    return { source: "since-review", worktreePath, worktreeId, filePath, side: sinceReviewSide };
+    return {
+      source: "since-review",
+      worktreePath,
+      worktreeId,
+      filePath,
+      side: sinceReviewSide,
+      markRevision,
+    };
   }
   if (diffSource === "base-branch") {
     // Without both refs there is no comparison to make; render the empty state
@@ -360,6 +369,11 @@ export function DiffPane({
     sinceReviewSideChoice && sinceReviewSideChoice.file === filePath
       ? sinceReviewSideChoice.side
       : undefined;
+  // A replaced or cleared mark makes the shown comparison one against a mark
+  // that's gone, so the revision is part of what's being asked for.
+  const markRevision = useReviewMarksStore((state) =>
+    worktreeId ? state.marks[worktreeId]?.revision : undefined
+  );
   const subject = useMemo(
     () =>
       buildSubject(
@@ -370,7 +384,8 @@ export function DiffPane({
         fileStatus,
         currentBranch,
         worktreeId,
-        sinceReviewSide
+        sinceReviewSide,
+        markRevision
       ),
     [
       effectiveSource,
@@ -381,6 +396,7 @@ export function DiffPane({
       currentBranch,
       worktreeId,
       sinceReviewSide,
+      markRevision,
     ]
   );
 
@@ -1199,6 +1215,13 @@ export function DiffPane({
           outranks both ambient notices; they return once it is dismissed or a
           retry succeeds. Below it, the existing stale-over-full-file order
           stands. */}
+      {sinceReview && sinceReviewNotice && (
+        <SinceReviewNotice
+          outcome={sinceReview}
+          view={sinceReviewNotice}
+          onSideChange={(side) => setSinceReviewSideChoice({ file: filePath, side })}
+        />
+      )}
       {externalError ? (
         <InlineStatusBanner
           icon={XCircle}
@@ -1220,13 +1243,6 @@ export function DiffPane({
         />
       ) : (
         <>
-          {sinceReview && sinceReviewNotice && (
-            <SinceReviewNotice
-              outcome={sinceReview}
-              view={sinceReviewNotice}
-              onSideChange={(side) => setSinceReviewSideChoice({ file: filePath, side })}
-            />
-          )}
           {stale && hasDiff && (
             <InlineStatusBanner
               severity="info"
