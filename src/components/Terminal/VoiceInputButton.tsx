@@ -70,6 +70,7 @@ export function VoiceInputButton({
   const isConfigured = useVoiceRecordingStore((state) => state.isConfigured);
   const lastError = useVoiceRecordingStore((state) => state.lastError);
   const pauseStopWarning = useVoiceRecordingStore((state) => state.pauseStopWarning);
+  const idleStopWarning = useVoiceRecordingStore((state) => state.idleStopWarning);
   const errorPanelId = useVoiceRecordingStore((state) => state.errorPanelId);
   const micSignal = useVoiceRecordingStore((state) => state.micSignal);
   const micDeviceLabel = useVoiceRecordingStore((state) => state.micDeviceLabel);
@@ -292,7 +293,9 @@ export function VoiceInputButton({
               : isReconnecting
                 ? "Reconnecting… Click to stop"
                 : isListening
-                  ? "Stop recording"
+                  ? idleStopWarning
+                    ? "Stopping in 10s unless you speak · Click to stop"
+                    : "Stop recording"
                   : "Start voice input";
 
   return (
