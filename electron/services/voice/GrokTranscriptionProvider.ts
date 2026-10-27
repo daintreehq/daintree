@@ -100,6 +100,9 @@ const TRIMMED_RETRY_KEYTERMS = 20;
 // Two results belong to the same stretch of audio when one starts this close
 // to where the other ends.
 const RESULT_TIMING_TOLERANCE_SECONDS = 0.1;
+// The server answers a Finalize at once when an utterance is open; one sent
+// with nothing open is never answered, and stops counting after this.
+const FINALIZE_ANSWER_MS = 2_000;
 
 // Grok sends nothing when speech starts, which a held spoken "send it" waits
 // on (Deepgram's `SpeechStarted`). A plain level check over the outgoing audio
@@ -263,10 +266,12 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
   private carriedText: string[] = [];
   private lockedChunks: LockedChunk[] = [];
   private previewText = "";
-  private previewHasInterim = false;
-  // A Finalize is waiting on its utterance final, which ends the utterance
-  // because Enter did, not because the speaker paused.
-  private finalizePending = false;
+  // Where the last utterance completed on this connection ends, in its
+  // seconds, so `transcript.done` can tell the tail no final covered.
+  private connectionCompletedEnd = 0;
+  // When each Finalize went out. The utterance final that answers one ends
+  // its utterance because Enter did, not because the speaker paused.
+  private finalizeSentAt: number[] = [];
 
   // Onset guard state, over fresh audio only.
   private onsetSpeaking = false;
@@ -285,9 +290,7 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
     if (!this.connection || !this.isReady || this.isDraining) return;
     try {
       this.connection.send(JSON.stringify({ type: "Finalize" }));
-      // With nothing open the server has nothing to finalise, and the next
-      // utterance's own final must still end speech.
-      this.finalizePending = this.utteranceItemId !== null;
+      this.finalizeSentAt.push(performance.now());
       logDebug(`${P} → Finalize (paragraph boundary)`);
     } catch (err) {
       logWarn(`${P} Failed to send Finalize`, voiceErrorLogFields(err));
@@ -885,9 +888,9 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
 
       case "transcript.done":
         // Restates the whole connection's transcript, which the utterances
-        // already delivered; only an utterance it never finalised is settled.
+        // already delivered; only the words past the last one are settled.
         logDebug(`${P} ← transcript.done`);
-        this.settleOpenUtterance("transcript-done");
+        this.settleOpenUtterance("transcript-done", this.uncompletedWords(payload.words));
         if (this.isDraining) this.settleDrain("transcript-done");
         return;
 
@@ -909,19 +912,18 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
     );
   }
 
-  private showPreview(parts: readonly string[], hasInterim: boolean): void {
+  private showPreview(parts: readonly string[]): void {
     const preview = joinTranscript(parts);
     // An empty revision retracts the preview; before any text it's noise.
     if (!preview && !this.utteranceItemId) return;
     this.utteranceItemId ??= nextUtteranceItemId();
     this.previewText = preview;
-    this.previewHasInterim = hasInterim && !!preview;
     this.emit({ type: "delta", text: preview, itemId: this.utteranceItemId, replace: true });
   }
 
   private showInterim(text: string, start: number | null): void {
     const before = this.chunksBefore(start, false);
-    this.showPreview([...this.carriedText, ...before.map((chunk) => chunk.text), text], !!text);
+    this.showPreview([...this.carriedText, ...before.map((chunk) => chunk.text), text]);
   }
 
   /**
@@ -934,7 +936,7 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
     const before = this.chunksBefore(start, false);
     const end = start === null ? Number.NEGATIVE_INFINITY : start + (duration ?? 0);
     this.lockedChunks = text ? [...before, { end, text }] : before;
-    this.showPreview([...this.carriedText, ...this.lockedChunks.map((chunk) => chunk.text)], false);
+    this.showPreview([...this.carriedText, ...this.lockedChunks.map((chunk) => chunk.text)]);
   }
 
   private completeUtterance(text: string, start: number | null, duration: number | null): void {
@@ -942,8 +944,12 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
     const before = this.chunksBefore(start, true);
     const full = joinTranscript([...this.carriedText, ...before.map((chunk) => chunk.text), text]);
     const itemId = this.utteranceItemId;
-    const forced = this.finalizePending;
-    this.finalizePending = false;
+    if (start !== null && duration !== null) {
+      this.connectionCompletedEnd = Math.max(this.connectionCompletedEnd, start + duration);
+    }
+    const now = performance.now();
+    this.finalizeSentAt = this.finalizeSentAt.filter((at) => now - at < FINALIZE_ANSWER_MS);
+    const forced = this.finalizeSentAt.shift() !== undefined;
     this.resetUtterance();
     if (itemId || full) {
       this.emit({
@@ -962,36 +968,51 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
   }
 
   /**
-   * Completes an utterance whose final never came (the stream ended or
-   * failed first) with what its preview showed. Interim text was never
-   * locked, so it lands as incomplete.
+   * The words of `transcript.done` that no utterance final on this connection
+   * covered, or null when it names none: then only the preview is left.
    */
-  private settleOpenUtterance(reason: string): void {
+  private uncompletedWords(words: unknown): string | null {
+    if (!Array.isArray(words)) return null;
+    const tail: string[] = [];
+    for (const entry of words as unknown[]) {
+      const word = (entry ?? {}) as { text?: unknown; start?: unknown };
+      const start = finiteSeconds(word.start);
+      const text = typeof word.text === "string" ? word.text.trim() : "";
+      if (start !== null && start >= this.connectionCompletedEnd && text) tail.push(text);
+    }
+    return tail.length > 0 ? tail.join(" ") : null;
+  }
+
+  /**
+   * Completes an utterance whose final never came. The server's own words
+   * for the tail, when `transcript.done` gave them, end it as a final would;
+   * otherwise it lands with what its preview showed, as incomplete: the
+   * stream ended or failed before the utterance did, so its last words may
+   * be missing and none of them can be read as a command.
+   */
+  private settleOpenUtterance(reason: string, serverTail: string | null = null): void {
     const itemId = this.utteranceItemId;
-    const text = this.previewText;
-    const incomplete = this.previewHasInterim;
+    const text = serverTail ? joinTranscript([...this.carriedText, serverTail]) : this.previewText;
     this.resetUtterance();
-    if (!itemId) return;
+    if (!itemId && !text) return;
     logInfo(`${P} Settling an utterance that never got its final`, {
       reason,
       length: text.length,
-      incomplete,
+      fromServer: serverTail !== null,
     });
     this.emit({
       type: "complete",
       text,
-      itemId,
-      ...(incomplete ? { incomplete: true } : { endOfSpeech: true }),
+      itemId: itemId ?? nextUtteranceItemId(),
+      ...(serverTail ? { endOfSpeech: true } : { incomplete: true }),
     });
   }
 
   private resetUtterance(): void {
-    this.finalizePending = false;
     this.utteranceItemId = null;
     this.carriedText = [];
     this.lockedChunks = [];
     this.previewText = "";
-    this.previewHasInterim = false;
   }
 
   private sendAudioBinary(chunk: ArrayBuffer): void {
@@ -1146,6 +1167,8 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
   private flushHeldAudio(): void {
     this.carriedText = [...this.carriedText, ...this.lockedChunks.map((chunk) => chunk.text)];
     this.lockedChunks = [];
+    this.connectionCompletedEnd = 0;
+    this.finalizeSentAt = [];
     const unconfirmed = this.unconfirmedAudio;
     const buffered = this.preConnectBuffer;
     this.unconfirmedAudio = [];
@@ -1195,6 +1218,8 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
     this.staleChunkWarned = false;
     this.preConnectBufferOverflowWarned = false;
     this.resetUtterance();
+    this.connectionCompletedEnd = 0;
+    this.finalizeSentAt = [];
     this.resetOnset();
     this.replayEvictionWarned = false;
     this.isReady = false;

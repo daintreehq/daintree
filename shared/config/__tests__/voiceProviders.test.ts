@@ -46,6 +46,8 @@ describe("voiceProviders", () => {
       transcriptionProvider: "grok",
     } as const;
     expect(transcriptionApiKey(settings)).toBe("xai-1");
+    expect(hasTranscriptionKey(settings)).toBe(true);
+    expect(hasTranscriptionKey({ ...settings, transcriptionProvider: "deepgram" })).toBe(false);
     expect(hasCleanupKey(settings)).toBe(false);
   });
 });

@@ -677,12 +677,43 @@ describe("GrokTranscriptionProvider", () => {
       provider.stop();
     });
 
-    it("an Enter with nothing open leaves the next utterance's pause intact", async () => {
+    it("treats a final forced before any preview as Enter's, not a pause", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      provider.sendAudioChunk(pcm(3_000));
+      provider.commitParagraphBoundary();
+      socket.simulateMessage(utteranceFinal("Fix it, send it.", 0, 0.1));
+      expect(completesOf(events)[0]).toEqual({
+        type: "complete",
+        text: "Fix it, send it.",
+        itemId: expect.stringMatching(/^grok-/),
+      });
+      provider.stop();
+    });
+
+    it("answers one forced final per Enter", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      socket.simulateMessage(partial("one", { start: 0, duration: 0.3 }));
+      provider.commitParagraphBoundary();
+      provider.commitParagraphBoundary();
+      socket.simulateMessage(utteranceFinal("One.", 0, 0.4));
+      socket.simulateMessage(utteranceFinal("Two.", 0.5, 0.4));
+      socket.simulateMessage(utteranceFinal("Three.", 1, 0.4));
+      expect(completesOf(events).map((c) => c.endOfSpeech === true)).toEqual([false, false, true]);
+      provider.stop();
+    });
+
+    it("an Enter with nothing open stops counting before the next utterance ends", async () => {
       const { provider, events } = setup();
       const socket = await bringSessionReady(provider);
       provider.commitParagraphBoundary();
-      socket.simulateMessage(utteranceFinal("Send it.", 0, 0.8));
-      expect(completesOf(events)[0]).toMatchObject({ text: "Send it.", endOfSpeech: true });
+      vi.advanceTimersByTime(1_999);
+      socket.simulateMessage(utteranceFinal("Soon.", 0, 0.5));
+      provider.commitParagraphBoundary();
+      vi.advanceTimersByTime(2_000);
+      socket.simulateMessage(utteranceFinal("Send it.", 1, 0.8));
+      expect(completesOf(events).map((c) => c.endOfSpeech === true)).toEqual([false, true]);
       provider.stop();
     });
 
@@ -724,24 +755,76 @@ describe("GrokTranscriptionProvider", () => {
       expect(statusesOf(events).at(-1)).toBe("idle");
     });
 
-    it("settles an utterance the server never finalised with what it showed", async () => {
+    it("finishes an utterance the server never finalised with transcript.done's own words for it", async () => {
       const { provider, events } = setup();
       const socket = await bringSessionReady(provider);
-      socket.simulateMessage(chunkFinal("locked text", 0, 3));
+      socket.simulateMessage(utteranceFinal("First thought.", 0, 1));
+      socket.simulateMessage(chunkFinal("second", 1.5, 3));
+      socket.simulateMessage(partial("thou", { start: 4.5, duration: 0.3 }));
       const stopPromise = provider.stopGracefully();
-      socket.simulateMessage({ type: "transcript.done", text: "locked text" });
+      socket.simulateMessage({
+        type: "transcript.done",
+        text: "First thought. Second thought.",
+        words: [
+          { text: "First", start: 0.1, end: 0.4 },
+          { text: "thought.", start: 0.4, end: 0.9 },
+          { text: "Second", start: 1.6, end: 2 },
+          { text: "thought.", start: 4.5, end: 4.9 },
+        ],
+      });
       await stopPromise;
       expect(completesOf(events)).toEqual([
+        expect.objectContaining({ text: "First thought.", endOfSpeech: true }),
         {
           type: "complete",
-          text: "locked text",
-          itemId: deltasOf(events)[0].itemId,
+          text: "Second thought.",
+          itemId: deltasOf(events).at(-1)?.itemId,
           endOfSpeech: true,
         },
       ]);
     });
 
-    it("marks a settled utterance incomplete when its tail was only an interim", async () => {
+    it("lands transcript.done's tail even when no preview ever showed it", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      const stopPromise = provider.stopGracefully();
+      socket.simulateMessage({
+        type: "transcript.done",
+        text: "Hello world",
+        words: [
+          { text: "Hello", start: 0, end: 0.3 },
+          { text: "world", start: 0.3, end: 0.6 },
+        ],
+      });
+      await stopPromise;
+      expect(completesOf(events)).toEqual([
+        {
+          type: "complete",
+          text: "Hello world",
+          itemId: expect.stringMatching(/^grok-/),
+          endOfSpeech: true,
+        },
+      ]);
+    });
+
+    it("keeps the preview, incomplete, when transcript.done names no words", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      socket.simulateMessage(chunkFinal("use the new line", 0, 3));
+      const stopPromise = provider.stopGracefully();
+      socket.simulateMessage({ type: "transcript.done", text: "use the new line helper" });
+      await stopPromise;
+      expect(completesOf(events)).toEqual([
+        {
+          type: "complete",
+          text: "use the new line",
+          itemId: deltasOf(events)[0].itemId,
+          incomplete: true,
+        },
+      ]);
+    });
+
+    it("lands what the preview showed, incomplete, when the stream closes before the final", async () => {
       const { provider, events } = setup();
       const socket = await bringSessionReady(provider);
       socket.simulateMessage(chunkFinal("locked", 0, 3));
@@ -1093,8 +1176,101 @@ describe("GrokTranscriptionProvider", () => {
       first.simulateClose(1008);
       const completeAt = events.findIndex((e) => e.type === "complete");
       const errorAt = events.findIndex((e) => e.type === "error");
-      expect(completesOf(events)[0]).toMatchObject({ text: "said so far", endOfSpeech: true });
+      // Locked words, but the utterance hadn't ended: none of them is a command.
+      expect(completesOf(events)[0]).toEqual({
+        type: "complete",
+        text: "said so far",
+        itemId: deltasOf(events)[0].itemId,
+        incomplete: true,
+      });
       expect(completeAt).toBeLessThan(errorAt);
+    });
+
+    it("resends nothing an utterance final already covered", async () => {
+      const { provider } = setup();
+      const first = await bringSessionReady(provider);
+      for (let i = 0; i < 10; i++) provider.sendAudioChunk(new ArrayBuffer(CHUNK_BYTES));
+      provider.sendAudioChunk(new Uint8Array(CHUNK_BYTES).fill(6).buffer);
+      // The first second, as one utterance with no chunk final before it.
+      first.simulateMessage(utteranceFinal("Done.", 0, 1));
+      first.simulateClose(1006);
+      vi.advanceTimersToNextTimer();
+      latestInstance().simulateReady();
+      const resent = latestInstance().binaryFrames();
+      expect(resent).toHaveLength(1);
+      expect(resent[0].every((byte) => byte === 6)).toBe(true);
+      provider.stop();
+    });
+
+    it("holds the gap audio of a long outage, within the replay ledger's cap", async () => {
+      const { provider, events } = setup();
+      const first = await bringSessionReady(provider);
+      first.simulateClose(1006);
+      // 20s said during the outage: more than start-up's 15s, all of it kept.
+      for (let i = 0; i < 200; i++) provider.sendAudioChunk(new ArrayBuffer(CHUNK_BYTES));
+      expect(provider.getSessionStats().droppedConnect).toBe(0);
+      expect(events.some((e) => e.type === "error")).toBe(false);
+      vi.advanceTimersToNextTimer();
+      latestInstance().simulateReady();
+      expect(latestInstance().binaryFrames()).toHaveLength(200);
+      provider.stop();
+    });
+
+    it("drops the oldest held audio once no final has covered 40s of it", async () => {
+      const { provider } = setup();
+      const first = await bringSessionReady(provider);
+      for (let i = 0; i < 405; i++) {
+        provider.sendAudioChunk(new Uint8Array(CHUNK_BYTES).fill(i % 200).buffer);
+      }
+      expect(provider.getSessionStats().droppedReplay).toBe(5);
+      first.simulateClose(1006);
+      vi.advanceTimersToNextTimer();
+      latestInstance().simulateReady();
+      const resent = latestInstance().binaryFrames();
+      expect(resent).toHaveLength(400);
+      expect(resent[0][0]).toBe(5);
+      provider.stop();
+    });
+
+    it("gives a connection that transcribed something a fresh window, however short it lived", async () => {
+      vi.spyOn(Math, "random").mockReturnValue(0.5);
+      const { provider, events } = setup();
+      let socket = await bringSessionReady(provider);
+      const droppedAt = performance.now();
+      socket.simulateClose(1006);
+      // Burn most of the window on failed attempts.
+      while (performance.now() - droppedAt < 25_000) {
+        vi.advanceTimersToNextTimer();
+        latestInstance().simulateUnexpectedResponse(503);
+      }
+      vi.advanceTimersToNextTimer();
+      socket = latestInstance();
+      socket.simulateReady();
+      socket.simulateMessage(partial("still here", { start: 0, duration: 0.5 }));
+      vi.advanceTimersByTime(1_000);
+      socket.simulateClose(1006);
+      // Past the first window's deadline, still recovering.
+      for (let i = 0; i < 4; i++) {
+        vi.advanceTimersToNextTimer();
+        latestInstance().simulateUnexpectedResponse(503);
+      }
+      expect(performance.now() - droppedAt).toBeGreaterThan(30_000);
+      expect(fatalErrorsOf(events)).toHaveLength(0);
+      provider.stop();
+    });
+
+    it("doesn't give up before the window is out", async () => {
+      vi.spyOn(Math, "random").mockReturnValue(0.5);
+      const { provider, events } = setup();
+      const first = await bringSessionReady(provider);
+      const droppedAt = performance.now();
+      first.simulateClose(1006);
+      for (let i = 0; i < 100 && fatalErrorsOf(events).length === 0; i++) {
+        vi.advanceTimersToNextTimer();
+        latestInstance().simulateUnexpectedResponse(503);
+      }
+      expect(performance.now() - droppedAt).toBeGreaterThanOrEqual(30_000);
+      void provider;
     });
   });
 
@@ -1156,6 +1332,43 @@ describe("GrokTranscriptionProvider", () => {
       for (let i = 0; i < 3; i++) provider.sendAudioChunk(pcm(0));
       provider.sendAudioChunk(pcm(3_000));
       expect(speechStartsOf(events)).toBe(2);
+      provider.stop();
+    });
+
+    it("needs 40ms over speech level, and 200ms of quiet before it hears a new start", async () => {
+      // 20ms frames of alternating-sign samples, the shape real speech has.
+      const frame = (amplitude: number): ArrayBuffer => {
+        const samples = new Int16Array(480);
+        for (let i = 0; i < samples.length; i++) samples[i] = i % 2 ? amplitude : -amplitude;
+        return samples.buffer;
+      };
+      const { provider, events } = setup();
+      await bringSessionReady(provider);
+      provider.sendAudioChunk(frame(3_000));
+      provider.sendAudioChunk(frame(0));
+      provider.sendAudioChunk(frame(3_000));
+      expect(speechStartsOf(events)).toBe(0);
+      provider.sendAudioChunk(frame(3_000));
+      expect(speechStartsOf(events)).toBe(1);
+      for (let i = 0; i < 9; i++) provider.sendAudioChunk(frame(0));
+      provider.sendAudioChunk(frame(3_000));
+      provider.sendAudioChunk(frame(3_000));
+      expect(speechStartsOf(events)).toBe(1);
+      for (let i = 0; i < 10; i++) provider.sendAudioChunk(frame(0));
+      provider.sendAudioChunk(frame(3_000));
+      provider.sendAudioChunk(frame(3_000));
+      expect(speechStartsOf(events)).toBe(2);
+      provider.stop();
+    });
+
+    it("measures a window that straddles two chunks", async () => {
+      const { provider, events } = setup();
+      await bringSessionReady(provider);
+      // 30ms then 10ms: the second window is only whole once the next chunk lands.
+      provider.sendAudioChunk(new Int16Array(720).fill(3_000).buffer);
+      expect(speechStartsOf(events)).toBe(0);
+      provider.sendAudioChunk(new Int16Array(240).fill(3_000).buffer);
+      expect(speechStartsOf(events)).toBe(1);
       provider.stop();
     });
 
