@@ -44,7 +44,9 @@ function joinSpoken(raw: string, name: string): string {
     for (let j = i; j < words.length && joined.length < key.length; j++) {
       joined += words[j]![0].toLowerCase();
       if (joined === key) {
-        return raw.slice(0, words[i]!.index) + name + raw.slice(words[j]!.index! + words[j]![0].length);
+        return (
+          raw.slice(0, words[i]!.index) + name + raw.slice(words[j]!.index! + words[j]![0].length)
+        );
       }
     }
   }
@@ -111,9 +113,9 @@ describe("cleanup corpus", () => {
   it("sends its code-name passages the names they spell, each beside a bare twin", () => {
     const codeNames = CLEANUP_CORPUS.filter((entry) => entry.source === "codenames");
     const inRepo = codeNames.filter((entry) => entry.codebase);
-    expect(CLEANUP_CORPUS.filter((entry) => entry.source !== "codenames" && entry.codebase)).toEqual(
-      []
-    );
+    expect(
+      CLEANUP_CORPUS.filter((entry) => entry.source !== "codenames" && entry.codebase)
+    ).toEqual([]);
     let landed = 0;
     let leftAlone = 0;
     for (const entry of inRepo) {
@@ -259,7 +261,11 @@ describe("inputHash", () => {
   });
 
   it("changes with the code names a passage sends, not the rest of its codebase", () => {
-    const shallow = makeCase({ raw: "wrap the selector in use shallow", reference: "x", fixes: {} });
+    const shallow = makeCase({
+      raw: "wrap the selector in use shallow",
+      reference: "x",
+      fixes: {},
+    });
     const withName = { ...shallow, codebase: { identifiers: ["useShallow"] } };
     expect(inputHash({ ...shallow, codebase: { identifiers: ["useEffect"] } })).toBe(
       inputHash(shallow)
