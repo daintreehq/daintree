@@ -10,6 +10,18 @@ import { canopyAssistantDomId, openAssistantItem } from "./openAssistantItem";
 import { placeOf } from "./canopyInboxPlace";
 import { canopyResumeTarget, type CanopyResume } from "./canopyResume";
 import { useCanopyStore } from "@/store/canopyStore";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { formatTypingLocatorMessage, useTypingLocatorStore } from "@/store/typingLocatorStore";
+
+/** How long a row asked for waits on its host's runs before it is taken as not there. */
+const REPLY_REVEAL_WAIT_MS = 10_000;
+
+/** The dictation keeps writing to the reply's draft: only going there failed. */
+function reportReplyHidden(why: string): void {
+  const message = { kind: "draft-refused" as const, lead: `The reply you're dictating ${why}` };
+  useTypingLocatorStore.getState().showLocator(message);
+  useAnnouncerStore.getState().announce(formatTypingLocatorMessage(message), "polite");
+}
 
 /**
  * Where the keyboard and the pane are: the run or assistant selected, the
@@ -26,6 +38,7 @@ export function useCanopyInboxFocus({
   otherHost,
   everyHost,
   items,
+  loaded,
   listed,
   visible,
   workerNavigation,
@@ -48,6 +61,8 @@ export function useCanopyInboxFocus({
   otherHost: boolean;
   everyHost: boolean;
   items: CanopyItem[];
+  /** The host's runs have arrived: a run not among them now isn't there. */
+  loaded: boolean;
   listed: CanopyItem[];
   visible: CanopyItem[];
   /** The workers the keyboard walks, as the inbox projection orders them. */
@@ -74,6 +89,9 @@ export function useCanopyInboxFocus({
   const [paneFocus, setPaneFocus] = useState<{ runId: string; focus: CanopyPaneFocus } | null>(
     null
   );
+  // The reply a dictation writes into, its keyboard asked for by the recording
+  // indicator: by request, since its pane may already be showing.
+  const [replyFocus, setReplyFocus] = useState<{ runId: string; id: number } | null>(null);
   const focusedIndex = visible.findIndex((item) => item.runId === focusedId);
   const activeIndex = focusedIndex === -1 ? 0 : focusedIndex;
   // Nothing is open until a run is chosen or landed on; before that the pane
@@ -126,6 +144,7 @@ export function useCanopyInboxFocus({
   // The run selected, its row brought into view, the keyboard left where it is.
   const selectNow = useCallback((runId: string) => {
     setPaneFocus(null);
+    setReplyFocus(null);
     setAssistantId(null);
     setFocusedId(runId);
     document.getElementById(canopyCardDomId(runId))?.scrollIntoView({ block: "nearest" });
@@ -133,6 +152,7 @@ export function useCanopyInboxFocus({
 
   const focusCardNow = useCallback((runId: string) => {
     setPaneFocus(null);
+    setReplyFocus(null);
     setAssistantId(null);
     setFocusedId(runId);
     const element = document.getElementById(canopyCardDomId(runId));
@@ -221,15 +241,19 @@ export function useCanopyInboxFocus({
       window.removeEventListener("keydown", touch, { capture: true });
     };
   }, [isOpen]);
+  // A dictated reply asked for is where this opening lands, once it is found;
+  // only one that can't be shown leaves the opening to land as it would.
+  const replyReveal = useCanopyStore((s) => s.replyReveal);
   useEffect(() => {
     if (!isOpen) {
       landedRef.current = false;
       setFocusedId(null);
+      setReplyFocus(null);
       setQuery("");
       return;
     }
     focusAfterCloseRef.current = null;
-    if (landedRef.current || items.length === 0) return;
+    if (landedRef.current || items.length === 0 || replyReveal !== null) return;
     // The search it was left with is in force before the run is picked from it.
     const restore = restoreRef.current;
     if (restore !== null && appliedQuery !== restore.query) return;
@@ -273,7 +297,7 @@ export function useCanopyInboxFocus({
       cancelAnimationFrame(outer);
       cancelAnimationFrame(inner);
     };
-  }, [isOpen, items, visible, focusCardNow, setQuery, appliedQuery, firstAssistant]);
+  }, [isOpen, items, visible, focusCardNow, setQuery, appliedQuery, firstAssistant, replyReveal]);
 
   // The focused card left (trashed, answered into another section, exited):
   // put the keyboard on the card that took its place instead of dropping it on
@@ -287,7 +311,8 @@ export function useCanopyInboxFocus({
     // The keyboard is on its way into the new run's pane (⌘↑/⌘↓, or Send):
     // the old pane unmounting drops it on the page for a moment, which is not
     // a run leaving.
-    if (paneFocus?.runId === focusedId && items.some((item) => item.runId === focusedId)) return;
+    const handingOff = paneFocus?.runId === focusedId || replyFocus?.runId === focusedId;
+    if (handingOff && items.some((item) => item.runId === focusedId)) return;
     const active = document.activeElement;
     if (active !== null && active !== document.body && active.isConnected) return;
     if (visible.length === 0) {
@@ -301,7 +326,7 @@ export function useCanopyInboxFocus({
         ? visible[focusedIndex]!
         : visible[Math.min(lastIndexRef.current, visible.length - 1)]!;
     focusCardNow(target.runId);
-  }, [focusedIndex, focusedId, visible, focusCardNow, paneFocus, items]);
+  }, [focusedIndex, focusedId, visible, focusCardNow, paneFocus, replyFocus, items]);
 
   // A new search selects its top match, as opening selects the top run; a
   // match leaving under the same search gives its place to the next.
@@ -359,6 +384,7 @@ export function useCanopyInboxFocus({
   // terminal — rather than onto its row.
   const openPaneNow = useCallback((runId: string, focus: CanopyPaneFocus) => {
     setPaneFocus({ runId, focus });
+    setReplyFocus(null);
     setFocusedId(runId);
     document.getElementById(canopyCardDomId(runId))?.scrollIntoView({ block: "nearest" });
   }, []);
@@ -375,7 +401,56 @@ export function useCanopyInboxFocus({
     if (!wasOpen) return;
     setFocusedId(null);
     setPaneFocus(null);
+    setReplyFocus(null);
   }, [hostId, isOpen]);
+
+  // The recording indicator asked for the row a dictation writes its reply
+  // into (#14778). After the host reset above, which the same request may
+  // have caused. The filters stand: a row they hide is said to be hidden, and
+  // the dictation goes on into its draft either way.
+  useEffect(() => {
+    if (!isOpen || replyReveal === null) return;
+    const settle = () => useCanopyStore.getState().settleReplyReveal(replyReveal.id);
+    // Another host picked since: that list has no such row.
+    if (replyReveal.hostScope !== hostId) {
+      settle();
+      return;
+    }
+    if (!loaded) return;
+    settle();
+    const item = items.find((entry) => entry.runId === replyReveal.runId);
+    if (item === undefined) {
+      reportReplyHidden("isn't in Canopy");
+      return;
+    }
+    const shown =
+      workersShown && inWork(item) && (!searching || visible.some((v) => v.runId === item.runId));
+    if (!shown) {
+      reportReplyHidden("is hidden by Canopy's filters");
+      return;
+    }
+    landedRef.current = true;
+    restoreRef.current = null;
+    setAssistantId(null);
+    setPaneFocus(null);
+    setReplyFocus({ runId: item.runId, id: replyReveal.id });
+    setFocusedId(item.runId);
+    document.getElementById(canopyCardDomId(item.runId))?.scrollIntoView({ block: "nearest" });
+  }, [isOpen, replyReveal, hostId, loaded, items, workersShown, inWork, searching, visible]);
+  // A host that never answers doesn't hold the opening forever: each request
+  // waits so long from when it is first kept waiting, whatever else updates.
+  useEffect(() => {
+    if (!isOpen || replyReveal === null || loaded) return;
+    const timer = setTimeout(() => {
+      useCanopyStore.getState().settleReplyReveal(replyReveal.id);
+      reportReplyHidden("isn't in Canopy");
+    }, REPLY_REVEAL_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [isOpen, replyReveal, loaded]);
+  const settleReplyFocus = useCallback(
+    (id: number) => setReplyFocus((current) => (current?.id === id ? null : current)),
+    []
+  );
 
   /**
    * Where the cursor goes once a run is dealt with — archived, answered,
@@ -414,6 +489,7 @@ export function useCanopyInboxFocus({
   // keyboard on the row rather than carried into the pane.
   const selectRow = (runId: string) => {
     setPaneFocus(null);
+    setReplyFocus(null);
     setAssistantId(null);
     setFocusedId(runId);
   };
@@ -507,6 +583,8 @@ export function useCanopyInboxFocus({
     activeIndex,
     focusedItem,
     paneFocus,
+    replyFocus,
+    settleReplyFocus,
     assistantRefusal,
     selectedAssistant,
     selectNow,

@@ -57,10 +57,14 @@ import { useCanopyInboxActions } from "./useCanopyInboxActions";
 import { useCanopyInboxKeyboard } from "./useCanopyInboxKeyboard";
 import {
   NO_CANOPY_REPLY,
+  isCanopyReplyTarget,
   registerCanopyReplyDictation,
   type CanopyReplyDictation,
 } from "@/services/canopyReplyDictation";
+import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
+import { isActiveVoiceSession } from "@shared/types";
 import { placeOf } from "./canopyInboxPlace";
+import { parseAllHostsKey } from "./canopyAllHosts";
 import { CanopyAssistantPane, CanopyAssistantRow } from "./CanopyAssistantList";
 import { canopyAssistantDomId } from "./openAssistantItem";
 import { CANOPY_ROLE_FILTERS, type CanopyRoleFilter } from "./canopyAssistants";
@@ -714,6 +718,17 @@ function CanopyInbox({
     onScreen,
     listHidden,
   });
+  // A row asked for from the recording indicator is looked for once its
+  // host's runs are in, or its host has failed: in All hosts, that host's own.
+  const revealRunId = useCanopyStore((s) => s.replyReveal?.runId ?? null);
+  const revealHost =
+    everyHost && revealRunId !== null ? (parseAllHostsKey(revealRunId)?.hostId ?? null) : null;
+  const revealReading =
+    revealHost === null ? undefined : readings.find((reading) => reading.hostId === revealHost);
+  const revealRunsLoaded =
+    revealReading === undefined
+      ? fleet !== null
+      : revealReading.fleet !== null || revealReading.error !== null;
   const {
     searchRef,
     refreshRef,
@@ -722,6 +737,8 @@ function CanopyInbox({
     activeIndex,
     focusedItem,
     paneFocus,
+    replyFocus,
+    settleReplyFocus,
     assistantRefusal,
     selectedAssistant,
     selectNow,
@@ -747,6 +764,7 @@ function CanopyInbox({
     otherHost,
     everyHost,
     items,
+    loaded: revealRunsLoaded,
     listed,
     visible,
     workerNavigation,
@@ -833,6 +851,14 @@ function CanopyInbox({
         : undefined) ?? NO_CANOPY_REPLY;
   });
   useEffect(() => registerCanopyReplyDictation(() => dictationRef.current()), []);
+  // The row a dictation is writing its reply into, wherever the selection has
+  // gone since: marked in the list while it records (#14778).
+  const dictatingRow = useVoiceRecordingStore((s) =>
+    isActiveVoiceSession(s.status) && isCanopyReplyTarget(s.activeTarget)
+      ? s.activeTarget?.canopyRow
+      : undefined
+  );
+  const dictatingRunId = dictatingRow?.hostScope === hostId ? dictatingRow.runId : null;
 
   // The host a selected run is on, for the pane beside it; null for the window's own.
   const focusedHostId = focusedItem ? placeOf(focusedItem, hostId, ownHostId).hostId : null;
@@ -1617,6 +1643,7 @@ function CanopyInbox({
                                           : null
                                       }
                                       workLabel={workLabelOf(item)}
+                                      dictating={dictatingRunId === item.runId}
                                       onSelect={() => selectRow(item.runId)}
                                       onClick={() => readNow(item)}
                                       onOpen={(event) =>
@@ -1749,6 +1776,7 @@ function CanopyInbox({
                                   : null
                               }
                               workLabel={workLabelOf(item)}
+                              dictating={dictatingRunId === item.runId}
                               onSelect={() => selectRow(item.runId)}
                               onClick={() => readNow(item)}
                               onOpen={(event) => handlers.onOpen(item, isNewWindowClick(event))}
@@ -1828,7 +1856,12 @@ function CanopyInbox({
                         renameAsk?.runId === focusedItem.runId ? renameAsk.request : undefined
                       }
                       onInitialFocusSettled={() => settlePaneFocus(focusedItem.runId)}
+                      dictationRequest={
+                        replyFocus?.runId === focusedItem.runId ? replyFocus.id : undefined
+                      }
+                      onDictationSettled={settleReplyFocus}
                       otherHostId={(everyHost ? focusedHostId : hostId) ?? undefined}
+                      hostScope={hostId}
                       aside={setAside}
                       terminalApi={terminalApi}
                       workLabel={workLabelOf(focusedItem)}

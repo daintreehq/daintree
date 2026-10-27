@@ -254,6 +254,100 @@ describe("the host shown", () => {
   });
 });
 
+describe("going back to a dictated reply (#14778)", () => {
+  afterEach(() =>
+    useCanopyStore.setState({
+      isOpen: false,
+      hostId: null,
+      mode: "unset",
+      replyReveal: null,
+      resume: null,
+      workOf: null,
+    })
+  );
+
+  it("opens on the host the row was listed under and asks for that row", () => {
+    expect(useCanopyStore.getState().revealReply({ runId: "run-1", hostScope: "studio" })).toBe(
+      true
+    );
+    const state = useCanopyStore.getState();
+    expect(state.isOpen).toBe(true);
+    expect(state.hostId).toBe("studio");
+    expect(state.replyReveal).toMatchObject({ runId: "run-1", hostScope: "studio" });
+  });
+
+  it("puts All hosts back for a row listed there, whatever the panel shows now", () => {
+    useCanopyStore.getState().open();
+    useCanopyStore.getState().setHostId("studio");
+    useCanopyStore.getState().revealReply({ runId: "6.studio.run-1", hostScope: ALL_HOSTS_ID });
+    expect(useCanopyStore.getState().hostId).toBe(ALL_HOSTS_ID);
+    expect(useCanopyStore.getState().replyReveal).toMatchObject({
+      runId: "6.studio.run-1",
+      hostScope: ALL_HOSTS_ID,
+    });
+  });
+
+  it("wins over a remembered place and drops another assistant's narrowing when it opens", () => {
+    useCanopyStore.setState({
+      hostId: "studio",
+      resume: { at: Date.now(), hostId: "studio", query: "lint", runId: "run-9", order: [] },
+      workOf: { assistantId: "a-1", name: "Planner" },
+    });
+    useCanopyStore.getState().revealReply({ runId: "run-1", hostScope: null });
+    const state = useCanopyStore.getState();
+    expect(state.resume).toBeNull();
+    expect(state.workOf).toBeNull();
+    expect(state.hostId).toBeNull();
+  });
+
+  it("keeps the open panel's narrowing to one assistant's work", () => {
+    const workOf = { assistantId: "a-1", name: "Planner" };
+    useCanopyStore.setState({ isOpen: true, workOf });
+    useCanopyStore.getState().revealReply({ runId: "run-1", hostScope: null });
+    expect(useCanopyStore.getState().workOf).toBe(workOf);
+  });
+
+  it("is dropped by every way the panel closes", () => {
+    const ask = () => useCanopyStore.getState().revealReply({ runId: "run-1", hostScope: null });
+    ask();
+    useCanopyStore.getState().toggle();
+    expect(useCanopyStore.getState().replyReveal).toBeNull();
+    ask();
+    useCanopyStore
+      .getState()
+      .closeForTerminal({ at: Date.now(), hostId: null, query: "", runId: "run-1", order: [] });
+    expect(useCanopyStore.getState().replyReveal).toBeNull();
+  });
+
+  it("does nothing while Canopy is hidden", () => {
+    useCanopyStore.setState({ mode: "hidden" });
+    expect(useCanopyStore.getState().revealReply({ runId: "run-1", hostScope: null })).toBe(false);
+    expect(useCanopyStore.getState().isOpen).toBe(false);
+    expect(useCanopyStore.getState().replyReveal).toBeNull();
+  });
+
+  it("settles only the request it was given, and a close drops what is left", () => {
+    useCanopyStore.getState().revealReply({ runId: "run-1", hostScope: null });
+    const first = useCanopyStore.getState().replyReveal!;
+    useCanopyStore.getState().revealReply({ runId: "run-2", hostScope: null });
+    const second = useCanopyStore.getState().replyReveal!;
+    expect(second.id).not.toBe(first.id);
+
+    useCanopyStore.getState().settleReplyReveal(first.id);
+    expect(useCanopyStore.getState().replyReveal).toBe(second);
+    useCanopyStore.getState().close();
+    expect(useCanopyStore.getState().replyReveal).toBeNull();
+
+    // A request settled and asked again is a new one, apart from the first.
+    useCanopyStore.getState().revealReply({ runId: "run-1", hostScope: null });
+    const third = useCanopyStore.getState().replyReveal!;
+    useCanopyStore.getState().settleReplyReveal(first.id);
+    expect(useCanopyStore.getState().replyReveal).toBe(third);
+    useCanopyStore.getState().settleReplyReveal(third.id);
+    expect(useCanopyStore.getState().replyReveal).toBeNull();
+  });
+});
+
 describe("role filter", () => {
   afterEach(() => window.localStorage.removeItem("daintree-canopy-role"));
   const reload = async () => {

@@ -4,7 +4,7 @@ import { Spinner } from "@/components/ui/Spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
-import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
+import { useVoiceRecordingStore, type CanopyReplyRow } from "@/store/voiceRecordingStore";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
 import type { VoiceInputError } from "@shared/types";
 import {
@@ -58,6 +58,7 @@ interface VoiceInputButtonProps {
   surface?: "canopy-reply";
   terminalId?: string;
   otherHostId?: string;
+  canopyRow?: CanopyReplyRow;
   disabled?: boolean;
 }
 
@@ -71,6 +72,7 @@ export function VoiceInputButton({
   surface,
   terminalId,
   otherHostId,
+  canopyRow,
   disabled = false,
 }: VoiceInputButtonProps) {
   const status = useVoiceRecordingStore((state) => state.status);
@@ -269,6 +271,7 @@ export function VoiceInputButton({
       ...(surface !== undefined ? { surface } : {}),
       ...(terminalId !== undefined ? { terminalId } : {}),
       ...(otherHostId !== undefined ? { otherHostId } : {}),
+      ...(canopyRow !== undefined ? { canopyRow } : {}),
     });
   }, [
     disabled,
@@ -283,6 +286,7 @@ export function VoiceInputButton({
     surface,
     terminalId,
     otherHostId,
+    canopyRow,
   ]);
 
   const tooltipText = !isConfigured

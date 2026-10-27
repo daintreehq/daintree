@@ -408,6 +408,62 @@ describe("VoiceRecordingService — recent dictations (#14637)", () => {
     expect(voiceStore.getState().panelBuffers["panel-1"]).toBeUndefined();
   });
 
+  describe("a Canopy reply off screen (#14778)", () => {
+    const REPLY = {
+      panelId: "isolated-composer:run-1",
+      panelTitle: "Reply to Claude",
+      surface: "canopy-reply" as const,
+      canopyRow: { runId: "run-1", hostScope: null },
+    };
+
+    it("lands its words in the reply's draft and cleans them up, with Canopy closed", async () => {
+      const { service, voiceStore, inputStore, say, kept, cleanups, flush } = await setup();
+      const cleanup = deferred<CorrectResult>();
+      correct.mockReturnValueOnce(cleanup.promise);
+      const { useCanopyStore } = await import("@/store/canopyStore");
+      expect(useCanopyStore.getState().isOpen).toBe(false);
+
+      voiceStore.getState().beginSession(REPLY);
+      say("fix the logn bug");
+      await service.stop();
+      await flush();
+
+      expect(inputStore.getState().getDraftInput(REPLY.panelId)).toBe("fix the logn bug");
+      expect(kept()[0]).toMatchObject({
+        rawText: "fix the logn bug",
+        target: { panelId: REPLY.panelId, panelTitle: "Reply to Claude" },
+      });
+      expect(correct).toHaveBeenCalledTimes(1);
+
+      cleanup.resolve({ action: "replace", correctedText: "Fix the login bug." });
+      await flush();
+      expect(inputStore.getState().getDraftInput(REPLY.panelId)).toBe("Fix the login bug.");
+      expect(cleanups()).toEqual([{ id: kept()[0]!.id, correctedText: "Fix the login bug." }]);
+    });
+
+    it("keeps every word said into a reply whose run went mid-session", async () => {
+      const { service, voiceStore, inputStore, say, kept, flush } = await setup();
+      voiceStore.getState().setCorrectionEnabled(false);
+
+      voiceStore.getState().beginSession(REPLY);
+      say("first the parser");
+      // Its run's terminal is removed: its drafts go with it, the grid's
+      // panels change, and the session doesn't stop.
+      inputStore.getState().clearTerminalState("run-1");
+      for (const listener of panelListeners) listener({ panelsById: {} });
+      expect(inputStore.getState().getDraftInput(REPLY.panelId)).toBe("");
+      expect(voiceStore.getState().activeTarget?.panelId).toBe(REPLY.panelId);
+      expect(kept()).toEqual([]);
+
+      say("then the tests");
+      await service.stop();
+      await flush();
+
+      expect(kept()).toHaveLength(1);
+      expect(kept()[0]?.rawText).toBe("first the parser then the tests");
+    });
+  });
+
   it("drops the buffer of a panel closed while still arming", async () => {
     const { kept, voiceStore } = await setup();
     voiceStore.getState().setArming({ panelId: "panel-1" });

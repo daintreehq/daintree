@@ -401,3 +401,86 @@ describe("VoiceRecordingService — spoken send (#14633)", () => {
     expect(newer).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("VoiceRecordingService — spoken send to a Canopy reply off screen (#14778)", () => {
+  const REPLY = {
+    panelId: "isolated-composer:run-1",
+    panelTitle: "Reply to Claude",
+    surface: "canopy-reply" as const,
+    canopyRow: { runId: "run-1", hostScope: null },
+  };
+
+  beforeEach(() => {
+    vi.resetModules();
+    draftState.draft = "";
+    callbacks.delta = null;
+    callbacks.complete = null;
+    callbacks.boundary = null;
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  async function setupReply(canopyOpen: boolean) {
+    stubElectron();
+    const { useVoiceRecordingStore } = await import("@/store/voiceRecordingStore");
+    const { useCanopyStore } = await import("@/store/canopyStore");
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    voiceRecordingService.initialize();
+    useCanopyStore.setState({ isOpen: canopyOpen });
+    useVoiceRecordingStore.getState().beginSession(REPLY);
+    useVoiceRecordingStore.getState().setStatus("recording");
+    const stop = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue(undefined);
+    return { voiceRecordingService, useVoiceRecordingStore, useCanopyStore, stop };
+  }
+
+  it("keeps recording into the reply's draft when Canopy is closed, and sends nothing", async () => {
+    const { useVoiceRecordingStore, stop } = await setupReply(false);
+    draftState.draft = "Fix the";
+
+    delta("login bug send it", "item-a");
+    complete("login bug", "item-a", true);
+
+    expect(draftState.draft).toBe("Fix the login bug");
+    expect(stop).not.toHaveBeenCalled();
+    expect(useVoiceRecordingStore.getState().status).toBe("recording");
+    expect(useVoiceRecordingStore.getState().activeTarget?.panelId).toBe(REPLY.panelId);
+  });
+
+  it("sends nothing while Canopy shows another row's reply instead", async () => {
+    const { voiceRecordingService, useVoiceRecordingStore, stop } = await setupReply(true);
+    const otherRow = vi.fn();
+    voiceRecordingService.onSpokenSend("isolated-composer:run-2", undefined, otherRow);
+    draftState.draft = "Fix the";
+
+    complete("login bug", "item-a", true);
+
+    expect(otherRow).not.toHaveBeenCalled();
+    expect(stop).not.toHaveBeenCalled();
+    expect(draftState.draft).toBe("Fix the login bug");
+    expect(useVoiceRecordingStore.getState().status).toBe("recording");
+  });
+
+  it("sends from the reply while it is on screen", async () => {
+    const { voiceRecordingService, stop } = await setupReply(true);
+    const handler = vi.fn();
+    voiceRecordingService.onSpokenSend(REPLY.panelId, undefined, handler);
+
+    complete("fix the login bug", "item-a", true);
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(stop).not.toHaveBeenCalled();
+  });
+
+  it("doesn't send from a reply still fading out as Canopy closes", async () => {
+    const { voiceRecordingService, stop } = await setupReply(false);
+    const handler = vi.fn();
+    voiceRecordingService.onSpokenSend(REPLY.panelId, undefined, handler);
+
+    complete("fix the login bug", "item-a", true);
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(stop).not.toHaveBeenCalled();
+  });
+});

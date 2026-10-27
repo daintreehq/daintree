@@ -9,6 +9,7 @@ import {
   type AssistantHandbacksSeen,
   type CanopyRoleFilter,
 } from "@/components/Canopy/canopyAssistants";
+import type { CanopyReplyRow } from "./voiceRecordingStore";
 import {
   CANOPY_URGENT_PRIORITY,
   readsWithHostedService,
@@ -92,6 +93,20 @@ interface CanopyState {
   /** Each assistant's newest handback the person has had in front of them. */
   assistantHandbacksSeen: AssistantHandbacksSeen;
   seeAssistantHandback: (assistantId: string, observedAt: number) => void;
+  /**
+   * The row a dictation is writing a reply into, asked for from the recording
+   * indicator (#14778): the panel opens on its host and selects it with the
+   * keyboard in its reply, then settles the request whether or not it could.
+   */
+  replyReveal: CanopyReplyReveal | null;
+  /** Opens the panel on the row; false when Canopy is hidden and can't open. */
+  revealReply: (row: CanopyReplyRow) => boolean;
+  /** The request was met or refused; a newer one stands. */
+  settleReplyReveal: (id: number) => void;
+}
+
+export interface CanopyReplyReveal extends CanopyReplyRow {
+  id: number;
 }
 
 export type CanopyScope = "all" | "project";
@@ -400,6 +415,8 @@ function saveScope(scope: CanopyScope): void {
   }
 }
 
+let replyRevealSeq = 0;
+
 function opened(state: CanopyState): Partial<CanopyState> {
   if (canopyResumeFresh(state.resume, Date.now())) {
     return { isOpen: true, hostId: state.resume!.hostId };
@@ -419,7 +436,7 @@ function opened(state: CanopyState): Partial<CanopyState> {
  * snapshot is kept across closes so reopening shows the last cards at once,
  * while main rescans in the background.
  */
-export const useCanopyStore = create<CanopyState>((set) => ({
+export const useCanopyStore = create<CanopyState>((set, get) => ({
   isOpen: false,
   mode: "unset",
   seedMode: (mode) => set((state) => (state.snapshot === null ? { mode } : state)),
@@ -482,16 +499,33 @@ export const useCanopyStore = create<CanopyState>((set) => ({
   // Every opening starts on the window's own host, unless the user chose All
   // hosts or is coming back from "Go to terminal".
   open: () => set((state) => (state.mode === "hidden" || state.isOpen ? state : opened(state))),
-  close: () => set({ isOpen: false, workOf: null, resume: null }),
-  closeForTerminal: (resume) => set({ isOpen: false, workOf: null, resume }),
+  close: () => set({ isOpen: false, workOf: null, resume: null, replyReveal: null }),
+  closeForTerminal: (resume) => set({ isOpen: false, workOf: null, resume, replyReveal: null }),
   toggle: () =>
     set((state) =>
       state.isOpen
-        ? { isOpen: false, workOf: null, resume: null }
+        ? { isOpen: false, workOf: null, resume: null, replyReveal: null }
         : state.mode === "hidden"
           ? state
           : opened(state)
     ),
+  replyReveal: null,
+  // On the host the row was listed under, which is where its reply's draft is:
+  // All hosts names a run apart from its own host's list. A narrowing to one
+  // assistant's work is for the opening it was made in.
+  revealReply: (row) => {
+    if (get().mode === "hidden") return false;
+    set((state) => ({
+      isOpen: true,
+      resume: null,
+      workOf: state.isOpen ? state.workOf : null,
+      hostId: row.hostScope,
+      replyReveal: { ...row, id: ++replyRevealSeq },
+    }));
+    return true;
+  },
+  settleReplyReveal: (id) =>
+    set((state) => (state.replyReveal?.id === id ? { replyReveal: null } : state)),
   outdatedHost: false,
   applySnapshot: (received) =>
     set((state) => {
@@ -514,6 +548,7 @@ export const useCanopyStore = create<CanopyState>((set) => ({
           isOpen: false,
           workOf: null,
           resume: null,
+          replyReveal: null,
         };
       }
       return { snapshot, mode, outdatedHost: outdated };

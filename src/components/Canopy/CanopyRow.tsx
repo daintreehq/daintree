@@ -2,7 +2,7 @@ import { cn } from "@/lib/utils";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { BAND_GLYPH_TONE, PilotRunState } from "@/components/Pilot/PilotRunState";
-import { Archive, ArchiveRestore } from "lucide-react";
+import { Archive, ArchiveRestore, Mic } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { AskingCircle, Clock } from "@/components/icons";
@@ -252,6 +252,8 @@ interface CanopyRowProps {
   asideLabel?: string | null;
   /** Which assistant started it or holds it, from main's own records; null when none is known. */
   workLabel?: string | null;
+  /** A dictation is writing into this run's reply, whichever row is selected. */
+  dictating?: boolean;
   onSelect: () => void;
   /** A click on the row: the user opened it. */
   onClick: () => void;
@@ -289,6 +291,7 @@ export function CanopyRow({
   tabbable,
   asideLabel = null,
   workLabel = null,
+  dictating = false,
   onSelect,
   onClick,
   onOpen,
@@ -414,6 +417,7 @@ export function CanopyRow({
     .filter(Boolean)
     .join(", ");
   const meta = [
+    dictating ? "dictating a reply" : null,
     unread ? "unread" : null,
     asking ? "asking you a question" : null,
     looksDone ? "looks done" : null,
@@ -534,6 +538,11 @@ export function CanopyRow({
           >
             {subject}
           </span>
+          {/* Its reply is still taking dictation, wherever the selection went:
+              the indicator in the toolbar brings it back. */}
+          {dictating && (
+            <Mic data-canopy-dictating="" className="size-3.5 shrink-0 text-text-secondary" />
+          )}
           {/* How long it has been in that state, where a mail list puts the
               date; the glyph at the left already says which state. */}
           {row.age !== null && (
