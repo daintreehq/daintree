@@ -1069,6 +1069,29 @@ describe("AgentSetupWizard input step", () => {
     expect(document.querySelector("h3")?.textContent).toBe("Setup complete");
   });
 
+  it("withdraws a retry once a newer pick of that setting is made", async () => {
+    const settles: ((outcome: Outcome) => void)[] = [];
+    dispatchMock.mockImplementation(
+      inputAction(() => new Promise<Outcome>((resolve) => settles.push(resolve)))
+    );
+    dispatchMock.mockImplementationOnce(inputAction("fail"));
+    await gotoInputStep();
+    await act(async () => {
+      hybridInputSwitch().click(); // off, refused and rolled back on
+    });
+    expect(screen.getByRole("alert")).toBeTruthy();
+
+    await clickButton("Retry"); // off again, left pending
+    await act(async () => {
+      hybridInputSwitch().click(); // and back on before it lands
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    while (settles.length > 0) await settleWrite(settles, "ok");
+    expect(saved.get("hybridInputEnabled")).toBe(true);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("drops a retry that no longer applies", async () => {
     dispatchMock.mockImplementationOnce(inputAction("fail"));
     await gotoInputStep();

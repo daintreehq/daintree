@@ -54,9 +54,6 @@ export function AgentInputStep({ onBusyChange }: { onBusyChange: (busy: boolean)
     try {
       const result = await actionService.dispatch(actionId, { enabled }, { source: "user" });
       if (!result.ok) throw new Error(result.error.message);
-      if (latestAttemptRef.current[actionId] === attempt) {
-        setFailed((prev) => (prev?.actionId === actionId ? null : prev));
-      }
     } catch (error) {
       logError("Failed to persist a hybrid input setting from setup", error);
       if (latestAttemptRef.current[actionId] === attempt) setFailed({ actionId, enabled });
@@ -71,13 +68,15 @@ export function AgentInputStep({ onBusyChange }: { onBusyChange: (busy: boolean)
 
   // One write at a time. Each action rolls back to the value it found when it
   // ran, which is only the saved value while no other write is in flight; a
-  // pick made meanwhile waits its turn rather than being dropped. Only the
-  // newest pick of a setting decides whether a retry is on offer.
+  // pick made meanwhile waits its turn rather than being dropped. A new pick
+  // withdraws the setting's last failure, and only its own write can put one
+  // back.
   const persist = (actionId: InputAction, enabled: boolean) => {
     if (!isPresent) return;
     const attempt = (latestAttemptRef.current[actionId] ?? 0) + 1;
     latestAttemptRef.current[actionId] = attempt;
     setPicked((prev) => ({ ...prev, [actionId]: enabled }));
+    setFailed((prev) => (prev?.actionId === actionId ? null : prev));
     inFlightRef.current += 1;
     onBusyChange(true);
     queueRef.current = queueRef.current.then(() => write(actionId, enabled, attempt));
