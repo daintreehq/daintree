@@ -761,6 +761,37 @@ describe("FleetArmingRibbon", () => {
     dispatchSpy.mockRestore();
   });
 
+  // A dictated send waiting on its cleanup blurs the composer to the page, and
+  // an Enter there means "send it now", never "confirm the fleet action" (#14780).
+  it("leaves a pending action unconfirmed when Enter is for a waiting dictated send", async () => {
+    useFleetArmingStore.getState().armIds(["a", "b", "c"]);
+    useFleetPendingActionStore.setState({
+      pending: { kind: "kill", targetCount: 3, sessionLossCount: 0 },
+    });
+    const actionServiceModule = await import("@/services/ActionService");
+    const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
+    render(<FleetArmingRibbon />);
+    const { claimVoiceWaitKeys } = await import("@/lib/voiceWaitKeys");
+    const sendNow = vi.fn();
+    const release = claimVoiceWaitKeys({
+      holds: () => false,
+      editor: () => null,
+      isSelected: () => false,
+      sendNow,
+      cancel: vi.fn(),
+    });
+
+    try {
+      fireEvent.keyDown(document.body, { key: "Enter" });
+
+      expect(sendNow).toHaveBeenCalledTimes(1);
+      expect(dispatchSpy.mock.calls.find((c) => c[0] === "fleet.kill")).toBeUndefined();
+    } finally {
+      release();
+      dispatchSpy.mockRestore();
+    }
+  });
+
   // This listener is capture-phase, so without a modal guard it beat a focused
   // dialog button to the Enter and confirmed a destructive fleet action instead
   // of activating that button (issue #11106).

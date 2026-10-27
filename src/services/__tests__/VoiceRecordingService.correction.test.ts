@@ -425,7 +425,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     dictate("panel-1", "hello wrld");
     await service.stop();
 
-    const waited = service.waitForPendingCorrections("panel-1", 60_000);
+    const waited = service.waitForPendingCorrections("panel-1");
     inputStore.getState().clearDraftInput("panel-1");
     await expect(waited).resolves.toBe(true);
     expect(service.hasPendingCorrection("panel-1")).toBe(false);
@@ -442,7 +442,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     expect(service.hasPendingCorrection("panel-2")).toBe(false);
 
     let settled = false;
-    const waited = service.waitForPendingCorrections("panel-1", 2000);
+    const waited = service.waitForPendingCorrections("panel-1");
     void waited.then(() => {
       settled = true;
     });
@@ -456,8 +456,8 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     expect(service.hasPendingCorrection("panel-1")).toBe(false);
   });
 
-  it("stops waiting at the cap and drops a correction discarded by the send", async () => {
-    const { service, dictate, draft, flush } = await setup();
+  it("waits with no deadline of its own until the slowest correction lands", async () => {
+    const { service, dictate, draft } = await setup();
     const first = deferred<CorrectResult>();
     correct.mockReturnValueOnce(first.promise);
 
@@ -466,15 +466,41 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
 
     vi.useFakeTimers();
     let settled = false;
-    const waited = service.waitForPendingCorrections("panel-1", 2000);
+    const waited = service.waitForPendingCorrections("panel-1");
     void waited.then(() => {
       settled = true;
     });
-    await vi.advanceTimersByTimeAsync(1999);
+    await vi.advanceTimersByTimeAsync(60_000);
     expect(settled).toBe(false);
-    await vi.advanceTimersByTimeAsync(1);
-    await expect(waited).resolves.toBe(false);
     vi.useRealTimers();
+
+    first.resolve({ action: "replace", correctedText: "Hello world." });
+    await expect(waited).resolves.toBe(true);
+    expect(draft("panel-1")).toBe("Hello world.");
+  });
+
+  it("stops waiting when its signal aborts and drops a correction discarded by the send", async () => {
+    const { service, dictate, draft, flush } = await setup();
+    const first = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(first.promise);
+
+    dictate("panel-1", "hello wrld");
+    await service.stop();
+
+    const controller = new AbortController();
+    let settled = false;
+    const waited = service.waitForPendingCorrections("panel-1", controller.signal);
+    void waited.then(() => {
+      settled = true;
+    });
+    await flush();
+    expect(settled).toBe(false);
+    controller.abort();
+    await expect(waited).resolves.toBe(false);
+    // Already aborted: it doesn't start waiting at all.
+    await expect(service.waitForPendingCorrections("panel-1", controller.signal)).resolves.toBe(
+      false
+    );
 
     service.discardPendingCorrections("panel-1");
     expect(service.hasPendingCorrection("panel-1")).toBe(false);
@@ -494,7 +520,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     dictate("panel-1", "the parsr");
     await service.stop();
     let settled = false;
-    const waited = service.waitForPendingCorrections("panel-1", 2000);
+    const waited = service.waitForPendingCorrections("panel-1");
     void waited.then(() => {
       settled = true;
     });

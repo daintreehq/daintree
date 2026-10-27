@@ -4,6 +4,7 @@ import type { Compartment } from "@codemirror/state";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useVoiceRecordingStore } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
+import { usePanelStore } from "@/store/panelStore";
 import { takeLandedCorrection } from "@/services/voiceCorrectionLanding";
 import { minimalDocChange } from "@/lib/textRangeMapping";
 import {
@@ -13,11 +14,9 @@ import {
 import { takePendingComposerSelection } from "@/lib/composerCaret";
 import { makeDraftKey } from "@/lib/draftKey";
 import { replayLandedCorrection } from "../inputEditorExtensions/correctionReview";
-import {
-  voiceRecordingService,
-  VOICE_CORRECTION_SEND_WAIT_MS,
-} from "@/services/VoiceRecordingService";
+import { voiceRecordingService } from "@/services/VoiceRecordingService";
 import { isSpokenSendable } from "@/services/voiceSpokenSend";
+import { claimVoiceWaitKeys } from "@/lib/voiceWaitKeys";
 import type { ClaimSendHandBack, SendHandBack } from "./useSendHandBack";
 
 /** What a voice send is waiting on: the transcript draining, or its correction. */
@@ -88,6 +87,10 @@ export function useVoiceWaitSubmit({
   // must do neither under the second.
   const attemptRef = useRef(0);
   const activeAttemptRef = useRef<number | null>(null);
+  // The active attempt's way out of its wait, and its hold on Enter and Escape.
+  const activeWaitRef = useRef<{ controller: AbortController; releaseKeys: () => void } | null>(
+    null
+  );
   const [voiceSubmitPhase, setVoiceSubmitPhase] = useState<VoiceSubmitPhase | null>(null);
 
   // A composer that unmounts, or moves to another terminal, mid-wait can't
@@ -97,10 +100,34 @@ export function useVoiceWaitSubmit({
     return () => {
       if (activeAttemptRef.current === null) return;
       activeAttemptRef.current = null;
+      const wait = activeWaitRef.current;
+      activeWaitRef.current = null;
+      wait?.releaseKeys();
+      wait?.controller.abort();
       useTerminalInputStore.getState().setVoiceSubmitting(terminalId, false);
       setVoiceSubmitPhase(null);
     };
   }, [terminalId]);
+
+  // Escape cancels the send, not the correction: it still lands in the draft.
+  const cancelVoiceWaitSubmit = useCallback(() => {
+    const store = useTerminalInputStore.getState();
+    if (!store.isVoiceSubmitting(terminalId)) return false;
+    activeAttemptRef.current = null;
+    const wait = activeWaitRef.current;
+    activeWaitRef.current = null;
+    wait?.releaseKeys();
+    wait?.controller.abort();
+    store.setVoiceSubmitting(terminalId, false);
+    setVoiceSubmitPhase(null);
+    const view = editorViewRef.current;
+    if (view) {
+      view.dispatch({
+        effects: editableCompartmentRef.current.reconfigure(EditorView.editable.of(true)),
+      });
+    }
+    return true;
+  }, [terminalId, editorViewRef, editableCompartmentRef]);
 
   const startVoiceWaitSubmit = useCallback(
     (options?: VoiceWaitSubmitOptions) => {
@@ -117,6 +144,29 @@ export function useVoiceWaitSubmit({
       const handBack = claimSendHandBackRef.current?.();
       store.setVoiceSubmitting(terminalId, true);
       setVoiceSubmitPhase("finishing");
+
+      // Aborted by a second Enter, the wait ends and the send goes with the
+      // text as it stands; by Escape or an unmount, the attempt is over too.
+      const controller = new AbortController();
+      const releaseKeys = claimVoiceWaitKeys({
+        holds: (element) => {
+          const view = editorViewRef.current;
+          if (view?.dom.contains(element)) return true;
+          return (
+            element.closest("[data-hybrid-input-root]")?.getAttribute("data-hybrid-input-root") ===
+            terminalId
+          );
+        },
+        editor: () => editorViewRef.current?.dom ?? null,
+        isSelected: () => usePanelStore.getState().focusedId === terminalId,
+        sendNow: () => {
+          if (isCurrentAttempt()) controller.abort();
+        },
+        cancel: () => {
+          if (isCurrentAttempt()) cancelVoiceWaitSubmit();
+        },
+      });
+      activeWaitRef.current = { controller, releaseKeys };
 
       const view = editorViewRef.current;
       if (view) {
@@ -138,14 +188,16 @@ export function useVoiceWaitSubmit({
           if (!isCurrentAttempt()) return;
 
           // stop() has registered the passage's correction by now. The send
-          // waits briefly for it, then goes with whatever text is current; the
-          // send itself drops what is still on its way (#14611).
-          if (voiceRecordingService.hasPendingCorrection(terminalId)) {
+          // waits for it to land or fail, as long as its request takes, unless
+          // a second Enter, even one while the transcript was finishing, says
+          // to send what stands; the send drops what is still on its way
+          // (#14611, #14780).
+          if (
+            !controller.signal.aborted &&
+            voiceRecordingService.hasPendingCorrection(terminalId)
+          ) {
             setVoiceSubmitPhase("polishing");
-            await voiceRecordingService.waitForPendingCorrections(
-              terminalId,
-              VOICE_CORRECTION_SEND_WAIT_MS
-            );
+            await voiceRecordingService.waitForPendingCorrections(terminalId, controller.signal);
             if (!isCurrentAttempt()) return;
           }
 
@@ -186,6 +238,8 @@ export function useVoiceWaitSubmit({
           if (options?.spoken && !isSpokenSendable(draft)) return;
           sendFromEditorRef.current(handBack);
         } finally {
+          releaseKeys();
+          if (activeWaitRef.current?.controller === controller) activeWaitRef.current = null;
           if (activeAttemptRef.current === attempt) {
             activeAttemptRef.current = null;
             useTerminalInputStore.getState().setVoiceSubmitting(terminalId, false);
@@ -200,7 +254,7 @@ export function useVoiceWaitSubmit({
         }
       })();
     },
-    [terminalId, editorViewRef, editableCompartmentRef]
+    [terminalId, editorViewRef, editableCompartmentRef, cancelVoiceWaitSubmit]
   );
 
   useEffect(
@@ -218,22 +272,6 @@ export function useVoiceWaitSubmit({
       ),
     [terminalId, projectId, startVoiceWaitSubmit]
   );
-
-  // Escape cancels the send, not the correction: it still lands in the draft.
-  const cancelVoiceWaitSubmit = useCallback(() => {
-    const store = useTerminalInputStore.getState();
-    if (!store.isVoiceSubmitting(terminalId)) return false;
-    activeAttemptRef.current = null;
-    store.setVoiceSubmitting(terminalId, false);
-    setVoiceSubmitPhase(null);
-    const view = editorViewRef.current;
-    if (view) {
-      view.dispatch({
-        effects: editableCompartmentRef.current.reconfigure(EditorView.editable.of(true)),
-      });
-    }
-    return true;
-  }, [terminalId, editorViewRef, editableCompartmentRef]);
 
   // Read at the key press rather than from the last render: a hotkey stop
   // registers its correction before any render shows it.

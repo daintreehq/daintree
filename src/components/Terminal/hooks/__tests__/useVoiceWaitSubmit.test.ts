@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
@@ -12,7 +12,6 @@ vi.mock("@/services/VoiceRecordingService", () => ({
     waitForPendingCorrections: vi.fn().mockResolvedValue(true),
     onSpokenSend: vi.fn(() => () => {}),
   },
-  VOICE_CORRECTION_SEND_WAIT_MS: 2000,
 }));
 
 vi.mock("@/store", () => ({
@@ -28,6 +27,11 @@ vi.mock("@/store/projectStore", () => ({
   useProjectStore: {
     getState: () => ({ currentProject: undefined }),
   },
+}));
+
+const panelState = vi.hoisted(() => ({ focusedId: null as string | null }));
+vi.mock("@/store/panelStore", () => ({
+  usePanelStore: { getState: () => panelState },
 }));
 
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
@@ -77,6 +81,8 @@ describe("useVoiceWaitSubmit", () => {
     onSpokenSendMock.mockReset();
     onSpokenSendMock.mockReturnValue(() => {});
     useTerminalInputStore.getState().clearDraftInput(PANEL_ID);
+    panelState.focusedId = null;
+    (document.activeElement as HTMLElement | null)?.blur();
   });
 
   function renderWaitSubmit(isDisabled?: () => boolean, claimSendHandBack?: ClaimSendHandBack) {
@@ -126,7 +132,7 @@ describe("useVoiceWaitSubmit", () => {
       await act(async () => {
         spokenSendHandler()();
       });
-      expect(waitMock).toHaveBeenCalledWith(PANEL_ID, 2000);
+      expect(waitMock).toHaveBeenCalledWith(PANEL_ID, expect.any(AbortSignal));
       expect(sendFromEditor).not.toHaveBeenCalled();
 
       await act(async () => {
@@ -352,12 +358,12 @@ describe("useVoiceWaitSubmit", () => {
       result.current.startVoiceWaitSubmit();
     });
 
-    expect(waitMock).toHaveBeenCalledWith(PANEL_ID, 2000);
+    expect(waitMock).toHaveBeenCalledWith(PANEL_ID, expect.any(AbortSignal));
     expect(result.current.voiceSubmitPhase).toBe("polishing");
     expect(sendFromEditor).not.toHaveBeenCalled();
 
     await act(async () => {
-      finishCorrection(false);
+      finishCorrection(true);
     });
 
     expect(sendFromEditor).toHaveBeenCalledTimes(1);
@@ -475,6 +481,218 @@ describe("useVoiceWaitSubmit", () => {
   });
 });
 
+describe("useVoiceWaitSubmit keys during the wait (#14780)", () => {
+  let sendFromEditor: ReturnType<typeof vi.fn<() => void>>;
+
+  beforeEach(() => {
+    useTerminalInputStore.setState({ voiceSubmittingPanels: new Set() });
+    sendFromEditor = vi.fn<() => void>();
+    stopMock.mockReset();
+    stopMock.mockResolvedValue(undefined);
+    hasPendingMock.mockReset();
+    hasPendingMock.mockReturnValue(true);
+    waitMock.mockReset();
+    // A cleanup that never lands on its own: only the wait's signal ends it.
+    waitMock.mockImplementation(
+      (_panelId, signal) =>
+        new Promise<boolean>((resolve) => {
+          signal?.addEventListener("abort", () => resolve(false), { once: true });
+        })
+    );
+    onSpokenSendMock.mockReset();
+    onSpokenSendMock.mockReturnValue(() => {});
+    panelState.focusedId = null;
+    (document.activeElement as HTMLElement | null)?.blur();
+  });
+
+  afterEach(() => {
+    document.body.replaceChildren();
+  });
+
+  function renderWaitSubmit(terminalId = PANEL_ID, send = sendFromEditor) {
+    return renderHook(() =>
+      useVoiceWaitSubmit({
+        terminalId,
+        editorViewRef: { current: null },
+        editableCompartmentRef: { current: new Compartment() },
+        sendFromEditor: send,
+      })
+    );
+  }
+
+  // The lock blurs the editor, so a key during the wait reaches the page.
+  function pressKey(key: string, init: KeyboardEventInit = {}, target: Element = document.body) {
+    const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init });
+    target.dispatchEvent(event);
+    return event;
+  }
+
+  it("sends what stands at a second Enter while the cleanup is on its way", async () => {
+    const { result } = renderWaitSubmit();
+    await act(async () => {
+      result.current.startVoiceWaitSubmit();
+    });
+    expect(result.current.voiceSubmitPhase).toBe("polishing");
+    const signal = waitMock.mock.calls[0]![1]!;
+
+    let event!: KeyboardEvent;
+    await act(async () => {
+      event = pressKey("Enter");
+    });
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(signal.aborted).toBe(true);
+    expect(sendFromEditor).toHaveBeenCalledTimes(1);
+    expect(result.current.voiceSubmitPhase).toBeNull();
+    expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(false);
+  });
+
+  it("skips the cleanup wait once the transcript drains after a second Enter", async () => {
+    let resolveStop!: () => void;
+    stopMock.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveStop = resolve;
+        })
+    );
+    const { result } = renderWaitSubmit();
+    act(() => {
+      result.current.startVoiceWaitSubmit();
+    });
+    expect(result.current.voiceSubmitPhase).toBe("finishing");
+
+    await act(async () => {
+      pressKey("Enter");
+    });
+    // The words still on their way are part of what stands.
+    expect(sendFromEditor).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveStop();
+    });
+    expect(waitMock).not.toHaveBeenCalled();
+    expect(sendFromEditor).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls the send off at Escape, leaving the cleanup to land", async () => {
+    const { result } = renderWaitSubmit();
+    await act(async () => {
+      result.current.startVoiceWaitSubmit();
+    });
+
+    await act(async () => {
+      pressKey("Escape");
+    });
+
+    expect(sendFromEditor).not.toHaveBeenCalled();
+    expect(result.current.voiceSubmitPhase).toBeNull();
+    expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(false);
+  });
+
+  it("leaves Enter alone with the keyboard elsewhere, with a modifier, or held down", async () => {
+    const field = document.createElement("input");
+    document.body.appendChild(field);
+    const { result } = renderWaitSubmit();
+    await act(async () => {
+      result.current.startVoiceWaitSubmit();
+    });
+
+    const ignored = [
+      pressKey("Enter", {}, field),
+      pressKey("Enter", { shiftKey: true }),
+      pressKey("Enter", { metaKey: true }),
+      pressKey("Enter", { repeat: true }),
+      pressKey("Enter", { isComposing: true }),
+    ];
+    await act(async () => {});
+
+    expect(ignored.map((event) => event.defaultPrevented)).toEqual([
+      false,
+      false,
+      false,
+      false,
+      false,
+    ]);
+    expect(sendFromEditor).not.toHaveBeenCalled();
+    expect(result.current.voiceSubmitPhase).toBe("polishing");
+  });
+
+  it("takes a key in its own bar, wherever the page's selection is", async () => {
+    const bar = document.createElement("div");
+    bar.setAttribute("data-hybrid-input-root", PANEL_ID);
+    const button = document.createElement("button");
+    bar.appendChild(button);
+    document.body.appendChild(bar);
+    const { result } = renderWaitSubmit();
+    await act(async () => {
+      result.current.startVoiceWaitSubmit();
+    });
+
+    await act(async () => {
+      pressKey("Enter", {}, button);
+    });
+
+    expect(sendFromEditor).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets go of Enter and Escape once its send has gone", async () => {
+    const { result } = renderWaitSubmit();
+    await act(async () => {
+      result.current.startVoiceWaitSubmit();
+    });
+    await act(async () => {
+      pressKey("Enter");
+    });
+    expect(sendFromEditor).toHaveBeenCalledTimes(1);
+
+    const after = [pressKey("Enter"), pressKey("Escape")];
+    expect(after.map((event) => event.defaultPrevented)).toEqual([false, false]);
+    expect(sendFromEditor).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets go of them when the composer unmounts mid-wait", async () => {
+    const { result, unmount } = renderWaitSubmit();
+    await act(async () => {
+      result.current.startVoiceWaitSubmit();
+    });
+    const signal = waitMock.mock.calls[0]![1]!;
+    unmount();
+
+    expect(signal.aborted).toBe(true);
+    expect(pressKey("Enter").defaultPrevented).toBe(false);
+    await act(async () => {});
+    expect(sendFromEditor).not.toHaveBeenCalled();
+  });
+
+  it("gives a page Enter to the selected pane's composer when two are waiting", async () => {
+    const sendOther = vi.fn<() => void>();
+    const first = renderWaitSubmit();
+    const second = renderWaitSubmit("other-panel", sendOther);
+    await act(async () => {
+      first.result.current.startVoiceWaitSubmit();
+      second.result.current.startVoiceWaitSubmit();
+    });
+    expect(first.result.current.voiceSubmitPhase).toBe("polishing");
+    expect(second.result.current.voiceSubmitPhase).toBe("polishing");
+
+    // Neither selected: the key is nobody's.
+    let unclaimed!: KeyboardEvent;
+    await act(async () => {
+      unclaimed = pressKey("Enter");
+    });
+    expect(unclaimed.defaultPrevented).toBe(false);
+
+    panelState.focusedId = "other-panel";
+    await act(async () => {
+      pressKey("Enter");
+    });
+
+    expect(sendOther).toHaveBeenCalledTimes(1);
+    expect(sendFromEditor).not.toHaveBeenCalled();
+    expect(first.result.current.voiceSubmitPhase).toBe("polishing");
+  });
+});
+
 describe("useVoiceWaitSubmit submitFromEditor", () => {
   let sendFromEditor: ReturnType<typeof vi.fn<() => void>>;
 
@@ -513,7 +731,7 @@ describe("useVoiceWaitSubmit submitFromEditor", () => {
     });
 
     expect(stopMock).not.toHaveBeenCalled();
-    expect(waitMock).toHaveBeenCalledWith("other-panel", 2000);
+    expect(waitMock).toHaveBeenCalledWith("other-panel", expect.any(AbortSignal));
     expect(sendFromEditor).not.toHaveBeenCalled();
 
     await act(async () => {

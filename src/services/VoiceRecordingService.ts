@@ -285,12 +285,6 @@ interface WarmAudio {
   retired: boolean;
 }
 
-/**
- * How long a send waits for a dictated passage's correction before it goes
- * with whatever text is current (#14611).
- */
-export const VOICE_CORRECTION_SEND_WAIT_MS = 2_000;
-
 /** A finished passage's post-stop AI correction, still on its way. */
 interface PendingCorrection {
   panelId: string;
@@ -3057,18 +3051,22 @@ class VoiceRecordingService {
 
   /**
    * Resolves true once every correction pending for the panel has landed or
-   * been dropped, or false if `timeoutMs` runs out first.
+   * been dropped, or false as soon as `signal` aborts. There is no deadline of
+   * its own: each request carries its timeout in main and settles, failed, at
+   * the end of it (#14780).
    */
-  async waitForPendingCorrections(panelId: string, timeoutMs: number): Promise<boolean> {
+  async waitForPendingCorrections(panelId: string, signal?: AbortSignal): Promise<boolean> {
     if (!this.hasPendingCorrection(panelId)) return true;
+    if (signal?.aborted) return false;
 
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timedOut = new Promise<false>((resolve) => {
-      timer = setTimeout(() => resolve(false), timeoutMs);
+    let onAbort: (() => void) | undefined;
+    const aborted = new Promise<false>((resolve) => {
+      onAbort = () => resolve(false);
+      signal?.addEventListener("abort", onAbort, { once: true });
     });
     try {
       // A dictation restarted and stopped on the panel can register another
-      // correction while this waits; it gets the same deadline.
+      // correction while this waits; it is waited for too.
       while (this.hasPendingCorrection(panelId)) {
         const settled: Promise<void>[] = [];
         for (const correction of this.pendingCorrections) {
@@ -3077,12 +3075,12 @@ class VoiceRecordingService {
         for (const rewrite of this.pendingRewrites) {
           if (rewrite.panelId === panelId) settled.push(rewrite.settled);
         }
-        const landed = await Promise.race([Promise.all(settled).then(() => true), timedOut]);
+        const landed = await Promise.race([Promise.all(settled).then(() => true), aborted]);
         if (!landed) return false;
       }
       return true;
     } finally {
-      clearTimeout(timer);
+      if (onAbort) signal?.removeEventListener("abort", onAbort);
     }
   }
 

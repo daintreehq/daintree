@@ -36,6 +36,7 @@ import { SaveFleetDialog } from "./SaveFleetDialog";
 import { SavedFleetsDialog } from "./SavedFleetsDialog";
 import { FLEET_LARGE_PASTE_BATCH_SIZE } from "./fleetBroadcast";
 import { cancelActiveBroadcast } from "./fleetEnterBroadcast";
+import { routeVoiceWaitKey } from "@/lib/voiceWaitKeys";
 import {
   useFleetArmingStore,
   selectFleetMemberCount,
@@ -303,6 +304,8 @@ export function FleetArmingRibbon(): ReactElement | null {
     if (pending === null) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key !== "Enter") return;
+      // A dictated send waiting on its cleanup takes the Enter meant for it.
+      if (routeVoiceWaitKey(e)) return;
       // A modal owns the keyboard while it is open. This listener is capture-
       // phase, so without the guard it beat a focused Cancel button to the Enter
       // and confirmed the fleet action instead of activating that button
