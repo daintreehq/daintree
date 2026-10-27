@@ -249,7 +249,28 @@ export interface KeytermAssemblyOpts {
    * a rejection just leaves the tier empty.
    */
   commandTerms?: Promise<readonly string[]>;
+  /**
+   * The repository, branch and terminal reads, already made where the pane
+   * lives (a host's). Given, nothing is read here: `projectPath`,
+   * `terminalId` and `ptyClient` are ignored.
+   */
+  paneReads?: PaneKeytermReads | Promise<PaneKeytermReads>;
 }
+
+/** What the reads of a pane's own repository, worktree and terminal gave. */
+export interface PaneKeytermReads {
+  /** Names read from the repository, untokenized. */
+  repoNames: string[];
+  branchName: string | null;
+  /** Identifiers from the terminal's output, screened and ranked best-first. */
+  terminalTerms: string[];
+}
+
+export const NO_PANE_KEYTERM_READS: PaneKeytermReads = {
+  repoNames: [],
+  branchName: null,
+  terminalTerms: [],
+};
 
 function isValidTerm(term: string): boolean {
   if (term.length < MIN_TERM_LENGTH) return false;
@@ -351,7 +372,11 @@ export function extractTerminalIdentifiers(lines: string[]): string[] {
 // The worktree the terminal is filed under, whose id is its path; a move
 // updates it while the spawn cwd stays put. A terminal outside any worktree
 // falls back to its cwd.
-async function getTerminalBranch(ptyClient: PtyClient, terminalId: string): Promise<string | null> {
+async function getTerminalBranch(
+  ptyClient: PtyClient,
+  terminalId: string,
+  budgetMs: number
+): Promise<string | null> {
   const startedAt = performance.now();
   try {
     const terminal = await ptyClient.getTerminalAsync(terminalId);
@@ -360,7 +385,7 @@ async function getTerminalBranch(ptyClient: PtyClient, terminalId: string): Prom
     if (typeof path !== "string" || !isAbsolute(path)) return null;
     // Git's own timeout is what's left of the shared budget, so it rarely
     // outlives the wait (resolving the git binary isn't counted).
-    const remaining = Math.ceil(ASSEMBLY_TIMEOUT_MS - (performance.now() - startedAt));
+    const remaining = Math.ceil(budgetMs - (performance.now() - startedAt));
     if (remaining <= 0) return null;
     return await getGitBranch(path, { timeout: remaining });
   } catch {
@@ -381,11 +406,16 @@ async function getTerminalLines(ptyClient: PtyClient, terminalId: string): Promi
 
 // Bounds one dynamic read so leading speech isn't held up; a slow or failed
 // read yields `fallback`. The read itself isn't cancelled.
-async function withinBudget<T>(read: Promise<T>, fallback: T, readName: string): Promise<T> {
+async function withinBudget<T>(
+  read: Promise<T>,
+  fallback: T,
+  readName: string,
+  budgetMs: number = ASSEMBLY_TIMEOUT_MS
+): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   try {
     const timeout = new Promise<T>((resolve) => {
-      timer = setTimeout(() => resolve(fallback), ASSEMBLY_TIMEOUT_MS);
+      timer = setTimeout(() => resolve(fallback), budgetMs);
       timer.unref();
     });
     return await Promise.race([read, timeout]);
@@ -395,6 +425,46 @@ async function withinBudget<T>(read: Promise<T>, fallback: T, readName: string):
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+/**
+ * The repository's names, the branch of the terminal's worktree and the
+ * identifiers in its output, each read bounded by `budgetMs`. A slow or
+ * failed read gives none. Terminal identifiers are screened here, so the raw
+ * output never leaves the reader.
+ */
+export async function readPaneKeytermReads(
+  opts: { projectPath?: string; terminalId?: string; ptyClient?: PtyClient },
+  budgetMs: number = ASSEMBLY_TIMEOUT_MS
+): Promise<PaneKeytermReads> {
+  const { projectPath, terminalId, ptyClient } = opts;
+  const [repoNames, branchName, lines] = await Promise.all([
+    projectPath && isAbsolute(projectPath)
+      ? withinBudget(
+          deriveRepoNames(projectPath, performance.now() + budgetMs).then((repo) => repo.names),
+          [] as string[],
+          "Repository name derivation",
+          budgetMs
+        )
+      : [],
+    ptyClient && terminalId
+      ? withinBudget(
+          getTerminalBranch(ptyClient, terminalId, budgetMs),
+          null,
+          "Branch name lookup",
+          budgetMs
+        )
+      : null,
+    ptyClient && terminalId
+      ? withinBudget(
+          getTerminalLines(ptyClient, terminalId),
+          [],
+          "Terminal identifier extraction",
+          budgetMs
+        )
+      : [],
+  ]);
+  return { repoNames, branchName, terminalTerms: extractTerminalIdentifiers(lines) };
 }
 
 /**
@@ -437,7 +507,7 @@ export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<strin
 
 /** The same list as `assembleKeyterms`, each term tagged with the tier that won it. */
 export async function assembleTaggedKeyterms(opts: KeytermAssemblyOpts): Promise<VoiceSentTerm[]> {
-  const { customDictionary, projectName, projectPath, terminalId, ptyClient, commandTerms } = opts;
+  const { customDictionary, projectName, commandTerms } = opts;
   const seen = new Set<string>();
   const result: VoiceSentTerm[] = [];
   let source: VoiceKeytermSource = "projectDictionary";
@@ -455,36 +525,20 @@ export async function assembleTaggedKeyterms(opts: KeytermAssemblyOpts): Promise
   // Gather dynamic context concurrently, each read guarded by its own timeout.
   // The reads fire at once so leading speech isn't delayed; results are merged
   // in priority order afterward.
-  const [projectDictionary, repoNames, gatheredNames, branchName, lines, commands] =
-    await Promise.all([
-      withinBudget(Promise.resolve(opts.projectDictionary ?? []), [], "Project vocabulary read"),
-      projectPath && isAbsolute(projectPath)
-        ? withinBudget(
-            deriveRepoNames(projectPath, performance.now() + ASSEMBLY_TIMEOUT_MS).then(
-              (repo) => repo.names
-            ),
-            [] as string[],
-            "Repository name derivation"
-          )
-        : [],
-      withinBudget(Promise.resolve(opts.names ?? null), null, "Names read"),
-      ptyClient && terminalId
-        ? withinBudget(getTerminalBranch(ptyClient, terminalId), null, "Branch name lookup")
-        : null,
-      ptyClient && terminalId
-        ? withinBudget(
-            getTerminalLines(ptyClient, terminalId),
-            [],
-            "Terminal identifier extraction"
-          )
-        : [],
-      commandTerms
-        ? commandTerms.catch((): readonly string[] => {
-            logDebug(`${P} Command lookup failed`);
-            return [];
-          })
-        : [],
-    ]);
+  const [projectDictionary, paneReads, gatheredNames, commands] = await Promise.all([
+    withinBudget(Promise.resolve(opts.projectDictionary ?? []), [], "Project vocabulary read"),
+    opts.paneReads
+      ? withinBudget(Promise.resolve(opts.paneReads), NO_PANE_KEYTERM_READS, "Pane reads")
+      : readPaneKeytermReads(opts),
+    withinBudget(Promise.resolve(opts.names ?? null), null, "Names read"),
+    commandTerms
+      ? commandTerms.catch((): readonly string[] => {
+          logDebug(`${P} Command lookup failed`);
+          return [];
+        })
+      : [],
+  ]);
+  const { repoNames, branchName, terminalTerms } = paneReads;
 
   // Priority 1: The project's vocabulary, then the user's own dictionary, each
   // newest first, because a term is usually added right after recognition
@@ -570,12 +624,13 @@ export async function assembleTaggedKeyterms(opts: KeytermAssemblyOpts): Promise
   }
 
   source = "terminal";
-  // Priority 7: Terminal identifiers. Lines were fetched in parallel above.
-  // Terminal terms are ranked best-first; bound the tier independently so
-  // dictionary/project/branch terms always keep headroom under MAX_KEYTERMS.
+  // Priority 7: Terminal identifiers, ranked best-first. Bound the tier
+  // independently so dictionary/project/branch terms always keep headroom
+  // under MAX_KEYTERMS. Screened again, since a host's reads arrive prepared.
   let terminalAdded = 0;
-  for (const id of extractTerminalIdentifiers(lines)) {
+  for (const id of terminalTerms) {
     if (terminalAdded >= TERMINAL_TIER_CAP) break;
+    if (typeof id !== "string" || !isValidTerm(id)) continue;
     if (add(id)) terminalAdded++;
   }
 

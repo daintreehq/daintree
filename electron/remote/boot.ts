@@ -20,6 +20,7 @@ import { installHostUploadClient } from "./files/uploadClient.js";
 import { installHostMetricsClient } from "./metrics/clientInstall.js";
 import { installCanopyHostsClient } from "./canopy/clientInstall.js";
 import { installDeviceAnswerHostsClient } from "./deviceAnswer/clientInstall.js";
+import { installVoicePaneHostsClient } from "./voice/clientInstall.js";
 import { installHostControl, installHostControlLinkClient } from "./assistant/install.js";
 import { getRemoteService } from "./runtime.js";
 import {
@@ -306,6 +307,8 @@ function startClient(options: StartRemoteHostsOptions): void {
       sessionFor: client.sessionFor,
     })
   );
+  // Dictation into a host's pane reads the pane's context from that host (#14782).
+  teardowns.push(installVoicePaneHostsClient({ sessionFor: client.sessionFor }));
   // This Shell's assistants' reach into its hosts: `host.list` and `host.call` (#13493).
   const observeHosts = () =>
     client.client.list().map(({ descriptor, connection, summary }) => ({

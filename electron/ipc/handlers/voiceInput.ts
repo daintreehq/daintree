@@ -1,10 +1,8 @@
 // eager-import-allow: reads voice-input settings via store.get synchronously in the IPC handler
 import { randomUUID } from "node:crypto";
-import { isAbsolute } from "node:path";
 import { ipcMain, systemPreferences } from "electron";
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
-import { projectStore } from "../../services/ProjectStore.js";
 import type {
   VoiceSessionEvent,
   VoiceTranscriptionService,
@@ -14,7 +12,6 @@ import {
   type VoiceCorrectionSettings,
 } from "../../services/VoiceCorrectionService.js";
 import type { HandlerDependencies, IpcContext } from "../types.js";
-import type { PtyClient } from "../../services/PtyClient.js";
 import type {
   VoiceDictionaryEntry,
   VoiceInputSettings,
@@ -46,11 +43,34 @@ import { VOICE_DICTATION_AI_MODEL } from "../../../shared/config/voiceCorrection
 import { normalizeVoiceLanguage } from "../../../shared/config/voiceLanguages.js";
 import {
   assembleTaggedKeyterms,
+  NO_PANE_KEYTERM_READS,
   screenDictationNames,
 } from "../../services/voiceContextKeyterms.js";
 import { readTerminalOutputForCorrection } from "../../services/voiceTerminalContext.js";
-import { readProjectVoiceDictionary } from "../../services/projectVoiceDictionary.js";
-import { flattenDictationNames, gatherDictationNames } from "../../services/voiceContextNames.js";
+import {
+  flattenDictationNames,
+  gatherDictationNames,
+  NO_DICTATION_NAMES,
+  type DictationNames,
+} from "../../services/voiceContextNames.js";
+import {
+  getProjectInfo,
+  readVocabulary,
+  resolveFileLinkCwd,
+  resolveKeytermTarget,
+  resolveVocabularyProject,
+  type PaneCorrectionContext,
+  type PaneProjectInfo,
+  type PaneStartContext,
+} from "../../services/voice/paneContext.js";
+import {
+  findHostPaneFileCandidates,
+  hostPaneOf,
+  readHostPaneCorrection,
+  readHostPaneProject,
+  readHostPaneStart,
+  type HostPane,
+} from "../../services/voice/hostPaneContext.js";
 import { collectHeardAsRules, createHeardAsRewriter } from "../../../shared/utils/voiceHeardAs.js";
 import {
   carrySpansThroughEdits,
@@ -139,6 +159,9 @@ const CORRECTION_WARM_CHECK_MS = 60_000;
 // Recent sessions whose cleanup context stays at hand for the passages their
 // renderer sends after the stop.
 const CORRECTION_PREP_MEMORY = 4;
+// A rewrite reads its project's name here at once; from a host it waits this
+// long at most, and goes without.
+const HOST_PROJECT_READ_BUDGET_MS = 500;
 
 /**
  * One dictation session, named by the id its renderer minted. Everything a
@@ -706,71 +729,20 @@ export async function validateOpenAIKey(
   }
 }
 
-function getProjectInfo(projectId: string | null): { name?: string; path?: string } {
-  const currentProject = projectId ? projectStore.getProjectById(projectId) : null;
-  if (!currentProject) return {};
-  return { name: currentProject.name, path: currentProject.path };
+function projectInfoOf(project: PaneProjectInfo | null | undefined): {
+  name?: string;
+  path?: string;
+} {
+  return {
+    ...(project?.name ? { name: project.name } : {}),
+    ...(project?.path ? { path: project.path } : {}),
+  };
 }
 
-// Automatic hints come only from the terminal being dictated into: its output,
-// its worktree's branch, its owning project's name, and names read from that
-// project's repository (package, workspace, directory and dependency names).
-// All of them are sent to the transcription provider. A terminal main doesn't
-// track, or one another project owns than the view asking, contributes none.
-function resolveKeytermTarget(
-  viewProjectId: string | null,
-  terminalId: string | undefined,
-  ptyClient: PtyClient | undefined
-): { terminalId?: string; projectName?: string; projectPath?: string } {
-  if (!terminalId || !ptyClient?.hasTerminal(terminalId)) return {};
-  const ownerId = ptyClient.getTerminalProjectId(terminalId);
-  if (ownerId && viewProjectId && ownerId !== viewProjectId) return {};
-  const project = ownerId ? projectStore.getProjectById(ownerId) : undefined;
-  return { terminalId, projectName: project?.name, projectPath: project?.path };
-}
-
-// References resolve in the worktree the dictated terminal is filed under,
-// else its cwd, as keyterms do. Without a terminal main can vouch for, the
-// starting view's project; a view that owns no project resolves nothing, never
-// the app's current one (#14599).
-async function resolveFileLinkCwd(
-  session: VoiceSession,
-  ptyClient: PtyClient | undefined
-): Promise<string | null> {
-  if (session.outsideView) return null;
-  const { terminalId } = resolveKeytermTarget(session.projectId, session.terminalId, ptyClient);
-  if (terminalId && ptyClient) {
-    const terminal = await ptyClient.getTerminalAsync(terminalId).catch(() => null);
-    const path = terminal?.worktreeId ?? terminal?.cwd;
-    if (typeof path === "string" && isAbsolute(path)) return path;
-  }
-  return session.projectInfo.path ?? null;
-}
-
-// The project whose vocabulary a dictation uses: the one that owns the target
-// terminal, or the asking view's own for a panel main doesn't track as a
-// terminal. A terminal another project owns than the view asking gets none,
-// so a project's rules never reach dictation outside its own panels.
-function resolveVocabularyProject(
-  viewProjectId: string | null,
-  terminalId: string | undefined,
-  ptyClient: PtyClient | undefined
-): string | null {
-  if (!terminalId || !ptyClient?.hasTerminal(terminalId)) return viewProjectId;
-  const ownerId = ptyClient.getTerminalProjectId(terminalId);
-  if (ownerId && viewProjectId && ownerId !== viewProjectId) return null;
-  return ownerId ?? viewProjectId;
-}
-
-// An unreadable vocabulary leaves dictation with the global dictionary alone.
-async function readVocabulary(projectId: string | null): Promise<VoiceDictionaryEntry[]> {
-  if (!projectId) return [];
-  try {
-    return await readProjectVoiceDictionary(projectId);
-  } catch {
-    logDebug("[VoiceInput] Project vocabulary read failed, using the global dictionary alone");
-    return [];
-  }
+// The host pane a dictation reads its context from. One typed to a terminal
+// outside the view is no pane of the view's host, so it reads none there.
+function hostPaneFor(viewProjectKey: string | null, outsideView: boolean): HostPane | null {
+  return outsideView ? null : hostPaneOf(viewProjectKey);
 }
 
 // The names the latest dictation sent, so its end-of-passage correction spells
@@ -781,6 +753,7 @@ let lastSessionNames: { webContentsId: number; names: string[] } | null = null;
 // sent after the stop go straight to the model. Kept only for a session that
 // may be cleaned up, and used only by passages that name it. Like the
 // keyterms, it is the vocabulary and commands as they were at the start.
+// A host's pane is read on the host, as the keyterms are.
 interface CorrectionPrep {
   readonly sessionId: string;
   readonly webContentsId: number;
@@ -788,15 +761,26 @@ interface CorrectionPrep {
   readonly terminalId: string | undefined;
   // Read for a terminal outside the view: none of the view's project or names.
   readonly outsideView: boolean;
+  readonly projectInfo: Promise<{ name?: string; path?: string }>;
   readonly vocabulary: Promise<VoiceDictionaryEntry[]>;
   readonly commandTarget: Promise<VoiceCommandTarget | null>;
   readonly names: { names: string[] };
   // What the terminal showed as the stop landed, read while the stop drains.
   // Read only then: it goes to OpenAI with the passages and nothing earlier.
   terminalOutput: Promise<string | null> | null;
+  // A host's pane as the stop landed: the host answers with its terminal's
+  // output and the commands it takes by then in one read.
+  hostStop: Promise<PaneCorrectionContext | null> | null;
 }
 
 let correctionPreps: CorrectionPrep[] = [];
+
+function readHostStop(prep: CorrectionPrep, pane: HostPane): Promise<PaneCorrectionContext | null> {
+  prep.hostStop ??= readHostPaneCorrection(pane, prep.terminalId, {
+    timeoutMs: COMMAND_TARGET_CORRECTION_BUDGET_MS,
+  });
+  return prep.hostStop;
+}
 
 function findCorrectionPrep(
   ctx: IpcContext,
@@ -817,12 +801,11 @@ function findCorrectionPrep(
 // come through here, so the prompt cached ahead is the one the passage sends.
 function correctionSettingsFor(
   settings: VoiceInputSettings,
-  viewProjectId: string | null,
+  projectInfo: { name?: string; path?: string },
   vocabulary: VoiceDictionaryEntry[],
   commandTarget: VoiceCommandTarget | null,
   knownNames: string[]
 ): VoiceCorrectionSettings {
-  const projectInfo = getProjectInfo(viewProjectId);
   return {
     model: settings.correctionModel,
     apiKey: settings.openaiApiKey,
@@ -904,13 +887,44 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       .map(({ description }) => description.trim())
       .filter((description) => spoken.includes(normalizeSpoken(description)));
     if (descriptions.length === 0 || signal.aborted) return;
-    const cwd = await resolveFileLinkCwd(session, deps.ptyClient);
-    if (!cwd || signal.aborted) return;
-    const paths = await Promise.all(
-      descriptions.map((description) =>
-        voiceFileLinkResolver.resolve({ cwd, description, ...credentials, signal })
-      )
-    );
+    let paths: Array<string | null>;
+    const hostPane = hostPaneFor(session.projectId, session.outsideView);
+    if (hostPane) {
+      // The host searches its own files; which one was meant is chosen here,
+      // with this machine's credentials.
+      const candidates = await findHostPaneFileCandidates(
+        hostPane,
+        session.terminalId,
+        descriptions,
+        { timeoutMs: FILE_LINK_JOB_TIMEOUT_MS, signal }
+      );
+      if (!candidates || signal.aborted) return;
+      paths = await Promise.all(
+        descriptions.map((description, i) =>
+          voiceFileLinkResolver.pick({
+            description,
+            candidates: candidates[i] ?? [],
+            ...credentials,
+            signal,
+          })
+        )
+      );
+    } else {
+      const cwd = session.outsideView
+        ? null
+        : await resolveFileLinkCwd(
+            session.projectId,
+            session.terminalId,
+            session.projectInfo.path ?? null,
+            deps.ptyClient
+          );
+      if (!cwd || signal.aborted) return;
+      paths = await Promise.all(
+        descriptions.map((description) =>
+          voiceFileLinkResolver.resolve({ cwd, description, ...credentials, signal })
+        )
+      );
+    }
     // A local match returns without consulting the signal.
     if (signal.aborted) return;
     // Misses go too, so a hit can't claim a missed command's words; their
@@ -946,6 +960,18 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     session.fileLinkJobs.add(job);
   };
 
+  // What a prepared session's terminal shows now. The output follows the
+  // keyterms' ownership rule: none for a terminal another project owns. A
+  // host's pane is read on the host.
+  const readStopOutput = (prep: CorrectionPrep): Promise<string | null> => {
+    const hostPane = hostPaneFor(prep.projectId, prep.outsideView);
+    if (hostPane) {
+      return readHostStop(prep, hostPane).then((read) => read?.terminalOutput ?? null);
+    }
+    const target = resolveKeytermTarget(prep.projectId, prep.terminalId, deps.ptyClient);
+    return readTerminalOutputForCorrection(deps.ptyClient, target.terminalId);
+  };
+
   // Drains the provider a session owns, keeping its subscription up so the
   // remaining text reaches its owner, then ends it.
   const drainSession = (
@@ -963,8 +989,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     };
     const prep = session.correctionPrep;
     if (readyCorrection() && prep && !prep.terminalOutput) {
-      const target = resolveKeytermTarget(session.projectId, session.terminalId, deps.ptyClient);
-      prep.terminalOutput = readTerminalOutputForCorrection(deps.ptyClient, target.terminalId);
+      prep.terminalOutput = readStopOutput(prep);
     }
     session.stopPromise = (async () => {
       // The renderer sends every chunk it captured before this stop, so audio
@@ -1132,34 +1157,47 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
   // Reads the cleanup context alongside the keyterms, and keeps the cleanup
   // prompt cached for as long as the dictation runs, so neither waits for the
   // stop. The command lookup gets the correction's budget; its discovery scan
-  // is the one the keyterms' lookup already started.
+  // is the one the keyterms' lookup already started. A host's pane takes its
+  // commands from the host's start answer, and its project from the host.
   const prepareCorrection = (
     session: VoiceSession,
     terminalId: string | undefined,
     vocabulary: Promise<VoiceDictionaryEntry[]>,
+    hostStart: Promise<PaneStartContext | null> | null,
     names: { names: string[] },
     screenedNames: Promise<string[]>
   ) => {
-    const commandTerminal = resolveKeytermTarget(session.projectId, terminalId, deps.ptyClient);
+    const hostPane = hostPaneFor(session.projectId, session.outsideView);
     const prep: CorrectionPrep = {
       sessionId: session.id,
       webContentsId: session.webContentsId,
       projectId: session.projectId,
       terminalId,
       outsideView: session.outsideView,
+      projectInfo: session.outsideView
+        ? Promise.resolve({})
+        : hostPane
+          ? readHostPaneProject(hostPane, { timeoutMs: COMMAND_TARGET_CORRECTION_BUDGET_MS }).then(
+              projectInfoOf
+            )
+          : Promise.resolve(session.projectInfo),
       vocabulary,
-      commandTarget: resolveVoiceCommandTarget(
-        deps.ptyClient,
-        commandTerminal.terminalId,
-        COMMAND_TARGET_CORRECTION_BUDGET_MS
-      ),
+      commandTarget: hostStart
+        ? hostStart.then((read) => read?.commandTarget ?? null)
+        : resolveVoiceCommandTarget(
+            deps.ptyClient,
+            resolveKeytermTarget(session.projectId, terminalId, deps.ptyClient).terminalId,
+            COMMAND_TARGET_CORRECTION_BUDGET_MS
+          ),
       names,
       terminalOutput: null,
+      hostStop: null,
     };
     session.correctionPrep = prep;
     correctionPreps = [prep, ...correctionPreps].slice(0, CORRECTION_PREP_MEMORY);
     const warm = async () => {
-      const [entries, commandTarget, knownNames] = await Promise.all([
+      const [projectInfo, entries, commandTarget, knownNames] = await Promise.all([
+        prep.projectInfo,
         prep.vocabulary,
         prep.commandTarget,
         screenedNames,
@@ -1172,7 +1210,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       await correctionService.warm(
         correctionSettingsFor(
           settings,
-          prep.outsideView ? null : session.projectId,
+          projectInfo,
           entries,
           commandTarget,
           prep.outsideView ? [] : knownNames
@@ -1213,19 +1251,36 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // the session, so its reconnect path reuses it unchanged. Assembly, the
     // names read included, is capped internally (~500ms) and failures are
     // non-fatal — we just start without keyterms.
-    const keytermTarget = resolveKeytermTarget(session.projectId, terminalId, deps.ptyClient);
-    const vocabulary = readVocabulary(
-      session.outsideView
-        ? null
-        : resolveVocabularyProject(session.projectId, terminalId, deps.ptyClient)
-    );
+    // A host's pane is read on the host, within the same budget as the reads
+    // here, and nothing about it is read on this machine. A host that answers
+    // late, or not at all, leaves the dictation without the pane's context
+    // rather than holding it up.
+    const hostPane = hostPaneFor(session.projectId, session.outsideView);
+    const hostContext = hostPane
+      ? readHostPaneStart(hostPane, terminalId, {
+          timeoutMs: COMMAND_TARGET_START_BUDGET_MS,
+          signal: session.controller.signal,
+        })
+      : null;
+    const keytermTarget: ReturnType<typeof resolveKeytermTarget> = hostContext
+      ? {}
+      : resolveKeytermTarget(session.projectId, terminalId, deps.ptyClient);
+    const vocabulary = hostContext
+      ? hostContext.then((read) => read?.vocabulary ?? [])
+      : readVocabulary(
+          session.outsideView
+            ? null
+            : resolveVocabularyProject(session.projectId, terminalId, deps.ptyClient)
+        );
     const projectDictionary = vocabulary.then(dictionaryTerms);
-    const names = gatherDictationNames({
-      projectId: session.projectId,
-      terminalId,
-      ptyClient: deps.ptyClient,
-      worktreeService: deps.worktreeService,
-    });
+    const names: Promise<DictationNames> = hostContext
+      ? hostContext.then((read) => read?.names ?? NO_DICTATION_NAMES)
+      : gatherDictationNames({
+          projectId: session.projectId,
+          terminalId,
+          ptyClient: deps.ptyClient,
+          worktreeService: deps.worktreeService,
+        });
     // The correction gets the same screened names as the keyterms, whenever
     // they arrive. Its own record, so a slow read from an older session can't
     // overwrite this one's.
@@ -1238,29 +1293,48 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       sessionNames.names = screened;
     });
     if (session.intent === "dictation" && mayCorrect(settings)) {
-      prepareCorrection(session, terminalId, vocabulary, sessionNames, screenedNames);
+      prepareCorrection(session, terminalId, vocabulary, hostContext, sessionNames, screenedNames);
     }
     // Bounded by the same budget as the other reads, and resolved alongside them.
     // The keyterms wait on it, so it is in place before either provider can
     // transcribe a word, without holding up the provider start.
-    const commandTargetPromise = resolveVoiceCommandTarget(
-      deps.ptyClient,
-      keytermTarget.terminalId,
-      COMMAND_TARGET_START_BUDGET_MS
+    const commandTargetPromise = (
+      hostContext
+        ? hostContext.then((read) => read?.commandTarget ?? null)
+        : resolveVoiceCommandTarget(
+            deps.ptyClient,
+            keytermTarget.terminalId,
+            COMMAND_TARGET_START_BUDGET_MS
+          )
     ).then((target) => {
       session.commandTarget = target;
       return target;
     });
-    const keytermsPromise = assembleTaggedKeyterms({
-      customDictionary: dictionaryTerms(settings.dictionary),
-      projectDictionary,
-      ...keytermTarget,
-      ptyClient: deps.ptyClient,
-      names,
-      commandTerms: commandTargetPromise.then((target) =>
-        target ? voiceCommandKeyterms(target.vocabulary, COMMAND_KEYTERM_LIMIT) : []
-      ),
-    }).catch((err: unknown): VoiceSentTerm[] => {
+    const customDictionary = dictionaryTerms(settings.dictionary);
+    const commandTerms = commandTargetPromise.then((target) =>
+      target ? voiceCommandKeyterms(target.vocabulary, COMMAND_KEYTERM_LIMIT) : []
+    );
+    const keytermsPromise = (
+      hostContext
+        ? hostContext.then((read) =>
+            assembleTaggedKeyterms({
+              customDictionary,
+              projectDictionary,
+              projectName: read?.projectName ?? undefined,
+              names,
+              commandTerms,
+              paneReads: read?.keyterms ?? NO_PANE_KEYTERM_READS,
+            })
+          )
+        : assembleTaggedKeyterms({
+            customDictionary,
+            projectDictionary,
+            ...keytermTarget,
+            ptyClient: deps.ptyClient,
+            names,
+            commandTerms,
+          })
+    ).catch((err: unknown): VoiceSentTerm[] => {
       logDebug("[VoiceInput] Keyterm assembly failed, starting without keyterms", {
         ...voiceErrorLogFields(err),
       });
@@ -1808,11 +1882,18 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
 
   // The commands found at the start, unless the terminal has moved on to
   // another agent or to none: one that exited mid-dictation leaves a shell,
-  // which takes no commands. Telling needs no discovery scan.
+  // which takes no commands. Telling needs no discovery scan. A host's pane
+  // takes the commands the host found as the stop landed, or, when it didn't
+  // answer, those found at the start.
   const currentCommandTarget = async (
     prep: CorrectionPrep,
     terminalId: string | undefined
   ): Promise<VoiceCommandTarget | null> => {
+    const hostPane = hostPaneFor(prep.projectId, prep.outsideView);
+    if (hostPane) {
+      const [target, read] = await Promise.all([prep.commandTarget, readHostStop(prep, hostPane)]);
+      return read ? read.commandTarget : target;
+    }
     const [target, agentId] = await Promise.all([
       prep.commandTarget,
       readVoiceCommandAgent(deps.ptyClient, terminalId, COMMAND_TARGET_START_BUDGET_MS),
@@ -1823,6 +1904,51 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       terminalId,
       COMMAND_TARGET_CORRECTION_BUDGET_MS
     );
+  };
+
+  // A passage's cleanup context read when it arrives, all at once so none
+  // adds a wait to another's.
+  const readCorrectionContext = async (
+    viewProjectId: string | null,
+    requestedTerminalId: string | undefined,
+    outsideView: boolean
+  ): Promise<{
+    projectInfo: { name?: string; path?: string };
+    vocabulary: VoiceDictionaryEntry[];
+    commandTarget: VoiceCommandTarget | null;
+    terminalOutput: string | null;
+  }> => {
+    const hostPane = hostPaneFor(viewProjectId, outsideView);
+    if (hostPane) {
+      // Read on the host within the same budget, as at the start.
+      const read = await readHostPaneCorrection(hostPane, requestedTerminalId, {
+        timeoutMs: COMMAND_TARGET_CORRECTION_BUDGET_MS,
+      });
+      return {
+        projectInfo: projectInfoOf(read?.project),
+        vocabulary: read?.vocabulary ?? [],
+        commandTarget: read?.commandTarget ?? null,
+        terminalOutput: read?.terminalOutput ?? null,
+      };
+    }
+    // The terminal's output follows the keyterms' ownership rule: terminalId
+    // is empty for a terminal another project owns.
+    const { terminalId } = resolveKeytermTarget(viewProjectId, requestedTerminalId, deps.ptyClient);
+    const [vocabulary, commandTarget, terminalOutput] = await Promise.all([
+      readVocabulary(
+        outsideView
+          ? null
+          : resolveVocabularyProject(viewProjectId, requestedTerminalId, deps.ptyClient)
+      ),
+      resolveVoiceCommandTarget(deps.ptyClient, terminalId, COMMAND_TARGET_CORRECTION_BUDGET_MS),
+      readTerminalOutputForCorrection(deps.ptyClient, terminalId),
+    ]);
+    return {
+      projectInfo: outsideView ? {} : getProjectInfo(viewProjectId),
+      vocabulary,
+      commandTarget,
+      terminalOutput,
+    };
   };
 
   // Whole-passage cleanup pass. The renderer calls this once after recording
@@ -1848,34 +1974,33 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     }
 
     const outsideView = request.outsideView === true;
-    // The terminal's output follows the keyterms' ownership rule: terminalId
-    // is empty for a terminal another project owns.
-    const { terminalId } = resolveKeytermTarget(ctx.projectId, request.terminalId, deps.ptyClient);
     // Read while the dictation ran, for a passage that names its session. One
-    // that doesn't, or a session cleanup was off for at its start, reads now,
-    // all at once, so none adds a wait to another's.
+    // that doesn't, or a session cleanup was off for at its start, reads now.
     const prep = findCorrectionPrep(ctx, request);
+    let projectInfo: { name?: string; path?: string };
     let vocabulary: VoiceDictionaryEntry[];
     let commandTarget: VoiceCommandTarget | null;
     let terminalOutput: string | null;
     let knownNames: string[];
     if (prep) {
-      [vocabulary, commandTarget, terminalOutput] = await Promise.all([
+      const { terminalId } = resolveKeytermTarget(
+        ctx.projectId,
+        request.terminalId,
+        deps.ptyClient
+      );
+      [projectInfo, vocabulary, commandTarget, terminalOutput] = await Promise.all([
+        prep.projectInfo,
         prep.vocabulary,
         currentCommandTarget(prep, terminalId),
-        prep.terminalOutput ?? readTerminalOutputForCorrection(deps.ptyClient, terminalId),
+        prep.terminalOutput ?? readStopOutput(prep),
       ]);
       knownNames = outsideView ? [] : prep.names.names;
     } else {
-      [vocabulary, commandTarget, terminalOutput] = await Promise.all([
-        readVocabulary(
-          outsideView
-            ? null
-            : resolveVocabularyProject(ctx.projectId, request.terminalId, deps.ptyClient)
-        ),
-        resolveVoiceCommandTarget(deps.ptyClient, terminalId, COMMAND_TARGET_CORRECTION_BUDGET_MS),
-        readTerminalOutputForCorrection(deps.ptyClient, terminalId),
-      ]);
+      ({ projectInfo, vocabulary, commandTarget, terminalOutput } = await readCorrectionContext(
+        ctx.projectId,
+        request.terminalId,
+        outsideView
+      ));
       knownNames =
         !outsideView && lastSessionNames?.webContentsId === ctx.webContentsId
           ? lastSessionNames.names
@@ -1890,13 +2015,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         startsPrompt: request.startsPrompt === true,
         ...(request.uncertain ? { uncertain: request.uncertain } : {}),
       },
-      correctionSettingsFor(
-        settings,
-        outsideView ? null : ctx.projectId,
-        vocabulary,
-        commandTarget,
-        knownNames
-      )
+      correctionSettingsFor(settings, projectInfo, vocabulary, commandTarget, knownNames)
     );
     // Main's share of the wait, for the session summary: up to the request
     // going out, and the round trip, when there was one.
@@ -1924,7 +2043,12 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     if (!correctionService) {
       correctionService = new VoiceCorrectionService();
     }
-    const projectInfo = getProjectInfo(ctx.projectId);
+    const hostPane = hostPaneOf(ctx.projectId);
+    const projectInfo = hostPane
+      ? projectInfoOf(
+          await readHostPaneProject(hostPane, { timeoutMs: HOST_PROJECT_READ_BUDGET_MS })
+        )
+      : getProjectInfo(ctx.projectId);
     return correctionService.rewrite(request, {
       model: settings.correctionModel,
       apiKey: settings.openaiApiKey,
