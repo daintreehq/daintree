@@ -181,7 +181,7 @@ export function VoiceSubmitProgress({ wait, outcome }: VoiceSubmitProgressProps)
         <div
           aria-hidden="true"
           data-voice-submit-track=""
-          className="pointer-events-none absolute inset-0 overflow-hidden rounded-[inherit]"
+          className="pointer-events-none absolute inset-0 overflow-hidden rounded-md"
         >
           <div
             ref={fillRef}

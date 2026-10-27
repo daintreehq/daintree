@@ -49,10 +49,10 @@ function addSample(sums: PaceSums, chars: number, ms: number, weight: number): v
 
 function isPaceSums(value: unknown): value is PaceSums {
   if (typeof value !== "object" || value === null) return false;
-  const record = value as Record<string, unknown>;
-  return (["w", "x", "y", "xx", "xy"] as const).every(
-    (key) => typeof record[key] === "number" && Number.isFinite(record[key])
-  );
+  return (["w", "x", "y", "xx", "xy"] as const).every((key) => {
+    const field: unknown = Reflect.get(value, key);
+    return typeof field === "number" && Number.isFinite(field);
+  });
 }
 
 // Every project view reads and writes the one stored fit, so a sample one

@@ -352,7 +352,7 @@ export function useVoiceWaitSubmit({
       startVoiceWaitSubmit();
       return;
     }
-    sendFromEditorRef.current();
+    void sendFromEditorRef.current();
   }, [voiceId, startVoiceWaitSubmit]);
 
   return {
