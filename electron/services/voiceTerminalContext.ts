@@ -1,6 +1,7 @@
 import type { PtyClient } from "./PtyClient.js";
 import { logDebug } from "../utils/logger.js";
-import { readAgentReplyForCorrection, type VoiceAgentReply } from "./voiceAgentReply.js";
+import { readAgentReplyForCorrection } from "./voiceAgentReply.js";
+import type { VoiceAgentReply } from "./voiceAgentReplyTypes.js";
 import { readTerminalLines } from "./voiceContextKeyterms.js";
 
 const P = "[VoiceTerminalContext]";

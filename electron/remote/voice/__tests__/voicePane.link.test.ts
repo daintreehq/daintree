@@ -13,7 +13,7 @@ import { MAX_PANE_TERMS, MAX_PANE_VOCABULARY, VoicePaneLinkMethod } from "../lin
 import {
   MAX_CORRECTION_REPLY_CHARS,
   type VoiceAgentReply,
-} from "../../../services/voiceAgentReply.js";
+} from "../../../services/voiceAgentReplyTypes.js";
 
 const HOST = "studio-03";
 const SCOPE: PaneScope = { projectId: "proj-1", terminalId: "term-1" };

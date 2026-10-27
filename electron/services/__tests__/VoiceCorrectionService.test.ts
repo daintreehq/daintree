@@ -19,7 +19,7 @@ import {
   LITERAL_CORRECTION_PROMPT,
 } from "../../../shared/config/voiceCorrection.js";
 import type { VoiceCommandTarget } from "../voiceCommandTarget.js";
-import type { VoiceAgentReply } from "../voiceAgentReply.js";
+import type { VoiceAgentReply } from "../voiceAgentReplyTypes.js";
 import { getAgentConfig } from "../../../shared/config/agentRegistry.js";
 import { getBuiltinSlashCommands } from "../../../shared/types/slashCommands.js";
 import { buildVoiceCommandVocabulary } from "../../../shared/utils/voiceAgentCommands.js";

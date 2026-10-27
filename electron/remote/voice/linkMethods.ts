@@ -12,7 +12,7 @@ import { MAX_CORRECTION_TERMINAL_CHARS } from "../../services/voiceTerminalConte
 import {
   MAX_CORRECTION_REPLY_CHARS,
   type VoiceAgentReply,
-} from "../../services/voiceAgentReply.js";
+} from "../../services/voiceAgentReplyTypes.js";
 import type { AgentState, WaitingReason } from "../../../shared/types/agent.js";
 import { FILE_LINK_CANDIDATE_LIMIT } from "../../services/VoiceFileLinkResolver.js";
 

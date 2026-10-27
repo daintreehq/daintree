@@ -17,7 +17,7 @@ import {
   EMPTY_VOICE_COMMAND_VOCABULARY,
   type VoiceCommandVocabulary,
 } from "../../shared/utils/voiceAgentCommands";
-import type { VoiceAgentReply } from "../../electron/services/voiceAgentReply";
+import type { VoiceAgentReply } from "../../electron/services/voiceAgentReplyTypes";
 import type { VoiceCommandTarget } from "../../electron/services/voiceCommandTarget";
 import type {
   VoiceCorrectionRequest,

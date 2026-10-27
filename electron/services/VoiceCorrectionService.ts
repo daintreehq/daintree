@@ -34,7 +34,7 @@ import {
   EMPTY_VOICE_COMMAND_VOCABULARY,
   type VoiceCommandEntry,
 } from "../../shared/utils/voiceAgentCommands.js";
-import type { VoiceAgentReply } from "./voiceAgentReply.js";
+import type { VoiceAgentReply } from "./voiceAgentReplyTypes.js";
 import type { VoiceCommandTarget } from "./voiceCommandTarget.js";
 import { holdsCredential, isSecretShaped } from "./voiceKeytermSecrets.js";
 

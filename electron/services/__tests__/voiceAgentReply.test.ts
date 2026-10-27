@@ -1,14 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PtyClient } from "../PtyClient.js";
 import type { AgentLastMessageResult } from "../../../shared/types/agentLastMessage.js";
+import { MAX_CORRECTION_REPLY_CHARS } from "../voiceAgentReplyTypes.js";
 
 const readLastMessage = vi.hoisted(() => vi.fn());
 vi.mock("../mcp-server/terminalLastMessage.js", () => ({
   handleTerminalReadLastMessageOwned: readLastMessage,
 }));
 
-const { MAX_CORRECTION_REPLY_CHARS, boundAgentReply, readAgentReplyForCorrection } =
-  await import("../voiceAgentReply.js");
+const { boundAgentReply, readAgentReplyForCorrection } = await import("../voiceAgentReply.js");
 
 const NOW = 1_800_000_000_000;
 

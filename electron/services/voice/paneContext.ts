@@ -19,7 +19,7 @@ import {
   NO_DICTATION_NAMES,
   type DictationNames,
 } from "../voiceContextNames.js";
-import type { VoiceAgentReply } from "../voiceAgentReply.js";
+import type { VoiceAgentReply } from "../voiceAgentReplyTypes.js";
 import {
   readTerminalContextForCorrection,
   TERMINAL_READ_BUDGET_MS,
