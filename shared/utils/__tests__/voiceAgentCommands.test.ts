@@ -218,7 +218,7 @@ describe("checkVoiceCommandEdit", () => {
         true
       )
     ).toBeNull();
-    expect(checkVoiceCommandEdit("compact the conversation", "/compact", claude, true)).toBeNull();
+    expect(checkVoiceCommandEdit("run the compact command", "/compact", claude, true)).toBeNull();
     expect(
       checkVoiceCommandEdit(
         "use the plugin creator for a linter",
@@ -237,7 +237,7 @@ describe("checkVoiceCommandEdit", () => {
   });
 
   it("rejects a command introduced anywhere but the start of the prompt", () => {
-    expect(checkVoiceCommandEdit("compact the conversation", "/compact", claude, false)).toBe(
+    expect(checkVoiceCommandEdit("run the compact command", "/compact", claude, false)).toBe(
       "unprompted_command"
     );
   });
@@ -270,7 +270,7 @@ describe("checkVoiceCommandEdit", () => {
     expect(checkVoiceCommandEdit("run the deploy skill", "/deploy!", claude, true)).toBe(
       "unknown_command"
     );
-    expect(checkVoiceCommandEdit("compact the conversation", "/compact!", claude, true)).toBe(
+    expect(checkVoiceCommandEdit("run the compact command", "/compact!", claude, true)).toBe(
       "unknown_command"
     );
   });
@@ -348,20 +348,75 @@ describe("checkVoiceCommandEdit", () => {
   });
 
   // Ordinary sentences that mention command words, at the start of a prompt:
-  // a cleanup that turned any of them into a command is thrown out. A sentence
-  // that opens with a bare command name ("compact cars use less space") reads
-  // like an invocation, so telling those apart is the model's job.
+  // a cleanup that turned any of them into a command is thrown out, including
+  // a sentence that opens with a bare command name ("compact cars use less
+  // space"), which only a spoken trigger or a verb like "run" turns into one.
   it.each([
     ["the review skill is broken", "/review is broken"],
     ["we should review the last commit later", "/review the last commit later"],
     ["explain the compact command", "/compact"],
     ["don't compact the conversation", "/compact the conversation"],
+    ["compact cars use less space", "/compact cars use less space"],
+    ["compact the conversation", "/compact"],
     ["the compact layout looks off", "/compact layout looks off"],
     ["i like that plugin creator idea", "$plugin-creator idea"],
     ["can you review how the github plugin works", "$github plugin works"],
   ])("leaves %j as prose", (raw, corrected) => {
     const vocabulary = corrected.startsWith("$") ? codex : claude;
     expect(checkVoiceCommandEdit(raw, corrected, vocabulary, true)).not.toBeNull();
+  });
+});
+
+describe("a bare imperative that shares a command's name", () => {
+  const catalogAgents = ["claude", "codex", "gemini"] as const;
+  const vocabularyOf = (agentId: (typeof catalogAgents)[number]) =>
+    buildVoiceCommandVocabulary(
+      getBuiltinSlashCommands(agentId),
+      getAgentConfig(agentId)!.completionSources!
+    );
+
+  it.each([
+    ["Delete the unused imports in the auth module", "/delete the unused imports in the auth module"],
+    ["Archive the old release branches", "/archive the old release branches"],
+    ["Clear the build cache and rebuild", "/clear the build cache and rebuild"],
+    ["Rewind the migration before you change it", "/rewind the migration before you change it"],
+  ])("stays prose in Claude and Codex: %j", (raw, corrected) => {
+    for (const vocabulary of [claude, codex]) {
+      expect(checkVoiceCommandEdit(raw, corrected, vocabulary, true)).not.toBeNull();
+    }
+  });
+
+  it("never becomes any built-in command of an agent that has a catalog", () => {
+    const collisions: string[] = [];
+    for (const agentId of catalogAgents) {
+      for (const entry of vocabularyOf(agentId).entries) {
+        const raw = `${entry.spokenName} the build cache and rebuild`;
+        const corrected = `${entry.token} the build cache and rebuild`;
+        const verdict = checkVoiceCommandEdit(raw, corrected, vocabularyOf(agentId), true);
+        if (verdict !== "unprompted_command") collisions.push(`${agentId} ${entry.token}: ${verdict}`);
+      }
+    }
+    expect(collisions).toEqual([]);
+  });
+
+  it("is still a command when the dictation spoke its trigger or a lead-in", () => {
+    expect(
+      checkVoiceCommandEdit(
+        "Slash clear the build cache",
+        "/clear the build cache",
+        claude,
+        true
+      )
+    ).toBeNull();
+    expect(checkVoiceCommandEdit("Run clear", "/clear", claude, true)).toBeNull();
+    expect(
+      checkVoiceCommandEdit(
+        "Please run archive on the old release branches",
+        "/archive on the old release branches",
+        codex,
+        true
+      )
+    ).toBeNull();
   });
 });
 
