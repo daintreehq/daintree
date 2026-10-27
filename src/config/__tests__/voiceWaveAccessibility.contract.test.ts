@@ -31,11 +31,17 @@ function blocksAfter(content: string, marker: string): string {
   return blocks.join("\n");
 }
 
+// Comments name the same markers and selectors as the rules, so a rule that
+// was commented out or swapped for another block would still match.
+function hostCss(): string {
+  return readIndexCss().replace(/\/\*[\s\S]*?\*\//g, "");
+}
+
 const BAR_RULE = /\[data-voice-wave\]\s*>\s*span\s*\{([^}]*)\}/;
 
 describe("toolbar dictation waveform accessibility contract (#14911)", () => {
   it("forced colours paints the bars ButtonText at full strength, inside the button they sit in", () => {
-    const rule = blocksAfter(readIndexCss(), "@media (forced-colors: active)").match(BAR_RULE);
+    const rule = blocksAfter(hostCss(), "@media (forced-colors: active)").match(BAR_RULE);
     expect(rule).not.toBeNull();
     expect(rule?.[1]).toMatch(/background-color:\s*ButtonText\s*!important/);
     // !important beats the level loop's inline opacity and the waiting fade.
@@ -46,13 +52,13 @@ describe("toolbar dictation waveform accessibility contract (#14911)", () => {
   it("reduced motion stops the waiting fade under both the OS and the app preference", () => {
     // The variant emits both the media query and the body attribute selector,
     // and the unlayered rule there outranks a layered motion-reduce utility.
-    const block = blocksAfter(readIndexCss(), "@variant reduce-motion");
+    const block = blocksAfter(hostCss(), "@variant reduce-motion");
     const stopped = [...block.matchAll(/([^{}]*)\{\s*animation:\s*none;/g)].map((m) => m[1]);
     expect(stopped.some((list) => list?.includes(".animate-voice-wave-wait"))).toBe(true);
   });
 
   it("increased contrast raises the floor the waiting fade dims to", () => {
-    const css = readIndexCss();
+    const css = hostCss();
     const keyframes = blocksAfter(css, "@keyframes voice-wave-wait");
     expect(keyframes).toMatch(/opacity:\s*var\(--voice-wave-wait-floor,\s*[\d.]+\)/);
     const rule = blocksAfter(css, "@media (prefers-contrast: more)").match(BAR_RULE);
