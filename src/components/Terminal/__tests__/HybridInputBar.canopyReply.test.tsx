@@ -201,8 +201,7 @@ describe("HybridInputBar — Canopy's reply beside the pane's own composer", () 
 
     expect(onPaneSend).toHaveBeenCalled();
     expect(stop).not.toHaveBeenCalled();
-    expect(discard).toHaveBeenCalledWith("term-1");
-    expect(discard).not.toHaveBeenCalledWith(REPLY.panelId);
+    expect(discard.mock.calls.map(([panelId]) => panelId)).toEqual(["term-1"]);
     expect(surface("reply").listening).toBe(true);
   });
 
@@ -217,8 +216,7 @@ describe("HybridInputBar — Canopy's reply beside the pane's own composer", () 
 
     expect(onReplySend).toHaveBeenCalled();
     expect(stop).not.toHaveBeenCalled();
-    expect(discard).toHaveBeenCalledWith(REPLY.panelId);
-    expect(discard).not.toHaveBeenCalledWith("term-1");
+    expect(discard.mock.calls.map(([panelId]) => panelId)).toEqual([REPLY.panelId]);
   });
 
   it("leaves the pane's dictation running when Escape is pressed in the reply", async () => {
