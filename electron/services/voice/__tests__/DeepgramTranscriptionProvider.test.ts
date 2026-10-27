@@ -197,7 +197,13 @@ async function bringSessionReady(
 
 function resultsMessage(
   transcript: string,
-  flags: { is_final: boolean; speech_final?: boolean; start?: number; duration?: number }
+  flags: {
+    is_final: boolean;
+    speech_final?: boolean;
+    start?: number;
+    duration?: number;
+    words?: unknown;
+  }
 ) {
   return {
     type: "Results",
@@ -205,7 +211,17 @@ function resultsMessage(
     speech_final: flags.speech_final ?? false,
     ...(flags.start !== undefined ? { start: flags.start } : {}),
     ...(flags.duration !== undefined ? { duration: flags.duration } : {}),
-    channel: { alternatives: [{ transcript }] },
+    channel: {
+      alternatives: [{ transcript, ...(flags.words !== undefined ? { words: flags.words } : {}) }],
+    },
+  };
+}
+
+function word(punctuated: string, confidence: number) {
+  return {
+    word: punctuated.toLowerCase().replace(/[^\p{L}\p{N}]/gu, ""),
+    punctuated_word: punctuated,
+    confidence,
   };
 }
 
@@ -670,6 +686,51 @@ describe("DeepgramTranscriptionProvider", () => {
 
     socket.simulateMessage(resultsMessage("Hello world.", { is_final: true }));
     expect(completes).toEqual(["Hello world."]);
+    provider.stop();
+  });
+
+  it("flags the final's low-confidence words by position, punctuation left outside", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    provider.onEvent((e) => {
+      if (e.type === "delta" || e.type === "complete") events.push(e);
+    });
+
+    const { socket } = await bringSessionReady(provider);
+    const words = [word("Test", 0.97), word("foo", 0.93), word("test", 0.31), word("bar.", 0.2)];
+    socket.simulateMessage(resultsMessage("Test foo test", { is_final: false, words }));
+    socket.simulateMessage(resultsMessage(" Test foo test bar. ", { is_final: true, words }));
+
+    expect(events.map((e) => e.type)).toEqual(["delta", "complete"]);
+    expect(events[0]).not.toHaveProperty("uncertain");
+    const complete = events[1] as Extract<VoiceTranscriptionEvent, { type: "complete" }>;
+    expect(complete.text).toBe("Test foo test bar.");
+    expect(complete.uncertain?.map(({ from, to }) => complete.text.slice(from, to))).toEqual([
+      "test",
+      "bar",
+    ]);
+    expect(complete.uncertain?.[0]).toEqual({ from: 9, to: 13 });
+    provider.stop();
+  });
+
+  it.each([
+    ["every word was heard confidently", [word("Ship", 0.99), word("it.", 0.98)]],
+    ["the result has no words", undefined],
+    ["the words aren't a list", { word: "ship" }],
+    ["a word has no confidence", [{ punctuated_word: "Ship" }, { punctuated_word: "it." }]],
+    ["the words don't spell out the transcript", [word("Shipping", 0.1), word("today", 0.1)]],
+  ])("sends a final with no unsure words when %s", async (_name, words) => {
+    const provider = new DeepgramTranscriptionProvider();
+    const completes: VoiceTranscriptionEvent[] = [];
+    provider.onEvent((e) => {
+      if (e.type === "complete") completes.push(e);
+    });
+
+    const { socket } = await bringSessionReady(provider);
+    socket.simulateMessage(resultsMessage("Ship it.", { is_final: true, words }));
+
+    expect(completes).toHaveLength(1);
+    expect(completes[0]).not.toHaveProperty("uncertain");
     provider.stop();
   });
 

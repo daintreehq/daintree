@@ -35,6 +35,14 @@ export interface DictationUtterance {
   transcriptId?: string;
   /** The words as transcribed, when heard-as rules wrote something else in their place. */
   heard?: string;
+  /**
+   * The words the recogniser was unsure of, relative to `range.from`. They
+   * hold only while `range` is unedited, which is the only time correction
+   * reads them, and only through writes that say what they changed.
+   */
+  uncertain?: DictationTextSpan[];
+  /** The same words in `heard`, relative to its start. */
+  heardUncertain?: DictationTextSpan[];
 }
 
 /**
@@ -104,6 +112,10 @@ interface DictationRangeState {
       separatorAfter?: DictationTextSpan;
       transcriptId?: string;
       heard?: string;
+      /** Relative to `words.from`. */
+      uncertain?: DictationTextSpan[];
+      /** Relative to the start of `heard`. */
+      heardUncertain?: DictationTextSpan[];
     }
   ) => void;
   /** Records a paragraph break the session just wrote into the draft. */
@@ -136,15 +148,17 @@ interface DictationRangeState {
   /**
    * Writes `text` over a passage of the session's own words, as the session:
    * the passage's utterances become one holding it, still unedited, so
-   * correction treats it as dictated. Returns the span the passage covered
-   * before the write, or null, writing nothing, once the passage no longer
-   * holds `passage.text` or one of its words was edited.
+   * correction treats it as dictated. `uncertain` gives the unsure words in
+   * `text` and in `heard`, which only the rewriter can place. Returns the span
+   * the passage covered before the write, or null, writing nothing, once the
+   * passage no longer holds `passage.text` or one of its words was edited.
    */
   rewritePassage: (
     id: string,
     passage: { utteranceIds: readonly string[]; text: string },
     text: string,
-    heard: string
+    heard: string,
+    uncertain?: { text: DictationTextSpan[]; heard: DictationTextSpan[] }
   ) => DictationTextSpan | null;
   getDictation: (id: string) => DictationRecord | null;
   listDictations: (panelId: string, projectId?: string) => DictationRecord[];
@@ -171,6 +185,24 @@ function sameRange(a: TrackedTextRange, b: TrackedTextRange): boolean {
 
 function sameSpan(a: DictationTextSpan | undefined, b: DictationTextSpan | undefined): boolean {
   return a === b || (!!a && !!b && a.from === b.from && a.to === b.to);
+}
+
+/**
+ * The record without its unsure words, for a change its writer didn't
+ * describe. The change is then inferred by diffing the drafts, which can't say
+ * which copy of repeated text changed, nor see the separate edits one update
+ * can hold, so a flag kept through it could end up on another copy of its word.
+ */
+function forgetUncertain(record: DictationRecord): DictationRecord {
+  if (!record.utterances.some((u) => u.uncertain || u.heardUncertain)) return record;
+  return {
+    ...record,
+    utterances: record.utterances.map((utterance) => {
+      if (!utterance.uncertain && !utterance.heardUncertain) return utterance;
+      const { uncertain: _uncertain, heardUncertain: _heardUncertain, ...rest } = utterance;
+      return rest;
+    }),
+  };
 }
 
 function mapRecord(record: DictationRecord, change: TextChange): DictationRecord {
@@ -317,10 +349,17 @@ function withInsertion(
 // write got there first) is simply diffed, as every other write is.
 const expectedChanges = new Map<string, { before: string; after: string; change: TextChange }>();
 
-function changeFor(key: string, before: string, after: string): TextChange {
+/** The change, and whether its writer said where it was rather than it being inferred. */
+function changeFor(
+  key: string,
+  before: string,
+  after: string
+): { change: TextChange; known: boolean } {
   const expected = expectedChanges.get(key);
-  if (expected?.before === before && expected.after === after) return expected.change;
-  return minimalDocChange(before, after)!;
+  if (expected?.before === before && expected.after === after) {
+    return { change: expected.change, known: true };
+  }
+  return { change: minimalDocChange(before, after)!, known: false };
 }
 
 function mapAnchors(
@@ -338,7 +377,7 @@ function mapAnchors(
       delete nextAnchors[key];
       continue;
     }
-    const change = changeFor(key, before, after);
+    const { change } = changeFor(key, before, after);
     nextAnchors[key] = list.map((anchor) => ({
       ...anchor,
       range: mapTextRange(anchor.range, change),
@@ -351,7 +390,10 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
   drafts: {},
   anchors: {},
 
-  recordUtterance: (target, { insertion, words, separatorAfter, transcriptId, heard }) =>
+  recordUtterance: (
+    target,
+    { insertion, words, separatorAfter, transcriptId, heard, uncertain, heardUncertain }
+  ) =>
     set((state) => ({
       drafts: withInsertion(state.drafts, target, insertion, {
         id: crypto.randomUUID(),
@@ -360,6 +402,10 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
         ...(separatorAfter ? { separatorAfter: unedited(separatorAfter) } : {}),
         ...(transcriptId ? { transcriptId } : {}),
         ...(heard !== undefined ? { heard } : {}),
+        ...(uncertain && uncertain.length > 0 ? { uncertain } : {}),
+        ...(heard !== undefined && heardUncertain && heardUncertain.length > 0
+          ? { heardUncertain }
+          : {}),
       }),
     })),
 
@@ -430,8 +476,10 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
         delete nextDrafts[key];
         continue;
       }
-      const change = changeFor(key, before, after);
-      nextDrafts[key] = records.map((record) => mapRecord(record, change));
+      const { change, known } = changeFor(key, before, after);
+      nextDrafts[key] = records.map((record) =>
+        mapRecord(known ? record : forgetUncertain(record), change)
+      );
     }
     expectedChanges.clear();
     if (nextDrafts) set({ drafts: nextDrafts });
@@ -441,7 +489,7 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
     expectedChanges.set(makeDraftKey(panelId, projectId), { before, after, change });
   },
 
-  rewritePassage: (id, passage, text, heard) => {
+  rewritePassage: (id, passage, text, heard, uncertain) => {
     const record = get().getDictation(id);
     if (!record || !text) return null;
     const first = record.utterances.findIndex((u) => u.id === passage.utteranceIds[0]);
@@ -486,6 +534,10 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
       ...(separatorAfter ? { separatorAfter } : {}),
       ...(transcriptId ? { transcriptId } : {}),
       ...(heard !== text ? { heard } : {}),
+      ...(uncertain && uncertain.text.length > 0 ? { uncertain: uncertain.text } : {}),
+      ...(heard !== text && uncertain && uncertain.heard.length > 0
+        ? { heardUncertain: uncertain.heard }
+        : {}),
     };
     const delta = end - to;
     const rewritten: DictationRecord = {

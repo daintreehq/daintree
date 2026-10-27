@@ -53,12 +53,21 @@ import { readProjectVoiceDictionary } from "../../services/projectVoiceDictionar
 import { flattenDictationNames, gatherDictationNames } from "../../services/voiceContextNames.js";
 import { collectHeardAsRules, createHeardAsRewriter } from "../../../shared/utils/voiceHeardAs.js";
 import {
+  carrySpansThroughEdits,
+  shiftSpans,
+  sliceSpans,
+  spansInKeptStart,
+  splitSpansByLine,
+  type VoiceTextEdit,
+  type VoiceTextSpan,
+} from "../../../shared/utils/voiceUncertainWords.js";
+import {
   readVoiceCommandAgent,
   resolveVoiceCommandTarget,
   type VoiceCommandTarget,
 } from "../../services/voiceCommandTarget.js";
 import {
-  rewriteSpokenCommand,
+  planSpokenCommand,
   voiceCommandKeyterms,
 } from "../../../shared/utils/voiceAgentCommands.js";
 import {
@@ -1255,10 +1264,14 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // before it ends an utterance; only Deepgram's short endpoint needs more.
     const sendSettleMs = settings.transcriptionProvider === "deepgram" ? SPOKEN_SEND_SETTLE_MS : 0;
 
+    // `uncertain` spans the words in `rawText` the provider was unsure of.
+    // They follow the text through every rewrite below by position, and one a
+    // rewrite reached is dropped.
     const emitCompletion = (
       itemId: string | undefined,
       rawText: string,
-      sendCommand: SendCommandResult
+      sendCommand: SendCommandResult,
+      uncertain: readonly VoiceTextSpan[]
     ) => {
       const target = session.sender;
       if (target.isDestroyed()) return;
@@ -1266,6 +1279,13 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       const liveSettings = getVoiceSettings();
       // applyDictationCommands rewrites trailing break commands to \n\n / \n.
       const processedText = spokenCommands ? applyDictationCommands(sendCommand.text) : rawText;
+      // A stripped send and the break commands only ever rewrite the end, and
+      // the send leaves a prefix of the raw text.
+      const processedUncertain = spansInKeptStart(
+        sendCommand.text,
+        processedText,
+        sliceSpans(uncertain, 0, sendCommand.text.length)
+      );
 
       // Split on line breaks and emit one complete event per non-empty part
       // with a paragraph_boundary between each pair of pieces. Empty pieces
@@ -1277,18 +1297,33 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       // starts the prompt; a later piece never opens one. A trailing "send it"
       // is already off the text, so "slash compact send it" opens with the
       // command and still sends.
-      const commandText =
+      const command =
         session.commandTarget && pieces[0]
-          ? rewriteSpokenCommand(pieces[0], session.commandTarget.vocabulary)
+          ? planSpokenCommand(pieces[0], session.commandTarget.vocabulary)
           : null;
+      const commandText = command?.text ?? null;
+      const heardUncertain = splitSpansByLine(processedText, processedUncertain);
+      // Only the arguments are copied into the command; the words its name
+      // replaced take their flags with them.
+      const commandUncertain = command
+        ? shiftSpans(
+            sliceSpans(heardUncertain[0] ?? [], command.argsFrom, pieces[0]!.length),
+            command.argsAt
+          )
+        : [];
       const parts = pieces.filter(Boolean);
       // Heard-as rules run after the commands, the opening one above
       // included, so a rule never eats a break, a send or a command's name and
       // a term it writes is never taken for one, and over the
       // whole text, so a code fence spanning lines still protects what's
       // inside. Rules never cross or write a line break, so the pieces line up.
-      const writtenText = rewriteHeardAs(processedText);
+      const heardAsEdits: VoiceTextEdit[] = [];
+      const writtenText = rewriteHeardAs(processedText, undefined, heardAsEdits);
       const written = writtenText.split(/\s*\n\s*/).map((p) => p.trim());
+      const writtenUncertain = splitSpansByLine(
+        writtenText,
+        carrySpansThroughEdits(processedUncertain, heardAsEdits)
+      );
       // Lengths only — dictated text is user content, kept out of logs.
       logDebug("[VoiceInput] complete event → renderer", {
         rawLength: rawText.length,
@@ -1330,14 +1365,28 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           // What was heard goes along, so the renderer can rerun the rules
           // over the whole dictation at stop without rewriting a term twice.
           const text = written[i] ?? pieces[i];
+          const textUncertain =
+            (written[i] !== undefined ? writtenUncertain[i] : heardUncertain[i]) ?? [];
+          const pieceUncertain = heardUncertain[i] ?? [];
           target.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, {
             sessionId,
             text,
             willCorrect: false,
-            ...(text !== pieces[i] ? { heard: pieces[i] } : {}),
+            ...(text !== pieces[i]
+              ? {
+                  heard: pieces[i],
+                  ...(pieceUncertain.length > 0 ? { heardUncertain: pieceUncertain } : {}),
+                }
+              : {}),
+            ...(textUncertain.length > 0 ? { uncertain: textUncertain } : {}),
             ...itemIdField,
             ...(transcriptId ? { transcriptId } : {}),
-            ...(i === 0 && commandText && commandText !== pieces[i] ? { commandText } : {}),
+            ...(i === 0 && commandText && commandText !== pieces[i]
+              ? {
+                  commandText,
+                  ...(commandUncertain.length > 0 ? { commandUncertain } : {}),
+                }
+              : {}),
             ...(sendCommand.send && i === lastIndex ? { send: true } : {}),
           });
         }
@@ -1373,7 +1422,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     const holdSend = (
       itemId: string | undefined,
       rawText: string,
-      sendCommand: SendCommandResult
+      sendCommand: SendCommandResult,
+      uncertain: readonly VoiceTextSpan[]
     ) => {
       const held: HeldSend = {
         timer: setTimeout(() => releaseHeldSend(session, "send"), sendSettleMs),
@@ -1383,7 +1433,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
             rawText,
             outcome === "send"
               ? sendCommand
-              : { text: outcome === "literal" ? rawText : sendCommand.text, send: false }
+              : { text: outcome === "literal" ? rawText : sendCommand.text, send: false },
+            uncertain
           ),
       };
       session.heldSend = held;
@@ -1464,6 +1515,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         });
       } else if (voiceEvent.type === "complete") {
         const rawText = voiceEvent.text.trim();
+        const lead = voiceEvent.text.length - voiceEvent.text.trimStart().length;
+        const uncertain = sliceSpans(voiceEvent.uncertain ?? [], lead, lead + rawText.length);
         // A trailing "send it" that ends the utterance is stripped and handed
         // to the renderer, which owns the send; one the provider cut
         // mid-speech stays literal.
@@ -1472,9 +1525,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
             ? extractSendCommand(rawText)
             : { text: rawText, send: false };
         if (sendCommand.send && sendSettleMs > 0 && session.phase === "active") {
-          holdSend(voiceEvent.itemId, rawText, sendCommand);
+          holdSend(voiceEvent.itemId, rawText, sendCommand, uncertain);
         } else {
-          emitCompletion(voiceEvent.itemId, rawText, sendCommand);
+          emitCompletion(voiceEvent.itemId, rawText, sendCommand, uncertain);
         }
       } else if (voiceEvent.type === "paragraph_boundary") {
         if (session.intent === "rewrite") return;
@@ -1810,6 +1863,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         ...(terminalOutput ? { terminalOutput } : {}),
         reason: "stop",
         startsPrompt: request.startsPrompt === true,
+        ...(request.uncertain ? { uncertain: request.uncertain } : {}),
       },
       correctionSettingsFor(settings, ctx.projectId, vocabulary, commandTarget, knownNames)
     );

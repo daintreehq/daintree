@@ -26,19 +26,36 @@ const only = (): DictationRecord => {
 const textOf = (range: { from: number; to: number }) => draft().slice(range.from, range.to);
 
 /** Appends an utterance the way the voice service does: write, then record. */
-function dictate(words: string, sessionTarget = target): void {
+function dictate(
+  words: string,
+  sessionTarget = target,
+  uncertain?: Array<{ from: number; to: number }>
+): void {
   const base = draft();
   const separator = base && !base.endsWith(" ") && !base.endsWith("\n") ? " " : "";
-  setDraft(base + separator + words);
+  const next = base + separator + words;
+  // Voice writes say where they went, as commitVoicePlan's do.
+  useDictationRangeStore.getState().expectDraftChange(PANEL, PROJECT, base, next, {
+    from: base.length,
+    to: base.length,
+    insert: separator + words,
+  });
+  setDraft(next);
   const from = base.length + separator.length;
   useDictationRangeStore.getState().recordUtterance(sessionTarget, {
     insertion: { from: base.length, to: from + words.length },
     words: { from, to: from + words.length },
+    ...(uncertain ? { uncertain } : {}),
   });
 }
 
 function paragraphBreak(sessionTarget = target): void {
   const base = draft();
+  useDictationRangeStore.getState().expectDraftChange(PANEL, PROJECT, base, base + "\n", {
+    from: base.length,
+    to: base.length,
+    insert: "\n",
+  });
   setDraft(base + "\n");
   useDictationRangeStore
     .getState()
@@ -377,6 +394,46 @@ describe("dictationRangeStore", () => {
     expect(only().utterances[0]!.heard).toBe("zoo stand");
   });
 
+  describe("unsure words", () => {
+    /** The words each of the dictation's passages flags, as correction would read them. */
+    const flaggedWords = () =>
+      collectCorrectionPassages(only(), draft()).map((passage) =>
+        (passage.uncertain ?? []).map(({ from, to }) => `${from}:${passage.text.slice(from, to)}`)
+      );
+
+    it("hands correction each utterance's unsure words at their place in the passage", () => {
+      dictate("test foo test", target, [{ from: 9, to: 13 }]);
+      dictate("then racked native", target, [{ from: 5, to: 11 }]);
+      expect(flaggedWords()).toEqual([["9:test", "19:racked"]]);
+    });
+
+    it("keeps them through the session's own writes, which say what they changed", () => {
+      dictate("foo", target, [{ from: 0, to: 3 }]);
+      dictate("foo");
+      paragraphBreak();
+      dictate("foo");
+      expect(flaggedWords()).toEqual([["0:foo"]]);
+    });
+
+    // A diff can't say which copy of repeated text an edit took, nor see the
+    // separate edits one update holds, so any of these could have left the
+    // flag on another copy of its word.
+    it.each([
+      ["deletes the first of two copies", (d: string) => d.slice(4), "foo end"],
+      ["deletes one copy and rewrites another word", () => "foo bar", "foo bar"],
+      ["deletes one copy and writes a near copy elsewhere", () => "foo fox end", "foo fox end"],
+      ["types far from the words", (d: string) => `${d} today`, "foo foo end today"],
+    ])("drops them on an edit nobody described that %s", (_name, next, expected) => {
+      dictate("foo", target, [{ from: 0, to: 3 }]);
+      dictate("foo");
+      dictate("end");
+      expect(flaggedWords()).toEqual([["0:foo"]]);
+      setDraft(next(draft()));
+      expect(draft()).toBe(expected);
+      expect(flaggedWords().flat()).toEqual([]);
+    });
+  });
+
   describe("rewritePassage", () => {
     const rewrite = (text: string, heard = text) => {
       const record = records()[0]!;
@@ -407,6 +464,24 @@ describe("dictationRangeStore", () => {
       expect(textOf(record!.utterances[1]!.insertion)).toBe(" to it");
       expect(record!.utterances[0]!.heard).toBe("add zoo stand");
       expect(textOf(later!.range)).toBe(" later");
+    });
+
+    it("gives the merged utterance the unsure words the rewriter placed, and drops the old ones", () => {
+      dictate("add zoo", target, [{ from: 4, to: 7 }]);
+      dictate("stand", target, [{ from: 0, to: 5 }]);
+      const record = only();
+      useDictationRangeStore
+        .getState()
+        .rewritePassage(
+          record.id,
+          { utteranceIds: record.utterances.map((u) => u.id), text: "add zoo stand" },
+          "add Zustand",
+          "add zoo stand",
+          { text: [{ from: 4, to: 11 }], heard: [{ from: 8, to: 13 }] }
+        );
+      const [merged] = only().utterances;
+      expect(merged!.uncertain).toEqual([{ from: 4, to: 11 }]);
+      expect(merged!.heardUncertain).toEqual([{ from: 8, to: 13 }]);
     });
 
     it("keeps a flag the dictation already carried", () => {

@@ -901,7 +901,6 @@ describe("OpenAITranscriptionProvider", () => {
     expect(complete).toEqual({
       type: "complete",
       text: "Hello world",
-      confidence: { minConfidence: 1.0, wordCount: 0, uncertainWords: [], words: [] },
     });
   });
 
@@ -945,7 +944,6 @@ describe("OpenAITranscriptionProvider", () => {
     expect(complete).toEqual({
       type: "complete",
       text: "hello from done",
-      confidence: { minConfidence: 1.0, wordCount: 0, uncertainWords: [], words: [] },
     });
   });
 

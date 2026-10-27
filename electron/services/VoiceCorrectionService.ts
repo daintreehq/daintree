@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import { logDebug, logInfo, logWarn } from "../utils/logger.js";
 import {
   CORE_CORRECTION_PROMPT,
-  CONFIDENCE_SKIP_THRESHOLD,
   FILE_LINK_DETECTION_PROMPT,
   VOICE_DICTATION_AI_MODEL,
   VOICE_DICTATION_REASONING_EFFORT,
@@ -21,6 +20,7 @@ import {
   type CorrectionRejectReason,
 } from "./voiceCorrectionGuard.js";
 import { mayReferenceFile } from "../../shared/utils/voiceFileLinkCommands.js";
+import { sliceSpans, type VoiceTextSpan } from "../../shared/utils/voiceUncertainWords.js";
 import type { HeardAsRule } from "../../shared/utils/voiceHeardAs.js";
 import {
   checkVoiceCommandEdit,
@@ -72,6 +72,8 @@ const PRECONNECT_WAIT_MS = 250;
 // there for a passage sent now.
 const PRECONNECT_FRESH_MS = 2000;
 const LEADING_FILLER_RE = /^(?:\s*(?:um|uh)[\s,.;:!-]+)+/i;
+// Two flagged words with only spaces between them are one unsure phrase.
+const UNCERTAIN_JOIN_RE = /^[^\S\r\n]+$/;
 
 const FILE_LINK_DETECTION_SCHEMA = {
   type: "object",
@@ -172,9 +174,8 @@ export interface VoiceCorrectionRequest {
   terminalOutput?: string;
   reason?: string;
   segmentCount?: number;
-  uncertainWords?: string[];
-  minConfidence?: number;
-  wordCount?: number;
+  /** The words in `rawText` the recogniser was unsure of; transcript content, so never logged. */
+  uncertain?: readonly VoiceTextSpan[];
   /** Nothing comes before the passage in the draft, so it may open with a command. */
   startsPrompt?: boolean;
 }
@@ -270,24 +271,6 @@ export class VoiceCorrectionService {
       };
     }
 
-    if (
-      request.uncertainWords !== undefined &&
-      request.uncertainWords.length === 0 &&
-      (request.minConfidence ?? 0) > CONFIDENCE_SKIP_THRESHOLD &&
-      (request.wordCount ?? 0) > 0
-    ) {
-      logDebug(`${P} Skipping correction — all words high confidence`, {
-        minConfidence: request.minConfidence,
-        rawLen: trimmedRaw.length,
-      });
-      return {
-        action: "no_change",
-        correctedText: request.rawText,
-        confidence: "high",
-        confirmedText: request.rawText,
-      };
-    }
-
     if (trimmedRaw.length > MAX_CORRECTION_INPUT_CHARS) {
       logInfo(`${P} Skipping correction — passage too long`, {
         rawLen: trimmedRaw.length,
@@ -302,10 +285,12 @@ export class VoiceCorrectionService {
     }
 
     try {
+      const lead = request.rawText.length - request.rawText.trimStart().length;
       const result = await this.callApi(
         {
           ...request,
           rawText: trimmedRaw,
+          uncertain: sliceSpans(request.uncertain ?? [], lead, lead + trimmedRaw.length),
         },
         settings,
         trace
@@ -469,10 +454,10 @@ export class VoiceCorrectionService {
       parts.push(`<job>\n${metadata.join("\n")}\n</job>`);
     }
 
-    const targetText =
-      request.uncertainWords && request.uncertainWords.length > 0
-        ? VoiceCorrectionService.annotateUncertainWords(request.rawText, request.uncertainWords)
-        : request.rawText;
+    const targetText = VoiceCorrectionService.annotateUncertainSpans(
+      request.rawText,
+      request.uncertain ?? []
+    );
     parts.push(`<target>\n${targetText}\n</target>`);
 
     if (request.terminalOutput?.trim()) {
@@ -485,18 +470,32 @@ export class VoiceCorrectionService {
     return parts.join("\n\n");
   }
 
-  static annotateUncertainWords(text: string, uncertainWords: string[]): string {
-    if (uncertainWords.length === 0) return text;
-    const queue = [...uncertainWords];
-    return text.replace(/\S+/g, (token) => {
-      if (queue.length === 0) return token;
-      const stripped = token.replace(/^[^\w]+|[^\w]+$/g, "");
-      if (stripped.toLowerCase() === queue[0].toLowerCase()) {
-        queue.shift();
-        return token.replace(stripped, `<uncertain>${stripped}</uncertain>`);
+  /**
+   * Wraps each span of `text` in <uncertain>, by position, so only the words
+   * flagged are tagged even where the same word appears again. Words flagged
+   * side by side, with only spaces between, share one tag. A span out of
+   * bounds, overlapping an earlier one, or holding no word is ignored.
+   */
+  static annotateUncertainSpans(text: string, spans: readonly VoiceTextSpan[]): string {
+    const tags: VoiceTextSpan[] = [];
+    for (const span of [...spans].sort((a, b) => a.from - b.from)) {
+      const { from, to } = span;
+      if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || to > text.length) {
+        continue;
       }
-      return token;
-    });
+      if (from >= to || !text.slice(from, to).trim()) continue;
+      const last = tags[tags.length - 1];
+      if (last && from < last.to) continue;
+      if (last && UNCERTAIN_JOIN_RE.test(text.slice(last.to, from))) last.to = to;
+      else tags.push({ from, to });
+    }
+    let out = "";
+    let copied = 0;
+    for (const { from, to } of tags) {
+      out += `${text.slice(copied, from)}<uncertain>${text.slice(from, to)}</uncertain>`;
+      copied = to;
+    }
+    return out + text.slice(copied);
   }
 
   /**
@@ -735,6 +734,7 @@ export class VoiceCorrectionService {
       model: settings.model,
       contextLen: request.recentContext?.length ?? 0,
       terminalOutputLen: request.terminalOutput?.length ?? 0,
+      uncertainCount: request.uncertain?.length ?? 0,
       reason: request.reason ?? "unspecified",
       segmentCount: request.segmentCount ?? 0,
     });

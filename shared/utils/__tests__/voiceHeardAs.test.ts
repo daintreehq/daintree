@@ -133,6 +133,25 @@ describe("createHeardAsRewriter", () => {
     expect(zustand("x zoo stand", { from: 0, to: 8 })).toBe("x zoo stand");
   });
 
+  it("reports each replacement it makes in the coordinates of the text it was given", () => {
+    const text = "x zoo stand y zoo  stand z";
+    const edits: Array<{ from: number; to: number; insert: string }> = [];
+    const out = zustand(text, { from: 0, to: text.length }, edits);
+    expect(edits).toEqual([
+      { from: 2, to: 11, insert: "Zustand" },
+      { from: 14, to: 24, insert: "Zustand" },
+    ]);
+    let rebuilt = text;
+    for (const edit of [...edits].reverse()) {
+      rebuilt = rebuilt.slice(0, edit.from) + edit.insert + rebuilt.slice(edit.to);
+    }
+    expect(rebuilt).toBe(out);
+
+    const none: typeof edits = [];
+    expect(zustand("zoo stand.ts", undefined, none)).toBe("zoo stand.ts");
+    expect(none).toEqual([]);
+  });
+
   it("prefers the longest phrase starting at the same word", () => {
     const rewrite = rewriterFor(
       entry("Zoo", ["zoo"]),

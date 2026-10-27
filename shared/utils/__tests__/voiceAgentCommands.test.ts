@@ -7,6 +7,7 @@ import {
   checkVoiceCommandEdit,
   introducesVoiceCommand,
   opensWithVoiceCommand,
+  planSpokenCommand,
   rewriteSpokenCommand,
   voiceCommandBaseline,
   voiceCommandKeyterms,
@@ -145,6 +146,19 @@ describe("rewriteSpokenCommand", () => {
     );
     expect(rewriteSpokenCommand("slash review --force", vocabulary)).toBe("/review --force");
     expect(rewriteSpokenCommand("slash review force", vocabulary)).toBe("/review-force");
+  });
+
+  it("says where the arguments it copied sit in the spoken and the written text", () => {
+    for (const [spoken, args] of [
+      ["Um, slash review the review notes", "the review notes"],
+      ["  Slash review   the review notes ", "the review notes"],
+      ["slash review", ""],
+    ] as const) {
+      const plan = planSpokenCommand(spoken, claude)!;
+      expect(spoken.trimEnd().slice(plan.argsFrom)).toBe(args);
+      expect(plan.text.slice(plan.argsAt)).toBe(args);
+    }
+    expect(planSpokenCommand("review the notes", claude)).toBeNull();
   });
 
   it("looks past a leading hesitation", () => {

@@ -288,6 +288,36 @@ function matchExplicit(
 }
 
 /**
+ * A spoken command written as the composer would, with where its arguments,
+ * copied as said, start in the spoken text (`argsFrom`) and in `text` (`argsAt`).
+ */
+export interface SpokenCommandRewrite {
+  text: string;
+  argsFrom: number;
+  argsAt: number;
+}
+
+/** `rewriteSpokenCommand`, with where the arguments it copied sit on each side. */
+export function planSpokenCommand(
+  text: string,
+  vocabulary: VoiceCommandVocabulary
+): SpokenCommandRewrite | null {
+  if (vocabulary.entries.length === 0) return null;
+  const trimmed = text.trim();
+  const match = matchExplicit(trimmed, vocabulary);
+  if (!match) return null;
+  // The arguments are copied as said: `--force` and `./src` keep every character.
+  const rest = trimmed.slice(match.end).trimStart();
+  const token = match.entry.token;
+  const lead = text.length - text.trimStart().length;
+  return {
+    text: rest ? `${token} ${rest}` : token,
+    argsFrom: lead + trimmed.length - rest.length,
+    argsAt: rest ? token.length + 1 : token.length,
+  };
+}
+
+/**
  * `text` with a spoken command at its start written as the composer would:
  * "Slash review the last commit." becomes "/review the last commit.". The
  * longest name wins. Null when `text` doesn't open with a prefix followed by
@@ -297,13 +327,7 @@ export function rewriteSpokenCommand(
   text: string,
   vocabulary: VoiceCommandVocabulary
 ): string | null {
-  if (vocabulary.entries.length === 0) return null;
-  const trimmed = text.trim();
-  const match = matchExplicit(trimmed, vocabulary);
-  if (!match) return null;
-  // The arguments are copied as said: `--force` and `./src` keep every character.
-  const rest = trimmed.slice(match.end).trimStart();
-  return rest ? `${match.entry.token} ${rest}` : match.entry.token;
+  return planSpokenCommand(text, vocabulary)?.text ?? null;
 }
 
 /**

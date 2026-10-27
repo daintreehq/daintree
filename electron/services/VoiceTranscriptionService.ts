@@ -14,8 +14,6 @@ import type {
 // single entry point even though the definitions now live alongside the
 // provider interface.
 export type {
-  CorrectionWord,
-  SegmentConfidence,
   VoiceSessionEvent,
   VoiceStartResult,
   VoiceTranscriptionEvent,

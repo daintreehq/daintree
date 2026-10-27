@@ -2998,6 +2998,12 @@ function buildElectronApi(): ElectronAPI {
           transcriptId?: string;
           send?: boolean;
           commandText?: string;
+          /** Spans of `text` the recogniser was unsure of. */
+          uncertain?: Array<{ from: number; to: number }>;
+          /** Spans of `heard` the recogniser was unsure of. */
+          heardUncertain?: Array<{ from: number; to: number }>;
+          /** Spans of `commandText` the recogniser was unsure of. */
+          commandUncertain?: Array<{ from: number; to: number }>;
         }) => void
       ) => _typedOn(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, callback),
       onParagraphBoundary: (
