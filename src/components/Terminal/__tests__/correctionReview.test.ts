@@ -18,7 +18,7 @@ import {
   VOICE_CORRECTION_MARK_DWELL_MS,
   VOICE_CORRECTION_MARK_FADE_MS,
 } from "@/lib/animationUtils";
-import { createComposerHistory } from "../inputEditorExtensions/composerHistory";
+import { createComposerHistory, outsideDraftWrite } from "../inputEditorExtensions/composerHistory";
 import {
   correctionLanded,
   createCorrectionReview,
@@ -223,6 +223,60 @@ describe("correction review", () => {
     const dispatch = vi.spyOn(view, "dispatch");
     vi.advanceTimersByTime(VOICE_CORRECTION_MARK_DWELL_MS + VOICE_CORRECTION_MARK_FADE_MS);
     expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("stays on its passage while dictation writes after it, keeping its deadline (#14772)", () => {
+    const view = mount(INTRO + RAW);
+    land(view, review);
+    vi.advanceTimersByTime(VOICE_CORRECTION_MARK_DWELL_MS / 2);
+
+    const more = " And then the next part.";
+    const end = view.state.doc.length;
+    view.dispatch(
+      outsideDraftWrite({ from: end, insert: more }, view.state.doc.toString() + more, null)
+    );
+    expect(marked(view)).toEqual(["Open", "Zustand store."]);
+    expect(restoreControl(view)).not.toBeNull();
+
+    vi.advanceTimersByTime(VOICE_CORRECTION_MARK_DWELL_MS / 2);
+    expect(view.contentDOM.querySelectorAll(".cm-voice-corrected-fading")).not.toHaveLength(0);
+  });
+
+  it("follows its passage when an outside write lands before it, and restores it there", () => {
+    const view = mount(INTRO + RAW);
+    land(view, review);
+
+    view.dispatch(outsideDraftWrite({ from: 0, insert: "Note. " }, "Note. ", null));
+    expect(marked(view)).toEqual(["Open", "Zustand store."]);
+
+    restoreControl(view)!.dispatchEvent(new MouseEvent("click", { bubbles: true, button: 0 }));
+    expect(view.state.doc.toString()).toBe("Note. " + INTRO + RAW);
+  });
+
+  it("ends when an outside write takes text out, even next to an identical copy", () => {
+    const view = mount(INTRO + RAW);
+    land(view, review);
+    const copy = " " + CORRECTED;
+    view.dispatch(
+      outsideDraftWrite({ from: view.state.doc.length, insert: copy }, "", null, { anchor: 0 })
+    );
+    expect(restoreControl(view)).not.toBeNull();
+
+    // A scratch of the dictated copy, which a diff reads as removing the second.
+    const end = view.state.doc.length;
+    view.dispatch(outsideDraftWrite({ from: end - copy.length, to: end }, "", null, { anchor: 0 }));
+    expect(marked(view)).toEqual([]);
+    expect(restoreControl(view)).toBeNull();
+  });
+
+  it("ends when an outside write reaches its passage", () => {
+    const view = mount(INTRO + RAW);
+    land(view, review);
+
+    const at = INTRO.length + 5;
+    view.dispatch(outsideDraftWrite({ from: at, to: at + 3, insert: "XYZ" }, "", null));
+    expect(marked(view)).toEqual([]);
+    expect(restoreControl(view)).toBeNull();
   });
 
   it("restores the raw transcription with the control, as one undo step", () => {

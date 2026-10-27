@@ -2120,10 +2120,16 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
   // which takes no commands. Telling needs no discovery scan. A host's pane
   // takes the commands the host found as the stop landed, or, when it didn't
   // answer, those found at the start.
-  const currentCommandTarget = async (prep: CorrectionPrep): Promise<VoiceCommandTarget | null> => {
+  const currentCommandTarget = async (
+    prep: CorrectionPrep,
+    hostRead?: Promise<PaneCorrectionContext | null>
+  ): Promise<VoiceCommandTarget | null> => {
     const hostPane = hostPaneFor(prep.projectId, prep.outsideView);
     if (hostPane) {
-      const [target, read] = await Promise.all([prep.commandTarget, readHostStop(prep, hostPane)]);
+      const [target, read] = await Promise.all([
+        prep.commandTarget,
+        hostRead ?? readHostStop(prep, hostPane),
+      ]);
       return read ? read.commandTarget : target;
     }
     const { terminalId } = resolveKeytermTarget(prep.projectId, prep.terminalId, deps.ptyClient);
@@ -2234,11 +2240,22 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       let commandTarget: VoiceCommandTarget | null;
       let terminalOutput: string | null;
       if (prep) {
+        // A chunk of a dictation still running (#14772) reads a host's pane as
+        // it is now; only the read taken as the stop lands is kept, for the
+        // stop-time pass.
+        const hostPane = hostPaneFor(prep.projectId, prep.outsideView);
+        const hostNow =
+          hostPane && !prep.terminalOutput && !prep.hostStop
+            ? readHostPaneCorrection(hostPane, prep.terminalId, {
+                timeoutMs: COMMAND_TARGET_CORRECTION_BUDGET_MS,
+              })
+            : undefined;
         [projectInfo, vocabulary, commandTarget, terminalOutput] = await Promise.all([
           prep.projectInfo,
           prep.vocabulary,
-          currentCommandTarget(prep),
-          prep.terminalOutput ?? readStopOutput(prep),
+          currentCommandTarget(prep, hostNow),
+          prep.terminalOutput ??
+            (hostNow ? hostNow.then((read) => read?.terminalOutput ?? null) : readStopOutput(prep)),
         ]);
       } else {
         ({ projectInfo, vocabulary, commandTarget, terminalOutput } = await readCorrectionContext(

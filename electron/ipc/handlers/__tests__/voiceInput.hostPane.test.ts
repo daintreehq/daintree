@@ -386,6 +386,31 @@ describe("voiceInput — dictating into a host's pane", () => {
     expectNoLocalReads();
   });
 
+  it("reads the host fresh for a chunk while the dictation runs, and keeps the stop's read (#14772)", async () => {
+    reader.readCorrection
+      .mockResolvedValueOnce({ ...CORRECTION, terminalOutput: "while dictating" })
+      .mockResolvedValueOnce({ ...CORRECTION, terminalOutput: "as it stopped" });
+    await start(view, TERMINAL, "chunked");
+    await getHandler(CHANNELS.VOICE_INPUT_CORRECT)(
+      { sender: view },
+      { rawText: "the first chunk", terminalId: TERMINAL, sessionId: "chunked" }
+    );
+    // One read for the chunk's output and commands, kept for nothing after.
+    expect(reader.readCorrection).toHaveBeenCalledTimes(1);
+    await stop(view, "chunked");
+    await getHandler(CHANNELS.VOICE_INPUT_CORRECT)(
+      { sender: view },
+      { rawText: "the rest", terminalId: TERMINAL, sessionId: "chunked" }
+    );
+
+    expect(reader.readCorrection).toHaveBeenCalledTimes(2);
+    expect(shared.correctCalls.map(({ request }) => request.terminalOutput)).toEqual([
+      "while dictating",
+      "as it stopped",
+    ]);
+    expectNoLocalReads();
+  });
+
   it("drops a prepared dictation's commands once the host's agent has gone by the stop", async () => {
     reader.readCorrection.mockResolvedValueOnce({ ...CORRECTION, commandTarget: null });
     await start(view, TERMINAL, "agent-gone");

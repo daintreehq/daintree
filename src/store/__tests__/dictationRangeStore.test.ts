@@ -629,6 +629,202 @@ describe("dictationRangeStore", () => {
     });
   });
 
+  describe("rewriteUtterances (#14772)", () => {
+    const passageOf = (record: DictationRecord, count = record.utterances.length) => {
+      const run = record.utterances.slice(0, count);
+      return {
+        utteranceIds: run.map((u) => u.id),
+        text: draft().slice(run[0]!.range.from, run[run.length - 1]!.range.to),
+      };
+    };
+    const rewriteAll = (
+      text: string,
+      heard?: { uncertain: Array<{ from: number; to: number }> }
+    ) => {
+      const record = records()[0]!;
+      return useDictationRangeStore
+        .getState()
+        .rewriteUtterances(
+          record.id,
+          [{ passage: passageOf(record), text, ...(heard ? { heard } : {}) }],
+          (next) => setDraft(next)
+        );
+    };
+
+    it("keeps each utterance its own cleaned words where the rewrite left its edges", () => {
+      setDraft("Typed.");
+      dictate("so the cache is stale");
+      dictate("we should clear it on deploy");
+      dictate("and warm it again");
+
+      const before = draft();
+      expect(
+        rewriteAll("So the cache is stale. We should clear it on deploy and warm it again.")
+      ).toEqual([{ from: 7, to: before.length }]);
+
+      expect(draft()).toBe(
+        "Typed. So the cache is stale. We should clear it on deploy and warm it again."
+      );
+      const record = only();
+      expect(record.utterances.map((u) => [textOf(u.range), u.range.edited])).toEqual([
+        ["So the cache is stale.", false],
+        ["We should clear it on deploy", false],
+        ["and warm it again.", false],
+      ]);
+      expect(record.utterances.map((u) => textOf(u.insertion))).toEqual([
+        " So the cache is stale.",
+        " We should clear it on deploy",
+        " and warm it again.",
+      ]);
+      expect(record.range.edited).toBe(false);
+      expect(dictatedSpans(record, draft())).not.toBeNull();
+    });
+
+    it("joins the utterances a rewritten word runs across, and counts what they stood for", () => {
+      dictate("use the staging server");
+      dictate("no wait the local one");
+      dictate("then rerun the tests");
+
+      rewriteAll("Use the local one, then rerun the tests.");
+
+      const record = only();
+      expect(record.utterances.map((u) => textOf(u.range))).toEqual([
+        "Use the local one,",
+        "then rerun the tests.",
+      ]);
+      expect(record.utterances[0]!.sources).toBe(2);
+      expect(record.utterances[1]!.sources).toBeUndefined();
+    });
+
+    it("takes just the last cleaned utterance back out", () => {
+      dictate("first point here");
+      dictate("second point there");
+      rewriteAll("First point here. Second point there.");
+
+      const span = useDictationRangeStore.getState().takeLastUtterance(target, draft());
+      expect(span).not.toBeNull();
+      setDraft(draft().slice(0, span!.from) + draft().slice(span!.to));
+      expect(draft()).toBe("First point here.");
+      expect(only().utterances.map((u) => textOf(u.range))).toEqual(["First point here."]);
+    });
+
+    it("moves the session's anchor and later words with the rewrite, in the same update", () => {
+      dictate("hello there");
+      dictate("general kenobi");
+      const record = only();
+      const passage = passageOf(record, 1);
+      dictate("more words");
+      useDictationRangeStore
+        .getState()
+        .setAnchor(target, { from: draft().length, to: draft().length });
+
+      const seen: boolean[] = [];
+      const stop = useDictationRangeStore.subscribe((state) => {
+        const current = state.drafts[`${PROJECT}:${PANEL}`] ?? Object.values(state.drafts)[0];
+        seen.push(current?.[0]?.utterances.some((u) => u.range.edited) ?? false);
+      });
+      useDictationRangeStore
+        .getState()
+        .rewriteUtterances(record.id, [{ passage, text: "Hello there." }], (next) =>
+          setDraft(next)
+        );
+      stop();
+
+      expect(seen).toEqual([false]);
+      expect(draft()).toBe("Hello there. general kenobi more words");
+      expect(only().utterances.map((u) => textOf(u.range))).toEqual([
+        "Hello there.",
+        "general kenobi",
+        "more words",
+      ]);
+      const anchor = useDictationRangeStore.getState().getAnchor(target)!;
+      expect(anchor.from).toBe(draft().length);
+    });
+
+    it("keeps the words as heard for each utterance a heard-as rewrite kept apart", () => {
+      dictate("add zoo stand");
+      dictate("to the store", target, [{ from: 7, to: 12 }]);
+
+      rewriteAll("add Zustand to the store", { uncertain: [{ from: 19, to: 24 }] });
+
+      const [first, second] = only().utterances;
+      expect(textOf(first!.range)).toBe("add Zustand");
+      expect(first!.heard).toBe("add zoo stand");
+      expect(textOf(second!.range)).toBe("to the store");
+      expect(second!.heard).toBeUndefined();
+      expect(second!.uncertain).toEqual([{ from: 7, to: 12 }]);
+    });
+
+    it("keeps words the rewrite added at either end of the dictation in its learning span", () => {
+      setDraft("Typed:");
+      dictate("use codex");
+      // Only added at the end, which an edge insertion would leave outside.
+      rewriteAll("use codex-cli.");
+      expect(draft()).toBe("Typed: use codex-cli.");
+      expect(textOf(only().learningSpan!)).toBe("use codex-cli.");
+    });
+
+    it("drops the words as heard and the unsure words from a cleanup", () => {
+      dictate("add zoo stand", target, [{ from: 4, to: 7 }]);
+      const record = only();
+      useDictationRangeStore
+        .getState()
+        .rewriteUtterances(
+          record.id,
+          [{ passage: passageOf(record), text: "Add Zustand." }],
+          (next) => setDraft(next)
+        );
+      const [utterance] = only().utterances;
+      expect(utterance!.heard).toBeUndefined();
+      expect(utterance!.uncertain).toBeUndefined();
+    });
+
+    it("rewrites several passages in one write, leaving typed text between them", () => {
+      dictate("one thing");
+      setDraft(draft() + " TYPED");
+      dictate("other thing");
+      const record = only();
+      const passages = collectCorrectionPassages(record, draft()).map((p) => ({
+        utteranceIds: p.utteranceIds,
+        text: p.text,
+      }));
+      expect(passages.map((p) => p.text)).toEqual(["one thing", "other thing"]);
+      let writes = 0;
+      useDictationRangeStore.getState().rewriteUtterances(
+        record.id,
+        [
+          { passage: passages[0]!, text: "One thing." },
+          { passage: passages[1]!, text: "Other thing." },
+        ],
+        (next) => {
+          writes++;
+          setDraft(next);
+        }
+      );
+      expect(writes).toBe(1);
+      expect(draft()).toBe("One thing. TYPED Other thing.");
+      expect(only().utterances.map((u) => [textOf(u.range), u.range.edited])).toEqual([
+        ["One thing.", false],
+        ["Other thing.", false],
+      ]);
+    });
+
+    it("writes nothing once a passage holds other text", () => {
+      dictate("hello there");
+      const record = only();
+      const passage = passageOf(record);
+      setDraft("hello where");
+      expect(
+        useDictationRangeStore
+          .getState()
+          .rewriteUtterances(record.id, [{ passage, text: "Hello there." }], (next) =>
+            setDraft(next)
+          )
+      ).toBeNull();
+      expect(draft()).toBe("hello where");
+    });
+  });
+
   describe("rewriteWords", () => {
     const swapWords = (
       edits: Array<{ from: number; to: number; text: string }>,

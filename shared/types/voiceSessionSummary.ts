@@ -160,6 +160,9 @@ export const VoiceSessionSummarySchema = z
     correction: z.enum(["none", "applied", "unchanged", "failed", "discarded"]),
     // The reasons behind it, passage by passage; all zero when no cleanup ran.
     correctionPassages: VoiceCorrectionPassagesSchema,
+    // Chunks of a long dictation sent for cleanup while it ran. The correction
+    // fields above are the stop-time pass, over what came after the last one.
+    correctionChunks: count,
     // Audio the renderer held before the start request, past its cap.
     droppedQueued: count,
     charsCommitted: count,

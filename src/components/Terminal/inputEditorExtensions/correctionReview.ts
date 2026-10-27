@@ -7,6 +7,7 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import {
+  Annotation,
   StateEffect,
   StateField,
   Transaction,
@@ -23,6 +24,7 @@ import {
   VOICE_CORRECTION_MARK_DWELL_MS,
   VOICE_CORRECTION_MARK_FADE_MS,
 } from "@/lib/animationUtils";
+import { alignWords, tokenizeWords } from "@/lib/wordAlignment";
 import { chipCardText, chipHoverTooltip, chipTooltip } from "./chipCard";
 
 /** A correction swapped into a dictated passage of the draft. */
@@ -47,72 +49,20 @@ export interface CorrectionChanges {
   removed: { at: number; afterWord: boolean; heard: string }[];
 }
 
-interface Token {
-  text: string;
-  from: number;
-  to: number;
-}
-
-function tokenize(text: string): Token[] {
-  const tokens: Token[] = [];
-  for (const match of text.matchAll(/\S+/g)) {
-    tokens.push({ text: match[0], from: match.index, to: match.index + match[0].length });
-  }
-  return tokens;
-}
-
-// A passage past this many word pairs is marked as one span between its common
-// head and tail rather than aligned word by word.
-const MAX_ALIGNMENT_CELLS = 250_000;
-
 /**
  * The words a correction changed. Words are whitespace-separated and compared
  * exactly, so a capital or a punctuation mark the correction added counts; a
  * change to the spacing alone does not.
  */
 export function diffCorrection(rawText: string, correctedText: string): CorrectionChanges {
-  const a = tokenize(rawText);
-  const b = tokenize(correctedText);
-
-  let head = 0;
-  while (head < a.length && head < b.length && a[head]!.text === b[head]!.text) head++;
-  let endA = a.length;
-  let endB = b.length;
-  while (endA > head && endB > head && a[endA - 1]!.text === b[endB - 1]!.text) {
-    endA--;
-    endB--;
-  }
-
-  // Index pairs of the words both sides keep, framed by the common head and tail.
-  const kept: [number, number][] = [[head - 1, head - 1]];
-  const m = endA - head;
-  const n = endB - head;
-  if (m > 0 && n > 0 && m * n <= MAX_ALIGNMENT_CELLS) {
-    const width = n + 1;
-    const lcs = new Uint32Array((m + 1) * width);
-    for (let i = m - 1; i >= 0; i--) {
-      for (let j = n - 1; j >= 0; j--) {
-        lcs[i * width + j] =
-          a[head + i]!.text === b[head + j]!.text
-            ? lcs[(i + 1) * width + j + 1]! + 1
-            : Math.max(lcs[(i + 1) * width + j]!, lcs[i * width + j + 1]!);
-      }
-    }
-    let i = 0;
-    let j = 0;
-    while (i < m && j < n) {
-      if (a[head + i]!.text === b[head + j]!.text) {
-        kept.push([head + i, head + j]);
-        i++;
-        j++;
-      } else if (lcs[(i + 1) * width + j]! >= lcs[i * width + j + 1]!) {
-        i++;
-      } else {
-        j++;
-      }
-    }
-  }
-  kept.push([endA, endB]);
+  const a = tokenizeWords(rawText);
+  const b = tokenizeWords(correctedText);
+  // Framed by the positions just outside either end, so every gap is between two pairs.
+  const kept: [number, number][] = [
+    [-1, -1],
+    ...alignWords(a, b, (x, y) => x.text === y.text),
+    [a.length, b.length],
+  ];
 
   const changes: CorrectionChanges = { changed: [], removed: [] };
   for (let k = 0; k < kept.length - 1; k++) {
@@ -149,6 +99,13 @@ export const correctionReverted = StateEffect.define<CorrectionReview>({ map: ma
 const advanceReview = StateEffect.define<null>();
 
 /**
+ * Marks a write from outside the composer: dictated words, a cleanup, a file
+ * link. A long dictation's chunks are cleaned while it runs (#14772), so the
+ * words dictated after one land while its review is still showing.
+ */
+export const outsideWrite = Annotation.define<true>();
+
+/**
  * `marked`: the changed words are underlined. `fading`: the underline is on its
  * way out. `settled`: only the restore control is left, until the next edit.
  */
@@ -170,16 +127,37 @@ function reviewFor(doc: Text, review: CorrectionReview): ReviewState | null {
 }
 
 /**
- * The correction that last landed in this draft. Any edit ends the review: the
- * marks and the restore control describe that one swap, and after an edit the
- * passage is either the user's or no longer what the correction wrote.
+ * The review carried through an outside write that only added text and left
+ * its words alone, or null. A write that takes text out (a scratch, a cancel,
+ * a send) ends it: the composer diffs such a write, and a diff can put the
+ * removal on an identical copy of the passage, leaving the review on text
+ * that was never corrected.
+ */
+function carryReview(state: ReviewState, tr: Transaction): ReviewState | null {
+  let removes = false;
+  tr.changes.iterChangedRanges((fromA, toA) => {
+    if (toA > fromA) removes = true;
+  });
+  if (removes) return null;
+  const { review } = state;
+  const from = tr.changes.mapPos(review.from, 1);
+  const to = from + review.correctedText.length;
+  if (tr.state.doc.sliceString(from, to) !== review.correctedText) return null;
+  return from === review.from ? state : { ...state, review: { ...review, from } };
+}
+
+/**
+ * The correction that last landed in this draft. An edit of the user's ends
+ * the review: the marks and the restore control describe that one swap, and
+ * after an edit the passage is either the user's or no longer what the
+ * correction wrote. An outside write that leaves the passage alone moves it.
  */
 export const correctionReviewField = StateField.define<ReviewState | null>({
   create() {
     return null;
   },
   update(value, tr) {
-    if (value && tr.docChanged) value = null;
+    if (value && tr.docChanged) value = tr.annotation(outsideWrite) ? carryReview(value, tr) : null;
     for (const effect of tr.effects) {
       if (effect.is(correctionLanded)) value = reviewFor(tr.state.doc, effect.value);
       else if (effect.is(correctionReverted)) value = null;
@@ -344,7 +322,10 @@ const reviewTimers = ViewPlugin.fromClass(
     update(update: ViewUpdate) {
       const before = update.startState.field(correctionReviewField, false) ?? null;
       const after = update.state.field(correctionReviewField, false) ?? null;
-      if (before !== after) this.schedule(after);
+      // A review only moved by a write elsewhere keeps its deadline.
+      if (before?.changes !== after?.changes || before?.phase !== after?.phase) {
+        this.schedule(after);
+      }
     }
 
     private schedule(state: ReviewState | null) {

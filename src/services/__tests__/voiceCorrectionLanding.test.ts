@@ -80,6 +80,25 @@ describe("rebaseCorrectionBaseline", () => {
     expect(baseline()).toBe(correction.correctedText);
   });
 
+  it("moves a chunk's passages inside the baseline its session wrote at stop (#14772)", () => {
+    const voice = useVoiceRecordingStore.getState();
+    voice.beginSession({ panelId: "term-1" }, "session-1");
+    voice.setSessionCorrectedText("term-1", "Hello, there. and the rest");
+    const chunk = { baseline: { ...correction.baseline, partOf: "session-1" } };
+
+    rebaseCorrectionBaseline("term-1", chunk, "raw");
+    expect(baseline()).toBe("hello there and the rest");
+    rebaseCorrectionBaseline("term-1", chunk, "corrected");
+    expect(baseline()).toBe("Hello, there. and the rest");
+
+    // Not another session's, and not where the words read twice.
+    rebaseCorrectionBaseline("term-1", { baseline: { ...chunk.baseline, partOf: "other" } }, "raw");
+    expect(baseline()).toBe("Hello, there. and the rest");
+    voice.setSessionCorrectedText("term-1", "Hello, there. Hello, there.");
+    rebaseCorrectionBaseline("term-1", chunk, "raw");
+    expect(baseline()).toBe("Hello, there. Hello, there.");
+  });
+
   it("leaves a newer session's baseline, and one a send consumed, alone", () => {
     useVoiceRecordingStore.getState().setSessionCorrectedText("term-1", "a later dictation");
     rebaseCorrectionBaseline("term-1", correction, "raw");

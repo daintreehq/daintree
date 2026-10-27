@@ -19,7 +19,7 @@ import {
   undo,
   undoDepth,
 } from "@codemirror/commands";
-import { correctionLanded, type CorrectionReview } from "./correctionReview";
+import { correctionLanded, outsideWrite, type CorrectionReview } from "./correctionReview";
 
 interface ChipEntryRange {
   from: number;
@@ -65,7 +65,8 @@ export function createComposerHistory(): Extension {
  * An outside write to the draft (a dictated utterance, a correction or
  * file-link swap, a handoff) as one undo step of its own: typing next to it
  * within the grouping delay would otherwise merge into it. A correction that
- * landed in it rides along, so undo and redo carry the correction too. The
+ * landed in it rides along, so undo and redo carry the correction too, and
+ * one already under review stays there while the write leaves it alone. The
  * caret goes to the end of the draft unless `selection` places it.
  */
 export function outsideDraftWrite(
@@ -79,7 +80,7 @@ export function outsideDraftWrite(
     selection,
     scrollIntoView: true,
     effects: landed ? correctionLanded.of(landed) : [],
-    annotations: isolateHistory.of("full"),
+    annotations: [isolateHistory.of("full"), outsideWrite.of(true)],
   };
 }
 
