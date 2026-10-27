@@ -107,7 +107,7 @@ export async function readFileSinceReview(
   }
   if (reviewed.kind !== "bytes") return unavailable("reviewed-content-missing");
 
-  return render(env, before, reviewed.bytes, now, current.bytes);
+  return render(env, before, reviewed.bytes, now, current.bytes, "exact");
 }
 
 function endOf(side: ReviewComparisonSide, which: ReviewFileSinceSide): End {
@@ -242,18 +242,27 @@ async function standInFor(
   if (head.kind !== "content") return null;
   const old = await catBlob(env, head.oid);
   if (old.kind !== "bytes") return null;
-  const view = await render(env, head, old.bytes, now, current);
+  const view = await render(env, head, old.bytes, now, current, "stand-in");
   // Nothing to show, as when the file went back to what the commit holds.
   if (view.kind !== "exact") return null;
   return { commit: point.head.commit, patch: view.patch };
 }
+
+/**
+ * `exact` diffs the bytes as they were compared. A `stand-in` against the
+ * reviewed commit lets the user's line-ending settings apply, as their own
+ * `git diff` would: a working tree checked out with CRLF then doesn't show
+ * every line changed against the LF commit.
+ */
+type Render = "exact" | "stand-in";
 
 async function render(
   env: ReadEnv,
   before: Extract<End, { kind: "content" | "absent" }>,
   old: Buffer | null,
   now: Extract<End, { kind: "content" | "absent" }>,
-  current: Buffer | null
+  current: Buffer | null,
+  purpose: Render
 ): Promise<ReviewFileSinceView> {
   const sameBytes =
     old !== null && current !== null ? old.equals(current) : old === null && current === null;
@@ -266,13 +275,18 @@ async function render(
   if (isBinary(old) || isBinary(current) || !isUtf8(old) || !isUtf8(current)) {
     return { kind: "binary" };
   }
-  const patch = await gitPatch(env, fromMode, old, toMode, current);
-  if (patch === "too-large") return { kind: "too-large" };
-  if (patch !== null) return { kind: "exact", patch };
+  const hunks = await gitHunks(env, old, current, purpose);
+  if (hunks === "too-large") return { kind: "too-large" };
+  if (hunks !== null) return { kind: "exact", patch: withHeader(env, fromMode, toMode, hunks) };
   // No hunks: an empty file came or went, which is still a change.
   if (old === null) return { kind: "empty-file", change: "added" };
   if (current === null) return { kind: "empty-file", change: "deleted" };
-  return { kind: "unchanged" };
+  // Line-ending conversion made different bytes compare equal.
+  if (purpose === "stand-in") return { kind: "unchanged" };
+  // An exact diff runs with conversion off, so different bytes always have
+  // hunks; should anything still hide them, show the whole file replaced
+  // rather than call it unchanged.
+  return { kind: "exact", patch: withHeader(env, fromMode, toMode, wholeFileHunk(old, current)) };
 }
 
 function isBinary(bytes: Buffer | null): boolean {
@@ -290,17 +304,15 @@ function isUtf8(bytes: Buffer | null): boolean {
 }
 
 /**
- * Unified diff of two byte strings, through git so hunks and "no newline"
+ * The hunks between two byte strings, through git so hunks and "no newline"
  * markers are git's own. The inputs go to a directory of their own under the
- * system temp dir, never into the repository; the file headers are written
- * over the temporary names.
+ * system temp dir, never into the repository.
  */
-async function gitPatch(
+async function gitHunks(
   env: ReadEnv,
-  fromMode: Mode | null,
   old: Buffer | null,
-  toMode: Mode | null,
-  current: Buffer | null
+  current: Buffer | null,
+  purpose: Render
 ): Promise<string | "too-large" | null> {
   const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "daintree-since-review-"));
   try {
@@ -329,6 +341,15 @@ async function gitPatch(
           timeoutMs: GIT_TIMEOUT_MS,
           maxStdoutBytes: MAX_PATCH_BYTES,
           okExitCodes: [1],
+          // Even outside a repository git converts line endings by the user's
+          // global config and attributes, which would drop a CRLF change.
+          // Nothing in `dir` is named `attributes`, so it stands for none.
+          ...(purpose === "exact" && {
+            config: [
+              ["core.autocrlf", "false"],
+              ["core.attributesFile", path.join(dir, "attributes")],
+            ],
+          }),
         }
       ));
     } catch (error) {
@@ -338,46 +359,86 @@ async function gitPatch(
     const text = stdout.toString("utf8");
     const hunks = text.startsWith("@@") ? 0 : text.indexOf("\n@@");
     if (hunks === -1) return null;
-    const body = text.slice(hunks === 0 ? 0 : hunks + 1);
-    const oldName = quotePath(`a/${env.file.path}`);
-    const newName = quotePath(`b/${env.file.path}`);
-    const header = [`diff --git ${oldName} ${newName}`];
-    if (fromMode === null && toMode !== null) header.push(`new file mode ${toMode}`);
-    else if (toMode === null && fromMode !== null) header.push(`deleted file mode ${fromMode}`);
-    else if (fromMode !== toMode) header.push(`old mode ${fromMode}`, `new mode ${toMode}`);
-    header.push(
-      fromMode === null ? "--- /dev/null" : `--- ${oldName}`,
-      toMode === null ? "+++ /dev/null" : `+++ ${newName}`
-    );
-    return `${header.join("\n")}\n${body}`;
+    return text.slice(hunks === 0 ? 0 : hunks + 1);
   } finally {
     await fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {});
   }
 }
 
-/** A path as git writes it in a patch header: quoted when a byte needs escaping. */
+/** Every line of `old` taken out and every line of `current` put in, as one hunk. */
+function wholeFileHunk(old: Buffer, current: Buffer): string {
+  const side = (bytes: Buffer, sign: "-" | "+") => {
+    if (bytes.length === 0) return { range: "0,0", lines: "" };
+    const lines = bytes.toString("utf8").split("\n");
+    const terminated = lines[lines.length - 1] === "";
+    if (terminated) lines.pop();
+    const body = lines.map((line) => `${sign}${line}\n`).join("");
+    return {
+      range: `1,${lines.length}`,
+      lines: terminated ? body : `${body}\\ No newline at end of file\n`,
+    };
+  };
+  const from = side(old, "-");
+  const to = side(current, "+");
+  return `@@ -${from.range} +${to.range} @@\n${from.lines}${to.lines}`;
+}
+
+/** Hunks under a header that names the file rather than the temporary inputs. */
+function withHeader(
+  env: ReadEnv,
+  fromMode: Mode | null,
+  toMode: Mode | null,
+  hunks: string
+): string {
+  const oldName = quotePath(`a/${env.file.path}`);
+  const newName = quotePath(`b/${env.file.path}`);
+  const header = [`diff --git ${oldName} ${newName}`];
+  if (fromMode === null && toMode !== null) header.push(`new file mode ${toMode}`);
+  else if (toMode === null && fromMode !== null) header.push(`deleted file mode ${fromMode}`);
+  else if (fromMode !== toMode) header.push(`old mode ${fromMode}`, `new mode ${toMode}`);
+  header.push(
+    fromMode === null ? "--- /dev/null" : `--- ${oldName}`,
+    toMode === null ? "+++ /dev/null" : `+++ ${newName}`
+  );
+  return `${header.join("\n")}\n${hunks}`;
+}
+
+/** Git's own escapes for the control bytes that have one. */
+const C_ESCAPES: Readonly<Record<number, string>> = {
+  0x07: "a",
+  0x08: "b",
+  0x09: "t",
+  0x0a: "n",
+  0x0b: "v",
+  0x0c: "f",
+  0x0d: "r",
+  0x22: '"',
+  0x5c: "\\",
+};
+
+/**
+ * A path as git writes it in a patch header under the `core.quotepath=false`
+ * every Daintree git command runs with: quoted only for a control byte, `"` or
+ * `\`, with UTF-8 left as it is, so the viewer reads the same name from every
+ * diff source.
+ */
 function quotePath(name: string): string {
   const bytes = Buffer.from(name, "utf8");
   let plain = true;
-  let out = "";
+  const out: number[] = [];
   for (const byte of bytes) {
-    if (byte === 0x22 || byte === 0x5c) {
+    const escape = C_ESCAPES[byte];
+    if (escape !== undefined) {
       plain = false;
-      out += `\\${String.fromCharCode(byte)}`;
-    } else if (byte === 0x0a) {
+      out.push(0x5c, escape.charCodeAt(0));
+    } else if (byte < 0x20 || byte === 0x7f) {
       plain = false;
-      out += "\\n";
-    } else if (byte === 0x09) {
-      plain = false;
-      out += "\\t";
-    } else if (byte < 0x20 || byte >= 0x7f) {
-      plain = false;
-      out += `\\${byte.toString(8).padStart(3, "0")}`;
+      out.push(...Buffer.from(`\\${byte.toString(8).padStart(3, "0")}`, "latin1"));
     } else {
-      out += String.fromCharCode(byte);
+      out.push(byte);
     }
   }
-  return plain ? name : `"${out}"`;
+  return plain ? name : `"${Buffer.from(out).toString("utf8")}"`;
 }
 
 /** Whether git may convert line endings or run a filter on this path, as far as its settings say. */

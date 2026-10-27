@@ -10,6 +10,23 @@ import { captureReviewPoint, type CaptureReviewPointOptions } from "../captureRe
 import { compareReviewPoint } from "../compareReviewPoint.js";
 import { readFileSinceReview } from "../fileSinceReview.js";
 import type { ReviewFileSinceSide } from "../../../../../shared/types/ipc/reviewMarks.js";
+import { parseDiff } from "react-diff-view";
+
+const diffOutput = vi.hoisted(() => ({ withoutHunks: false }));
+
+// Real git throughout; one test drops the hunks from git's diff output to reach
+// what no real configuration it can set up would.
+vi.mock("../runGit.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../runGit.js")>();
+  return {
+    ...actual,
+    runGitForBytes: async (...args: Parameters<typeof actual.runGitForBytes>) => {
+      const result = await actual.runGitForBytes(...args);
+      if (!diffOutput.withoutHunks || args[1][0] !== "diff") return result;
+      return { ...result, stdout: Buffer.alloc(0) };
+    },
+  };
+});
 
 // Real repositories throughout, like the capture's own tests: the comparison is
 // only as good as what git actually reports after each kind of history change.
@@ -364,6 +381,81 @@ describe("readFileSinceReview", () => {
     if (view.kind !== "unavailable") return;
     expect(view.reason).toBe("reviewed-not-raw");
     expect(view.standIn?.patch).toContain("-b\n");
+  });
+
+  it("diffs a line-ending change by its bytes when the user's git converts line endings", async () => {
+    const repo = topicRepo();
+    const home = fs.mkdtempSync(path.join(root, "home-"));
+    fs.writeFileSync(path.join(home, ".gitconfig"), "[core]\n\tautocrlf = input\n");
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("XDG_CONFIG_HOME", path.join(home, "xdg"));
+    try {
+      write(repo, "a.txt", "reviewed\n");
+      git(repo, "add", "a.txt");
+      const point = await review(repo);
+      write(repo, "a.txt", "reviewed\r\n");
+
+      const view = await sinceReview(repo, point, "a.txt", "worktree");
+
+      expect(view.kind).toBe("exact");
+      if (view.kind !== "exact") return;
+      expect(view.patch).toContain("-reviewed\n+reviewed\r\n");
+    } finally {
+      vi.stubEnv("HOME", root);
+      vi.stubEnv("XDG_CONFIG_HOME", path.join(root, "xdg"));
+    }
+  });
+
+  it("shows the whole file replaced, never unchanged, when git finds no hunks in different bytes", async () => {
+    const repo = topicRepo();
+    write(repo, "a.txt", "reviewed\nkept");
+    git(repo, "add", "a.txt");
+    const point = await review(repo);
+    write(repo, "a.txt", "reviewed\r\nkept");
+
+    diffOutput.withoutHunks = true;
+    const view = await sinceReview(repo, point, "a.txt", "worktree").finally(() => {
+      diffOutput.withoutHunks = false;
+    });
+
+    expect(view.kind).toBe("exact");
+    if (view.kind !== "exact") return;
+    expect(view.patch).toBe(
+      [
+        "diff --git a/a.txt b/a.txt",
+        "--- a/a.txt",
+        "+++ b/a.txt",
+        "@@ -1,2 +1,2 @@",
+        "-reviewed",
+        "-kept",
+        "\\ No newline at end of file",
+        "+reviewed\r",
+        "+kept",
+        "\\ No newline at end of file",
+        "",
+      ].join("\n")
+    );
+  });
+
+  it("leaves a non-ASCII path unquoted, as git does with core.quotepath=false", async () => {
+    const repo = topicRepo();
+    write(repo, "café.md", "one\n");
+    git(repo, "add", "-A");
+    const point = await review(repo);
+    write(repo, "café.md", "two\n");
+
+    const view = await sinceReview(repo, point, "café.md", "worktree");
+
+    expect(view.kind).toBe("exact");
+    if (view.kind !== "exact") return;
+    expect(view.patch.split("\n").slice(0, 3)).toEqual([
+      "diff --git a/café.md b/café.md",
+      "--- a/café.md",
+      "+++ b/café.md",
+    ]);
+    const [file] = parseDiff(view.patch);
+    expect(file?.oldPath).toBe("café.md");
+    expect(file?.newPath).toBe("café.md");
   });
 
   posixOnly("quotes a path that would break a patch header", async () => {
