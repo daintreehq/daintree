@@ -72,10 +72,6 @@ export const VoiceSessionReportSchema = z
 export type VoiceSessionReport = z.infer<typeof VoiceSessionReportSchema>;
 
 /**
- * Main's share of one passage's cleanup, sent back with its result: building
- * the request, and the OpenAI round trip, which is null when none went out.
- */
-/**
  * What main made of one passage's cleanup: a code, never text. A rejection
  * names the guard that kept the raw words; `skipped` is a passage it never sent.
  */
@@ -126,6 +122,10 @@ export const VoiceCorrectionPassagesSchema = z
 
 export type VoiceCorrectionPassages = z.infer<typeof VoiceCorrectionPassagesSchema>;
 
+/**
+ * Main's share of one passage's cleanup, sent back with its result: building
+ * the request, and the OpenAI round trip, which is null when none went out.
+ */
 export const VoiceCorrectionTimingSchema = z
   .object({
     prepMs: z.number().nonnegative(),
