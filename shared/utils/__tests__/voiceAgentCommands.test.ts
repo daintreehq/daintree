@@ -648,6 +648,14 @@ describe("checkVoiceCommandEdit for a command named partway into the prompt", ()
         false
       )
     ).toBeNull();
+    expect(
+      checkVoiceCommandEdit(
+        "Then use commit. Commit the docs.",
+        "Then use commit. /commit the docs.",
+        skills,
+        false
+      )
+    ).toBe("unprompted_command");
     // Words shared by both mentions don't say which one was meant.
     expect(
       checkVoiceCommandEdit(

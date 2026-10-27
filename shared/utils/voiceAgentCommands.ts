@@ -644,6 +644,7 @@ function bareToken(word: string): string {
 // 1, so writing it where it was named beats leaving those words, and writing
 // it anywhere else loses the words between.
 const ALIGNED_WORD = 4;
+const DROPPED_WORD = 2;
 // Past this many cells the alignment costs main too much time and memory, and
 // the commands are counted instead of placed.
 const MAX_ALIGNMENT_CELLS = 2_000_000;
@@ -780,6 +781,13 @@ function writesUnnamedCommand(
   const at = (i: number, j: number) => best[(i - head) * width + (j - head)]!;
   const pairWeight = (i: number, j: number) =>
     sameUnit(said[i]!, written[j]!) ? unitWeight(written[j]!) : 0;
+  // Leaving out a word the cleanup wrote costs, so a command named where the
+  // cleanup kept its words can't skip them to credit a token further on.
+  const dropped = (j: number) => ("word" in written[j]! ? DROPPED_WORD : 0);
+  const set = (i: number, j: number, value: number) => {
+    best[(i - head) * width + (j - head)] = value;
+  };
+  for (let j = writtenEnd - 1; j >= head; j--) set(saidEnd, j, at(saidEnd, j + 1) - dropped(j));
   const namedWeight = (i: number, j: number) => {
     const span = named.get(i);
     const unit = written[j]!;
@@ -789,12 +797,12 @@ function writesUnnamedCommand(
   };
   for (let i = saidEnd - 1; i >= head; i--) {
     for (let j = writtenEnd - 1; j >= head; j--) {
-      let value = Math.max(at(i + 1, j), at(i, j + 1));
+      let value = Math.max(at(i + 1, j), at(i, j + 1) - dropped(j));
       const pair = pairWeight(i, j);
       if (pair > 0) value = Math.max(value, pair + at(i + 1, j + 1));
       const span = namedWeight(i, j);
       if (span) value = Math.max(value, span.weight + at(span.next, j + 1));
-      best[(i - head) * width + (j - head)] = value;
+      set(i, j, value);
     }
   }
   for (let i = head, j = head; i < saidEnd && j < writtenEnd;) {
