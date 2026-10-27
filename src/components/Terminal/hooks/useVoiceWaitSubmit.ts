@@ -15,6 +15,8 @@ import { takePendingComposerSelection } from "@/lib/composerCaret";
 import { makeDraftKey } from "@/lib/draftKey";
 import { replayLandedCorrection } from "../inputEditorExtensions/correctionReview";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
+import { planVoiceDraftSend, type VoiceDraftSend } from "@/services/voiceDraftSend";
+import { useDictationRangeStore } from "@/store/dictationRangeStore";
 import { isSpokenSendable } from "@/services/voiceSpokenSend";
 import { claimVoiceWaitKeys } from "@/lib/voiceWaitKeys";
 import type { ClaimSendHandBack, SendHandBack } from "./useSendHandBack";
@@ -58,8 +60,13 @@ interface UseVoiceWaitSubmitParams {
   /**
    * Whether it took the draft, or a promise of it while an expansion or a
    * submission is awaited; a send held back (an upload still going) did not.
+   * A dictated send passes what it takes: its sessions, and the words of any
+   * that started after it, which stay behind.
    */
-  sendFromEditor: (handBack?: SendHandBack) => boolean | Promise<boolean> | void;
+  sendFromEditor: (
+    handBack?: SendHandBack,
+    voiceSend?: VoiceDraftSend
+  ) => boolean | Promise<boolean> | void;
   /**
    * Claims the keyboard's hand-back for the send at the Enter that starts the
    * wait, not when the wait ends: a press during it calls the hand-back off.
@@ -155,6 +162,17 @@ export function useVoiceWaitSubmit({
   useEffect(() => {
     projectIdRef.current = projectId;
   }, [projectId]);
+  // The draft dictation into this composer writes, read when it's needed: a
+  // terminal's follows the current project, Canopy's reply keeps its own.
+  const voiceDraftNow = useCallback(
+    () => ({
+      panelId: voiceId,
+      projectId: ownVoice
+        ? voiceProjectId
+        : (projectIdRef.current ?? useProjectStore.getState().currentProject?.id),
+    }),
+    [voiceId, ownVoice, voiceProjectId]
+  );
 
   // Each Enter is its own attempt, and only the active one may send or unlock
   // the composer: after Escape and a second Enter, the first continuation
@@ -219,6 +237,11 @@ export function useVoiceWaitSubmit({
 
       // Before the lock below, so a press during the wait counts against it.
       const handBack = claimSendHandBackRef.current?.();
+      // Read before the stop: a dictation started on this panel while the
+      // send waits is the next prompt's, and none of its words go with this
+      // one (#14804).
+      const target = voiceDraftNow();
+      const sessions = voiceRecordingService.sendSessions(target.panelId, target.projectId);
       store.setVoiceSubmitting(voiceId, true);
       setVoiceSubmitWait({ attempt, phase: "finishing", startedAt: performance.now() });
 
@@ -285,15 +308,23 @@ export function useVoiceWaitSubmit({
           // waits for it to land or fail, as long as its request takes, unless
           // a second Enter, even one while the transcript was finishing, says
           // to send what stands; the send drops what is still on its way
-          // (#14611, #14780).
-          if (!controller.signal.aborted && voiceRecordingService.hasPendingCorrection(voiceId)) {
+          // (#14611, #14780). A newer session's cleanup is neither waited for
+          // nor dropped.
+          if (
+            !controller.signal.aborted &&
+            voiceRecordingService.hasPendingCorrection(voiceId, sessions)
+          ) {
             setVoiceSubmitWait({
               attempt,
               phase: "polishing",
               startedAt: performance.now(),
-              expectedAt: voiceRecordingService.expectedCorrectionLanding(voiceId),
+              expectedAt: voiceRecordingService.expectedCorrectionLanding(voiceId, sessions),
             });
-            await voiceRecordingService.waitForPendingCorrections(voiceId, controller.signal);
+            await voiceRecordingService.waitForPendingCorrections(
+              voiceId,
+              controller.signal,
+              sessions
+            );
             if (!isCurrentAttempt()) return;
           }
 
@@ -331,8 +362,14 @@ export function useVoiceWaitSubmit({
             }
           }
 
-          if (options?.spoken && !isSpokenSendable(draft)) return;
-          sent = sendFromEditorRef.current(handBack) ?? true;
+          const voiceSend = planVoiceDraftSend(
+            voiceDraftNow(),
+            draft,
+            useDictationRangeStore.getState().listDictations(terminalId, projectId),
+            sessions
+          );
+          if (options?.spoken && !isSpokenSendable(voiceSend.text)) return;
+          sent = sendFromEditorRef.current(handBack, voiceSend) ?? true;
         } finally {
           releaseKeys();
           if (activeWaitRef.current?.controller === controller) activeWaitRef.current = null;
@@ -356,7 +393,14 @@ export function useVoiceWaitSubmit({
         }
       })();
     },
-    [terminalId, voiceId, editorViewRef, editableCompartmentRef, cancelVoiceWaitSubmit]
+    [
+      terminalId,
+      voiceId,
+      voiceDraftNow,
+      editorViewRef,
+      editableCompartmentRef,
+      cancelVoiceWaitSubmit,
+    ]
   );
 
   useEffect(

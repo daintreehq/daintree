@@ -83,18 +83,21 @@ function locateDictatedText(
  * being sent. Taken before the send awaits anything: a dictation that finishes
  * meanwhile writes a newer baseline, and this draft must not be diffed against
  * it. A draft under another key (an isolated composer on the same terminal)
- * isn't the one the passage was dictated into.
+ * isn't the one the passage was dictated into, and a session the send doesn't
+ * take (`sessions`) dictated words that aren't in it.
  */
 function takeCorrectionSnapshot(
   panelId: string,
   projectId: string | undefined,
-  text: string
+  text: string,
+  sessions: ReadonlySet<string> | undefined
 ): CorrectionSnapshot | null {
   try {
     const buffer = useVoiceRecordingStore.getState().panelBuffers[panelId];
     const baseline = buffer?.sessionCorrectedText;
     const sessionId = buffer?.dictationSessionId;
     if (!baseline || !sessionId || buffer.projectId !== projectId) return null;
+    if (sessions && !sessions.has(sessionId)) return null;
     const span = locateDictatedText(panelId, projectId, sessionId, text);
     if (!span) return null;
     return {
@@ -226,6 +229,16 @@ export interface SendTextOptions {
    */
   isDraftUnchanged?: () => boolean;
   /**
+   * Leaves the editor and the draft store with what the send held back,
+   * instead of clearing them, once `isDraftUnchanged` agrees.
+   */
+  keepDraft?: () => void;
+  /**
+   * The dictation sessions whose words a dictated send takes; learning only
+   * diffs what one of them dictated.
+   */
+  dictationSessions?: ReadonlySet<string>;
+  /**
    * Handed what the pane's `onSend` returned — a promise of whether the
    * terminal accepted the text, from a host that can say — once the composer
    * has been reset after the send. Not called when `submit` replaces the
@@ -324,7 +337,8 @@ export function useTokenResolution({
         const correctionSnapshot = takeCorrectionSnapshot(
           voiceId,
           ownVoice ? voiceProjectId : latest.projectId,
-          text
+          text,
+          options?.dictationSessions
         );
         const terminalTokens = expandContext ? getAllAtTerminalTokens(text) : [];
         const selectionTokens = expandContext ? getAllAtSelectionTokens(text) : [];
@@ -439,11 +453,15 @@ export function useTokenResolution({
         // since opened would be the same overreach as deleting their text.
         if (options?.isDraftUnchanged?.() ?? true) {
           setIsExpanded(false);
-          applyEditorValue("", {
-            selection: EditorSelection.create([EditorSelection.cursor(0)]),
-            resetHistory: true,
-          });
-          latest.clearDraftInput(latest.terminalId, latest.projectId);
+          if (options?.keepDraft) {
+            options.keepDraft();
+          } else {
+            applyEditorValue("", {
+              selection: EditorSelection.create([EditorSelection.cursor(0)]),
+              resetHistory: true,
+            });
+            latest.clearDraftInput(latest.terminalId, latest.projectId);
+          }
           setActiveCompletionContext(null);
         }
         if (!options?.submit) options?.onHandedOff?.(accepted);

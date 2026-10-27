@@ -192,6 +192,13 @@ interface DictationRangeState {
     write: (next: string) => void,
     heardSwaps?: ReadonlyMap<string, readonly DictationWordEdit[]>
   ) => void;
+  /**
+   * Gives up `span`, the space the dictation's first words were written with
+   * after text that is going away: each of its ranges that starts inside it
+   * starts at its end instead, so the write deleting it leaves them as they
+   * were rather than edited.
+   */
+  yieldLeadingSpace: (id: string, span: DictationTextSpan) => void;
   getDictation: (id: string) => DictationRecord | null;
   listDictations: (panelId: string, projectId?: string) => DictationRecord[];
   /** Every live record the voice session wrote, in any draft. */
@@ -213,6 +220,11 @@ const unedited = (span: DictationTextSpan): TrackedTextRange => ({
 
 function sameRange(a: TrackedTextRange, b: TrackedTextRange): boolean {
   return a.from === b.from && a.to === b.to && a.edited === b.edited;
+}
+
+function startAfter<T extends DictationTextSpan>(range: T, span: DictationTextSpan): T {
+  if (range.from < span.from || range.from >= span.to) return range;
+  return { ...range, from: span.to, to: Math.max(range.to, span.to) };
 }
 
 function sameSpan(a: DictationTextSpan | undefined, b: DictationTextSpan | undefined): boolean {
@@ -747,6 +759,24 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
     // The write was mapped like anyone's, which flagged the words it swapped
     // edited. The session wrote them, so the record is the one mapped above.
     set((state) => replaceRecord(state, rewritten));
+  },
+
+  yieldLeadingSpace: (id, span) => {
+    const record = get().getDictation(id);
+    if (!record) return;
+    // An utterance's words never open with a space, and its unsure words are
+    // placed from their start, so they stay where they are.
+    const moved: DictationRecord = {
+      ...record,
+      range: startAfter(record.range, span),
+      utterances: record.utterances.map((utterance) => ({
+        ...utterance,
+        insertion: startAfter(utterance.insertion, span),
+      })),
+      breaks: record.breaks.map((paragraphBreak) => startAfter(paragraphBreak, span)),
+      ...(record.learningSpan ? { learningSpan: startAfter(record.learningSpan, span) } : {}),
+    };
+    set((state) => replaceRecord(state, moved));
   },
 
   getDictation: (id) => {

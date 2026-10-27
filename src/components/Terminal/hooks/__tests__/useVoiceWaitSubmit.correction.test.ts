@@ -68,6 +68,7 @@ import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { subscribeDictationRangeTracking } from "@/store/dictationRangeStore";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
+import type { VoiceDraftSend } from "@/services/voiceDraftSend";
 import { useVoiceWaitSubmit } from "../useVoiceWaitSubmit";
 
 type DeltaPayload = { text: string; itemId?: string };
@@ -197,12 +198,19 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611, #14780)", () =
       parent: document.body,
     });
     // Like the composer's own send: it drops what is still being corrected,
-    // then reads the editor. The submit is still in flight, so the draft stays.
-    // A held send is one the composer refuses (an upload still on its way).
-    const sendFromEditor = vi.fn(() => {
+    // then reads the editor. The submit is still in flight, so the draft stays,
+    // unless the send holds back a newer dictation's words: those are all it
+    // leaves. A held send is one the composer refuses (an upload still on its
+    // way).
+    const sendFromEditor = vi.fn((_handBack?: unknown, voiceSend?: VoiceDraftSend) => {
       if (options.holdSend) return;
-      voiceRecordingService.discardPendingCorrections(PANEL_ID);
-      sent.push(view.state.doc.toString());
+      voiceRecordingService.discardPendingCorrections(PANEL_ID, voiceSend?.sessions);
+      const doc = view.state.doc.toString();
+      const split = voiceSend?.kept && voiceSend.draft === doc ? voiceSend : null;
+      sent.push(split?.text ?? doc);
+      if (split && voiceRecordingService.keepHeldBackDictation(split)) {
+        view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: split.kept } });
+      }
     });
     const { result } = renderHook(() =>
       useVoiceWaitSubmit({
@@ -444,6 +452,111 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611, #14780)", () =
       callbacks.complete!({ text: "and the rest", willCorrect: false, itemId: "item-late" });
     });
     expect(draft(PANEL_ID)).toBe("these are the next prompt and the rest");
+  });
+
+  it("doesn't wait for a dictation started and stopped during the wait, and its cleanup lands on what it kept", async () => {
+    const pending = deferred<CorrectResult>();
+    const later = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise).mockReturnValueOnce(later.promise);
+    dictate(PANEL_ID, "hello wrld");
+    const result = renderComposer();
+
+    await act(async () => {
+      result.current.startVoiceWaitSubmit();
+    });
+    await act(async () => {
+      dictate(PANEL_ID, "the nxt prompt");
+      await voiceRecordingService.stop();
+    });
+    expect(correct).toHaveBeenLastCalledWith(expect.objectContaining({ rawText: "the nxt prompt" }));
+
+    await act(async () => {
+      pending.resolve({ action: "replace", correctedText: "Hello world." });
+    });
+    expect(sent).toEqual(["Hello world."]);
+    expect(draft(PANEL_ID)).toBe("the nxt prompt");
+
+    await act(async () => {
+      later.resolve({ action: "replace", correctedText: "The next prompt." });
+    });
+    expect(draft(PANEL_ID)).toBe("The next prompt.");
+    expect(sent).toEqual(["Hello world."]);
+  });
+
+  it("keeps a newer dictation's words out of the send when its cleanup lands first", async () => {
+    const pending = deferred<CorrectResult>();
+    const later = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise).mockReturnValueOnce(later.promise);
+    dictate(PANEL_ID, "hello wrld");
+    const result = renderComposer();
+
+    await act(async () => {
+      result.current.startVoiceWaitSubmit();
+    });
+    await act(async () => {
+      dictate(PANEL_ID, "the nxt prompt");
+      await voiceRecordingService.stop();
+    });
+    await act(async () => {
+      later.resolve({ action: "replace", correctedText: "The next prompt." });
+    });
+    expect(draft(PANEL_ID)).toBe("hello wrld The next prompt.");
+    expect(sent).toEqual([]);
+
+    await act(async () => {
+      pending.resolve({ action: "replace", correctedText: "Hello world." });
+    });
+    expect(sent).toEqual(["Hello world."]);
+    expect(draft(PANEL_ID)).toBe("The next prompt.");
+  });
+
+  it("sends only what the stopped dictation left at a second Enter, keeping the newer one's words", async () => {
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+    dictate(PANEL_ID, "hello wrld");
+    const result = renderComposer();
+
+    await act(async () => {
+      result.current.startVoiceWaitSubmit();
+    });
+    act(() => {
+      dictate(PANEL_ID, "these are the next prompt");
+    });
+    await act(async () => {
+      pressKey("Enter");
+    });
+
+    expect(sent).toEqual(["hello wrld"]);
+    expect(draft(PANEL_ID)).toBe("these are the next prompt");
+    await act(async () => {
+      pending.resolve({ action: "replace", correctedText: "Hello world." });
+    });
+    expect(draft(PANEL_ID)).toBe("these are the next prompt");
+  });
+
+  it("lets Escape take back a newer dictation it held back, as if nothing came before it", async () => {
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+    dictate(PANEL_ID, "hello wrld");
+    const result = renderComposer();
+
+    await act(async () => {
+      result.current.startVoiceWaitSubmit();
+    });
+    act(() => {
+      dictate(PANEL_ID, "these are the next prompt");
+    });
+    await act(async () => {
+      pending.resolve({ action: "replace", correctedText: "Hello world." });
+    });
+    expect(draft(PANEL_ID)).toBe("these are the next prompt");
+
+    // The space it was written with went with the sent prompt, and none of
+    // its words count as edited for it.
+    await act(async () => {
+      expect(voiceRecordingService.handleEscape(PANEL_ID)).toBe(true);
+    });
+    expect(draft(PANEL_ID)).toBe("");
   });
 
   it("lets the correction land in the draft when Escape cancels the send", async () => {
