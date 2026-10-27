@@ -232,6 +232,33 @@ describe("VoiceInputSettingsTab correction prerequisites", () => {
     expect(cleanup.textContent).not.toMatch(/Deepgram/);
   });
 
+  it("saves the cleanup key and turns cleanup's options on while another provider transcribes", async () => {
+    const setSettings = vi.fn().mockResolvedValue(undefined);
+    install(
+      { transcriptionProvider: "deepgram", deepgramApiKey: "dg_1", correctionEnabled: true },
+      { setSettings }
+    );
+    const { container } = render(<VoiceInputSettingsTab />);
+
+    const fileRefs = await screen.findByRole("switch", { name: "Resolve file references" });
+    expect(fileRefs.hasAttribute("disabled")).toBe(true);
+    const input = await waitFor(() => {
+      const el = container.querySelector<HTMLInputElement>(
+        "#voice-ai-correction #voice-stt-openai-key input"
+      );
+      if (!el) throw new Error("no cleanup key input yet");
+      return el;
+    });
+    expect(input.hasAttribute("disabled")).toBe(false);
+    fireEvent.change(input, { target: { value: "sk-proj-cleanupkey123" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() =>
+      expect(setSettings).toHaveBeenCalledWith({ openaiApiKey: "sk-proj-cleanupkey123" })
+    );
+    await waitFor(() => expect(fileRefs.hasAttribute("disabled")).toBe(false));
+  });
+
   it("says one OpenAI key covers both sections when OpenAI transcribes", async () => {
     install({ openaiApiKey: "sk-proj-abc1234", correctionEnabled: true });
     const { container } = render(<VoiceInputSettingsTab />);
