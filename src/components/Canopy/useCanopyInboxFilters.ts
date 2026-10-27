@@ -12,12 +12,7 @@ import { isProjectViewCached } from "@/lib/viewCacheState";
 import { useAgentDirectory } from "@/hooks/useAgentDirectory";
 import { useAssistantWork } from "@/hooks/useAssistantWork";
 import type { HostMenuRow } from "@/components/Hosts/hostModel";
-import {
-  itemNeedsAttention,
-  unmatchedTerms,
-  type CanopyInbox,
-  type CanopyItem,
-} from "./canopyModel";
+import { unmatchedTerms, type CanopyInbox, type CanopyItem } from "./canopyModel";
 import {
   assistantMatches,
   buildAssistantItems,
@@ -62,6 +57,7 @@ export function useCanopyInboxFilters({
   recoveries,
   fleet,
   inbox,
+  band,
   query,
   appliedQuery,
   terms,
@@ -90,6 +86,8 @@ export function useCanopyInboxFilters({
   recoveries: number;
   fleet: FleetSnapshot | null;
   inbox: CanopyInbox;
+  /** Who sits in the Needs you band, held with the order. */
+  band: ReadonlySet<string>;
   query: string;
   appliedQuery: string;
   terms: string[];
@@ -224,17 +222,17 @@ export function useCanopyInboxFilters({
         : shownInbox.inbox,
     [unreadOnly, shownInbox, keptUnread]
   );
-  // The runs that need the user lead, each group in rank order: the Needs you band, then the rest.
+  // The Needs you band leads, each group in rank order, then the rest.
   const { listed, bandSize } = useMemo(() => {
-    const band = filtered.filter(itemNeedsAttention);
-    if (band.length === 0 || band.length === filtered.length) {
-      return { listed: filtered, bandSize: band.length };
+    const members = filtered.filter((item) => band.has(item.runId));
+    if (members.length === 0 || members.length === filtered.length) {
+      return { listed: filtered, bandSize: members.length };
     }
     return {
-      listed: [...band, ...filtered.filter((item) => !itemNeedsAttention(item))],
-      bandSize: band.length,
+      listed: [...members, ...filtered.filter((item) => !band.has(item.runId))],
+      bandSize: members.length,
     };
-  }, [filtered]);
+  }, [filtered, band]);
   const archivedExpanded = useCanopyStore((s) => s.archivedExpanded);
   const setArchivedExpanded = useCanopyStore((s) => s.setArchivedExpanded);
   // A search finds archived runs too, shown under their bar without unfolding it for good.
@@ -262,6 +260,7 @@ export function useCanopyInboxFilters({
       projectCanopyInbox({
         ownHostId,
         workers: inbox.inbox,
+        band,
         assistants: assistantItems,
         listedWorkers: listed,
         shownAssistants,
@@ -273,6 +272,7 @@ export function useCanopyInboxFilters({
       ownHostId,
       hostId,
       inbox,
+      band,
       assistantItems,
       listed,
       shownAssistants,

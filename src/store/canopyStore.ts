@@ -331,10 +331,10 @@ function storedIds(value: unknown): string[] | null {
 
 /**
  * Ranked for no scan this view has seen, so the open places it afresh by what
- * is known now, starting from the order it was left in.
+ * is known now, starting from the order it was left in — the band too.
  */
 function unranked(ids: string[]): CanopyOrder {
-  return { ids, rankedFor: null, urgent: [] };
+  return { ids, rankedFor: null, urgent: [], band: [] };
 }
 
 /** Where a host's stored order came from: its own slot, or, for this machine, the old one. */

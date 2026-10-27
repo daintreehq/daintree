@@ -1,20 +1,24 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useCanopyStore, type CanopyScope } from "@/store/canopyStore";
 import { CANOPY_URGENT_PRIORITY, type CanopySnapshot } from "@shared/types/ipc/canopy";
-import { itemPriority, itemPutAside, splitInbox, type CanopyItem } from "./canopyModel";
+import {
+  itemArchived,
+  itemAwaitsPermission,
+  itemNeedsAttention,
+  itemPriority,
+  itemPutAside,
+  splitInbox,
+  type CanopyItem,
+} from "./canopyModel";
 import { CANOPY_REVEAL_MS, canopyReorderWaiting, nextCanopyOrder } from "./canopyOrder";
 import type { HostId } from "@shared/types/remoteHosts";
 
-/** An ask that pages the user: placed in the list at once, whatever is held. */
+/** An ask that pages the user: placed in the list, and in the band, at once, whatever is held. */
 function isUrgentItem(item: CanopyItem): boolean {
+  // Daintree itself sees an approval dialog: the ask that pages, whatever a
+  // reading from before it said.
+  if (itemAwaitsPermission(item)) return true;
   const card = item.card;
-  // Observed alone, an approval dialog is the ask that pages.
-  if (card === null) {
-    const run = item.row.run;
-    return (
-      run.agentState === "waiting" && run.waitingReason === "approval" && item.disposition === null
-    );
-  }
   return (
     card !== null &&
     !itemPutAside(item) &&
@@ -28,7 +32,8 @@ function isUrgentItem(item: CanopyItem): boolean {
  * The inbox in the order the user sees it: revealed as the open's readings
  * land, then moved only at moments they can expect (`nextCanopyOrder`). Owns
  * what holds the list still — a press in the panel, the pointer over the list,
- * a row's open menu — and takes the panel's requests to rank it now.
+ * a row's open menu — and takes the panel's requests to rank it now. The Needs
+ * you band is held with it, and never loses the run the panel has selected.
  */
 export function useCanopyInboxOrder({
   isOpen,
@@ -121,71 +126,96 @@ export function useCanopyInboxOrder({
   const rankRequestSeenRef = useRef(0);
   // A reorder the list is holding back, which the user can apply now.
   const [reorderWaiting, setReorderWaiting] = useState(false);
-  useLayoutEffect(() => {
-    if (!isOpen) {
-      openedRef.current = false;
-      setReorderWaiting(false);
-      return;
-    }
-    if (baseItems.length === 0) {
-      setReorderWaiting(false);
-      return;
-    }
-    const now = Date.now();
-    const opening = !openedRef.current || orderKeyRef.current !== orderKey;
-    if (opening) {
-      openedRef.current = true;
-      orderKeyRef.current = orderKey;
-      // What the user sees on opening counts as just ranked.
-      lastRankRef.current = now;
-    }
-    const fresh = baseItems.map((item) => item.runId);
-    const priorities = new Map(baseItems.map((item) => [item.runId, itemPriority(item, nowMs)]));
-    const step = nextCanopyOrder(order, {
-      fresh,
-      priorities,
-      urgent: baseItems.filter(isUrgentItem).map((item) => item.runId),
-      refreshedAt,
-      now,
-      opening,
-      revealing: !revealed,
-      requested: rankRequest !== rankRequestSeenRef.current,
-      pressing: pressingRef.current || menuOpenRef.current,
-      pointerInList,
-      lastInteractionAt: lastInteractionRef.current,
-      lastRankAt: lastRankRef.current,
-    });
-    // A run arriving or an ask promoted leaves the held reorder held: still waiting.
-    const shown = step.kind !== "set" ? order : step.ranked ? null : step.order;
-    setReorderWaiting(canopyReorderWaiting(shown, { fresh, priorities, refreshedAt }));
-    if (step.kind === "set") {
-      if (step.ranked) {
-        lastRankRef.current = now;
-        rankRequestSeenRef.current = rankRequest;
+  const needsYou = useMemo(
+    () => baseItems.filter(itemNeedsAttention).map((item) => item.runId),
+    [baseItems]
+  );
+  // Called by the panel once it knows what it selects in this render, so a
+  // rank never pins the run selected before; again on `orderWake`.
+  const placeOrder = useCallback(
+    (selected: string | null): (() => void) | undefined => {
+      if (!isOpen) {
+        openedRef.current = false;
+        setReorderWaiting(false);
+        return;
       }
-      if (hostId === null) setOrder(scope, step.order);
-      else setHostOrder(hostId, step.order);
-      return;
-    }
-    if (step.kind === "hold") return;
-    const timer = setTimeout(() => setRankWake((n) => n + 1), step.ms);
-    return () => clearTimeout(timer);
-  }, [
-    isOpen,
-    scope,
-    hostId,
-    orderKey,
-    baseItems,
-    order,
-    setOrder,
-    setHostOrder,
-    refreshedAt,
-    pointerInList,
-    rankWake,
-    rankRequest,
-    revealed,
-    nowMs,
-  ]);
+      if (baseItems.length === 0) {
+        setReorderWaiting(false);
+        return;
+      }
+      const now = Date.now();
+      const opening = !openedRef.current || orderKeyRef.current !== orderKey;
+      if (opening) {
+        openedRef.current = true;
+        orderKeyRef.current = orderKey;
+        // What the user sees on opening counts as just ranked.
+        lastRankRef.current = now;
+      }
+      const fresh = baseItems.map((item) => item.runId);
+      const priorities = new Map(baseItems.map((item) => [item.runId, itemPriority(item, nowMs)]));
+      const archived = baseItems.filter(itemArchived).map((item) => item.runId);
+      // Opening, or showing another scope or host: a selection from the list
+      // before pins nothing here.
+      const pinned = opening ? null : selected;
+      const step = nextCanopyOrder(order, {
+        fresh,
+        priorities,
+        urgent: baseItems.filter(isUrgentItem).map((item) => item.runId),
+        needsYou,
+        selected: pinned,
+        archived,
+        refreshedAt,
+        now,
+        opening,
+        revealing: !revealed,
+        requested: rankRequest !== rankRequestSeenRef.current,
+        pressing: pressingRef.current || menuOpenRef.current,
+        pointerInList,
+        lastInteractionAt: lastInteractionRef.current,
+        lastRankAt: lastRankRef.current,
+      });
+      // A run arriving or an ask promoted leaves the held reorder held: still waiting.
+      const shown = step.kind !== "set" ? order : step.ranked ? null : step.order;
+      setReorderWaiting(
+        canopyReorderWaiting(shown, {
+          fresh,
+          priorities,
+          refreshedAt,
+          needsYou,
+          selected: pinned,
+          archived,
+        })
+      );
+      if (step.kind === "set") {
+        if (step.ranked) {
+          lastRankRef.current = now;
+          rankRequestSeenRef.current = rankRequest;
+        }
+        if (hostId === null) setOrder(scope, step.order);
+        else setHostOrder(hostId, step.order);
+        return;
+      }
+      if (step.kind === "hold") return;
+      const timer = setTimeout(() => setRankWake((n) => n + 1), step.ms);
+      return () => clearTimeout(timer);
+    },
+    [
+      isOpen,
+      scope,
+      hostId,
+      orderKey,
+      baseItems,
+      needsYou,
+      order,
+      setOrder,
+      setHostOrder,
+      refreshedAt,
+      pointerInList,
+      rankRequest,
+      revealed,
+      nowMs,
+    ]
+  );
   const items = useMemo(() => {
     const ranks = new Map((order?.ids ?? []).map((id, index) => [id, index]));
     const rankOf = (item: CanopyItem, index: number) => ranks.get(item.runId) ?? ranks.size + index;
@@ -195,6 +225,13 @@ export function useCanopyInboxOrder({
       .map(({ item }) => item);
   }, [baseItems, order]);
   const inbox = useMemo(() => splitInbox(items), [items]);
+  // Who sits in the Needs you band: as held with the order, or before there is
+  // one, who needs the user now.
+  const heldBand = order?.band ?? null;
+  const band = useMemo<ReadonlySet<string>>(
+    () => new Set(heldBand ?? needsYou),
+    [heldBand, needsYou]
+  );
   const bodyRef = useRef<HTMLDivElement>(null);
   // Anything the user does in the panel holds the list still for a while, and
   // a press holds it until it is let go.
@@ -263,6 +300,7 @@ export function useCanopyInboxOrder({
   return {
     items,
     inbox,
+    band,
     owedOnOpen,
     revealed,
     reorderWaiting,
@@ -273,5 +311,8 @@ export function useCanopyInboxOrder({
     listHidden,
     menuOpenChanged,
     requestRank,
+    placeOrder,
+    // The wait a placement asked for is up, or a press or a menu let go: place it again.
+    orderWake: rankWake,
   };
 }

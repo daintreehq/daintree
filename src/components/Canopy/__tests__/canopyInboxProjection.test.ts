@@ -4,7 +4,13 @@ import type { CanopyCard, CanopyReadMark } from "@shared/types/ipc/canopy";
 import type { AgentDirectory, AgentDirectoryLiveEntry } from "@shared/types/agentDirectory";
 import { buildPilotGroups, type PilotRowContext } from "@/components/Pilot/pilotRows";
 import { ALL_HOSTS_ID } from "@/store/canopyStore";
-import { buildCanopyInbox, itemPriority, splitInbox, type CanopyItem } from "../canopyModel";
+import {
+  buildCanopyInbox,
+  itemNeedsAttention,
+  itemPriority,
+  splitInbox,
+  type CanopyItem,
+} from "../canopyModel";
 import { buildAssistantItems, type CanopyAssistantItem } from "../canopyAssistants";
 import { allHostsKey } from "../canopyAllHosts";
 import { placeOf } from "../canopyInboxPlace";
@@ -158,6 +164,8 @@ function project(
   return projectCanopyInbox({
     ownHostId: OWN,
     workers: inbox,
+    // As a rank would hold it now.
+    band: new Set(inbox.filter(itemNeedsAttention).map((item) => item.runId)),
     assistants: helpers,
     listedWorkers: inbox,
     shownAssistants: helpers,
@@ -203,6 +211,7 @@ describe("projectCanopyInbox", () => {
     const single = projectCanopyInbox({
       ownHostId: OWN,
       workers: own,
+      band: new Set(),
       assistants: [],
       listedWorkers: own,
       shownAssistants: [],
@@ -354,6 +363,41 @@ describe("projectCanopyInbox", () => {
     expect(local().navigation.at(-1)!.key).toBe(JSON.stringify(["worker", OWN, "gone"]));
     expect(local({ shownArchived: [] }).navigation).toHaveLength(3);
     expect(local().inbox.some((entry) => entry.key.includes("gone"))).toBe(false);
+  });
+
+  it("counts a worker only while the held band has it and it still needs the user", () => {
+    const items = buildCanopyInbox(
+      buildPilotGroups(
+        [
+          run("replied", approval),
+          run("crossed", { agentState: "waiting", waitingReason: "question" }),
+          run("held", approval),
+        ],
+        ctx
+      ),
+      new Map(),
+      undefined,
+      new Map([["replied", { runId: "replied", spawnedAt: SPAWNED, kind: "replied", at: NOW }]])
+    );
+    const listed = ["crossed", "replied", "held"].map((id) =>
+      items.find((item) => item.runId === id)!
+    );
+    // Held in the band after a reply, and newly over the floor while the band holds.
+    const projection = project(items, [], {
+      band: new Set(["replied", "held"]),
+      listedWorkers: listed,
+      workerPlace: (item) => placeOf(item, null, OWN),
+    });
+
+    expect(projection.needsYou.map((entry) => entry.key)).toEqual([
+      JSON.stringify(["worker", OWN, "held"]),
+    ]);
+    // The band draws what it holds, replied or not; the crossed run waits below it.
+    expect(projection.navigation.map((entry) => entry.key)).toEqual([
+      JSON.stringify(["worker", OWN, "replied"]),
+      JSON.stringify(["worker", OWN, "held"]),
+      JSON.stringify(["worker", OWN, "crossed"]),
+    ]);
   });
 
   it("hands back the same entry for a run in every list it is in", () => {
