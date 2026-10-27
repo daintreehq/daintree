@@ -138,14 +138,30 @@ const SPEECH_BACKSTOP = "vad-speech";
 
 // The pause a commit closed its segment at: the VAD hearing speech end, or a
 // short gap inside speech. Null for a cut anywhere else: the cap, the blind
-// cadence, a paragraph boundary, a stop.
-type SegmentPause = "speech-end" | "gap" | null;
+// cadence, a paragraph boundary, a stop. A speech end reported where a cut was
+// already held still ends what was said for break commands, as it always has,
+// but the cut stays no pause.
+type SegmentPause = "speech-end" | "gap" | "speech-end-at-cut" | null;
 
 function segmentPause(reason: string): SegmentPause {
   if (reason === VAD_PAUSE_COMMIT) return "speech-end";
   if (reason === VAD_GAP_COMMIT) return "gap";
   return null;
 }
+
+/** Two boundaries asked for at one point in the held audio, made one commit. */
+function mergedPause(held: SegmentPause, next: SegmentPause): SegmentPause {
+  if (held === null) return next === "speech-end" ? "speech-end-at-cut" : null;
+  return held === "gap" && next === "speech-end" ? "speech-end" : held;
+}
+
+/** It ends what was said, for break commands. */
+const endsAtPause = (pause: SegmentPause | undefined) =>
+  pause === "speech-end" || pause === "speech-end-at-cut";
+
+/** The speaker paused there, for cleanup. */
+const isSpokenPause = (pause: SegmentPause | undefined) =>
+  pause === "speech-end" || pause === "gap";
 // Recent audio retained to replay after an `input_audio_buffer.clear` on speech
 // onset, so clearing the stale (silent) buffer doesn't also clip the start of
 // the utterance the VAD just detected. ~300ms at 24kHz mono PCM16 (48 B/ms).
@@ -482,7 +498,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   // speech-end pause ends what was said even when the speaker goes on before
   // its transcript lands; a backstop commit cuts mid-speech.
   private commitPauses: SegmentPause[] = [];
-  private itemPauses = new Map<string, "speech-end" | "gap">();
+  private itemPauses = new Map<string, Exclude<SegmentPause, null>>();
   private replayTail: ArrayBuffer[] = [];
   private replayTailBytes = 0;
   private replayTailFallback: ReplayFallback | undefined;
@@ -1556,10 +1572,10 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       this.itemPauses.delete(itemId);
       this.emitCompletion(transcript, itemId, {
         ...(endOfSpeech ? { endOfSpeech: true } : {}),
-        ...(pause === "speech-end" ? { endsAtPause: true } : {}),
+        ...(endsAtPause(pause) ? { endsAtPause: true } : {}),
         // A gap the speaker went straight on from still paused them. Silence
         // after a cut doesn't make the cut one: only the commit's reason does.
-        ...(pause ? { paused: true } : {}),
+        ...(isSpokenPause(pause) ? { paused: true } : {}),
         // Its transcript never came, so words around it may be missing.
         ...(settled ? { incomplete: true } : {}),
       });
@@ -1845,8 +1861,8 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
           itemId,
           final
             ? {
-                ...(pause === "speech-end" ? { endsAtPause: true } : {}),
-                ...(pause ? { paused: true } : {}),
+                ...(endsAtPause(pause) ? { endsAtPause: true } : {}),
+                ...(isSpokenPause(pause) ? { paused: true } : {}),
               }
             : { incomplete: true }
         );
@@ -2400,7 +2416,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     if (at === 0 && this.replayTailBytes === 0) return false;
     const last = this.heldCommits.at(-1);
     if (last?.at === at) {
-      if (last.pause !== "speech-end" && pause) last.pause = pause;
+      last.pause = mergedPause(last.pause, pause);
       return true;
     }
     this.heldCommits.push({ at, pause });

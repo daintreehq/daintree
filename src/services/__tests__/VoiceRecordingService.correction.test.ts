@@ -1045,6 +1045,34 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
       });
     });
 
+    it("reruns the heard-as rules from the pauses in the words as heard", async () => {
+      dictionary = [
+        { term: "Zustand", heardAs: ["zoo stand"], source: "manual", addedAt: 0 },
+        { term: "nowPlease", heardAs: ["now please"], source: "manual", addedAt: 0 },
+      ];
+      const { service, voiceStore, draft } = await setup();
+      correct.mockResolvedValue({ action: "no_change", correctedText: "" });
+
+      voiceStore.getState().beginSession({ panelId: "panel-1" });
+      // The pause after "and" sits at 15 in the words written and 17 as heard;
+      // the rerun reads the heard ones, since "now please" spans both utterances.
+      complete({
+        text: "add Zustand and now",
+        heard: "add zoo stand and now",
+        itemId: "a",
+        pauses: [15],
+        heardPauses: [17],
+      });
+      complete({ text: "please", itemId: "b" });
+      await service.stop();
+
+      expect(draft("panel-1")).toBe("add Zustand and nowPlease");
+      expect(correct.mock.lastCall?.[0]).toMatchObject({
+        rawText: "add Zustand and nowPlease",
+        pauses: [15],
+      });
+    });
+
     it("marks a pause with no words on the words before it, leaving the live preview alone", async () => {
       const { service, voiceStore, draft } = await setup();
       correct.mockResolvedValue({ action: "no_change", correctedText: "" });

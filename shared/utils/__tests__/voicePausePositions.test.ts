@@ -48,6 +48,15 @@ describe("carryPausePositionsThroughEdits", () => {
     expect(carryPausePositionsThroughEdits([3], [{ from: 3, to: 3, insert: "!" }])).toEqual([3]);
   });
 
+  it("adds up every edit before a pause, and ends one inside a later rewrite at its end", () => {
+    // "use zoo stand and zoo stand" → "use Zustand and Zustand"
+    const both = [
+      { from: 4, to: 13, insert: "Zustand" },
+      { from: 18, to: 27, insert: "Zustand" },
+    ];
+    expect(carryPausePositionsThroughEdits([17, 21, 27], both)).toEqual([15, 23, 23]);
+  });
+
   it("carries a pause past a deletion that ends at it back onto the word before", () => {
     // "fix it um" → "fix it"
     expect(carryPausePositionsThroughEdits([9], [{ from: 6, to: 9, insert: "" }])).toEqual([6]);

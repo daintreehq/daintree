@@ -820,18 +820,20 @@ describe("DeepgramTranscriptionProvider", () => {
     socket.simulateMessage(
       resultsMessage("in the parser.", { is_final: true, speech_final: true })
     );
-    // What CloseStream or Finalize flushes comes back final, never speech_final.
+    const drainPromise = provider.stopGracefully();
+    // What CloseStream flushes comes back final, never speech_final.
     socket.simulateMessage({
       ...resultsMessage("and the lexer", { is_final: true }),
       from_finalize: true,
     });
+    socket.simulateClose(1000);
+    await drainPromise;
 
     expect(completes).toEqual([
       { text: "Fix the bug", paused: false },
       { text: "in the parser.", paused: true },
       { text: "and the lexer", paused: false },
     ]);
-    provider.stop();
   });
 
   // The words already landed; a "send it" among them waits on this.

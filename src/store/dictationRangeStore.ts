@@ -320,20 +320,28 @@ function forgetWordMarks(record: DictationRecord): DictationRecord {
 }
 
 /**
- * `positions` as a field to spread, sorted and each once, or nothing when none
- * follow a word. Given `text`, each first moves back over the space before it.
+ * `positions` sorted and each once, or null when none follow a word. Given
+ * `text`, each first moves back over the space before it.
  */
-function pauseField<K extends "pauses" | "heardPauses">(
-  key: K,
-  positions: readonly number[] | undefined,
-  text?: string
-): Partial<Record<K, number[]>> {
+function placedPauses(positions: readonly number[] | undefined, text?: string): number[] | null {
   const sorted =
     text === undefined
       ? [...new Set(positions)].sort((a, b) => a - b)
       : normalizePausePositions(text, positions ?? []);
   const placed = sorted.filter((at) => at > 0);
-  return placed.length > 0 ? ({ [key]: placed } as Partial<Record<K, number[]>>) : {};
+  return placed.length > 0 ? placed : null;
+}
+
+/** `pauses` to spread onto an utterance, or nothing when there are none. */
+function pausesField(positions: readonly number[] | undefined, text?: string) {
+  const pauses = placedPauses(positions, text);
+  return pauses ? { pauses } : {};
+}
+
+/** `heardPauses` to spread onto an utterance, or nothing when there are none. */
+function heardPausesField(positions: readonly number[] | undefined, text?: string) {
+  const heardPauses = placedPauses(positions, text);
+  return heardPauses ? { heardPauses } : {};
 }
 
 function mapRecord(record: DictationRecord, change: TextChange): DictationRecord {
@@ -428,7 +436,7 @@ function mapOwnEdit(record: DictationRecord, change: TextChange, owner: number):
       return {
         ...rest,
         ...(uncertain.length > 0 ? { uncertain } : {}),
-        ...pauseField("pauses", carryPausePositionsThroughEdits(utterance.pauses ?? [], [edit])),
+        ...pausesField(carryPausePositionsThroughEdits(utterance.pauses ?? [], [edit])),
       };
     }),
     breaks: record.breaks.map(through),
@@ -453,11 +461,7 @@ function withSwappedHeard(
     ...rest,
     heard,
     ...(unsure.length > 0 ? { heardUncertain: unsure } : {}),
-    ...pauseField(
-      "heardPauses",
-      carryPausePositionsThroughEdits(utterance.heardPauses ?? [], edits),
-      heard
-    ),
+    ...heardPausesField(carryPausePositionsThroughEdits(utterance.heardPauses ?? [], edits), heard),
   };
 }
 
@@ -668,12 +672,12 @@ function rewrittenUtterances(
     return {
       ...utterance,
       ...(uncertain.length > 0 ? { uncertain } : {}),
-      ...pauseField("pauses", pauses, written),
+      ...pausesField(pauses, written),
       ...(heard !== written
         ? {
             heard,
             ...(heardUncertain.length > 0 ? { heardUncertain } : {}),
-            ...pauseField("heardPauses", heardPauses, heard),
+            ...heardPausesField(heardPauses, heard),
           }
         : {}),
     };
@@ -781,15 +785,9 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
         ...(heard !== undefined && heardUncertain && heardUncertain.length > 0
           ? { heardUncertain }
           : {}),
-        ...pauseField(
-          "pauses",
-          pauses?.filter((at) => at <= words.to - words.from)
-        ),
+        ...pausesField(pauses?.filter((at) => at <= words.to - words.from)),
         ...(heard !== undefined
-          ? pauseField(
-              "heardPauses",
-              heardPauses?.filter((at) => at <= heard.length)
-            )
+          ? heardPausesField(heardPauses?.filter((at) => at <= heard.length))
           : {}),
         ...(replaced ? { replaced } : {}),
       }),
@@ -801,13 +799,16 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
     const last = record?.utterances[record.utterances.length - 1];
     if (!record || !last || last.range.edited) return false;
     const end = last.range.to - last.range.from;
-    if (end <= 0 || last.pauses?.includes(end)) return false;
+    const heardEnd = last.heard?.length;
+    // Each is checked on its own: a rule can have written the end over a
+    // pause the words as heard put somewhere else.
+    const written = !last.pauses?.includes(end);
+    const heard = heardEnd !== undefined && !last.heardPauses?.includes(heardEnd);
+    if (end <= 0 || (!written && !heard)) return false;
     const marked: DictationUtterance = {
       ...last,
-      ...pauseField("pauses", [...(last.pauses ?? []), end]),
-      ...(last.heard !== undefined
-        ? pauseField("heardPauses", [...(last.heardPauses ?? []), last.heard.length])
-        : {}),
+      ...pausesField([...(last.pauses ?? []), end]),
+      ...(heardEnd !== undefined ? heardPausesField([...(last.heardPauses ?? []), heardEnd]) : {}),
     };
     set((state) =>
       replaceRecord(state, { ...record, utterances: [...record.utterances.slice(0, -1), marked] })
@@ -962,8 +963,8 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
       ...(heard !== text && uncertain && uncertain.heard.length > 0
         ? { heardUncertain: uncertain.heard }
         : {}),
-      ...pauseField("pauses", pauses?.text, text),
-      ...(heard !== text ? pauseField("heardPauses", pauses?.heard, heard) : {}),
+      ...pausesField(pauses?.text, text),
+      ...(heard !== text ? heardPausesField(pauses?.heard, heard) : {}),
       ...(replaced ? { replaced } : {}),
     };
     const delta = end - to;

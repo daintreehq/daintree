@@ -1405,17 +1405,25 @@ describe("GrokTranscriptionProvider", () => {
       expect(pausedOf(events)).toEqual([false]);
     });
 
-    it("still marks a final paused that ended an endpoint before the stop", async () => {
-      const { provider, events } = setup();
-      const socket = await bringSessionReady(provider);
-      for (let i = 0; i < 20; i++) provider.sendAudioChunk(pcm(3_000));
-      const stopPromise = provider.stopGracefully();
-      // In flight when the stop went out: the speaker had gone quiet 0.8s before it.
-      socket.simulateMessage(utteranceFinal("Fix the bug.", 0, 1.2));
-      socket.simulateMessage({ type: "transcript.done", text: "Fix the bug.", duration: 2 });
-      await stopPromise;
-      expect(pausedOf(events)).toEqual([true]);
-    });
+    // 2s of audio went out; the endpoint is 300ms.
+    it.each([
+      [0.25, false],
+      [0.3, true],
+      [0.8, true],
+    ])(
+      "marks a final in flight at the stop paused when it ended %ss before it: %s",
+      async (quiet, paused) => {
+        const { provider, events } = setup();
+        const socket = await bringSessionReady(provider);
+        for (let i = 0; i < 12; i++) provider.sendAudioChunk(pcm(3_000));
+        for (let i = 0; i < 8; i++) provider.sendAudioChunk(pcm(0));
+        const stopPromise = provider.stopGracefully();
+        socket.simulateMessage(utteranceFinal("Fix the bug.", 0, 2 - quiet));
+        socket.simulateMessage({ type: "transcript.done", text: "Fix the bug.", duration: 2 });
+        await stopPromise;
+        expect(pausedOf(events)).toEqual([paused]);
+      }
+    );
 
     it("never marks transcript.done's tail paused", async () => {
       const { provider, events } = setup();

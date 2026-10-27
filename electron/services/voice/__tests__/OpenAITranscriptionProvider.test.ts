@@ -2128,6 +2128,31 @@ describe("OpenAITranscriptionProvider", () => {
       service.stop();
     });
 
+    // #14897: the cut is where the commit closed; a speech end on it ends what
+    // was said for commands, as before, but makes the cut no pause.
+    it("keeps a cap cut held while connecting out of the pauses when speech ends on it", async () => {
+      const service = new OpenAITranscriptionProvider({ maxSegmentMs: 8_000 });
+      const events: VoiceTranscriptionEvent[] = [];
+      service.onEvent((e) => events.push(e));
+      const { socket, worker } = await startConnecting(service);
+      for (let i = 0; i < 3; i++) service.sendAudioChunk(chunk());
+      worker.emitSpeechStart();
+      vi.advanceTimersByTime(8_000);
+      worker.emitSpeechEnd();
+      becomeReady(socket);
+      expect(types(socket).filter((t) => t === "input_audio_buffer.commit")).toHaveLength(1);
+
+      socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+      socket.simulateMessage("conversation.item.input_audio_transcription.completed", {
+        item_id: "item-A",
+        transcript: "fix the leak",
+      });
+      const [complete] = events.filter((e) => e.type === "complete");
+      expect(complete).toMatchObject({ text: "fix the leak", endsAtPause: true });
+      expect(complete).not.toHaveProperty("paused");
+      service.stop();
+    });
+
     it("never lets a speech-end heard while connecting clear the next utterance", async () => {
       const service = new OpenAITranscriptionProvider();
       const { socket, worker } = await startConnecting(service);
@@ -5447,6 +5472,53 @@ describe("OpenAITranscriptionProvider — recovery window (#14796)", () => {
       transcript: "replayed",
     });
     expect(events.some((e) => e.type === "complete" && e.text === "replayed")).toBe(true);
+    service.stop();
+  });
+
+  it("replays a gap's pause and a cap's cut as each was committed", async () => {
+    const service = new OpenAITranscriptionProvider({ minSegmentMs: 4_000, maxSegmentMs: 8_000 });
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+    const { socket } = await bringSessionReady(service);
+    const vad = latestVadWorker();
+    vad.emitSpeechStart();
+    service.sendAudioChunk(chunk(1));
+    vi.advanceTimersByTime(4_000);
+    vad.emitPause();
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    service.sendAudioChunk(chunk(2));
+    vi.advanceTimersByTime(8_000);
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-B" });
+
+    const message = "Your session hit the maximum duration of 60 minutes.";
+    socket.simulateMessage("error", {
+      error: { type: "invalid_request_error", code: "session_expired", message, param: null },
+    });
+    socket.simulateClose(1001, Buffer.from(message));
+    const renewed = nextAttemptSucceeds();
+
+    expect(wire(renewed)).toEqual([1, "commit", 2, "commit"]);
+    renewed.simulateMessage("input_audio_buffer.committed", { item_id: "item-C" });
+    renewed.simulateMessage("input_audio_buffer.committed", { item_id: "item-D" });
+    renewed.simulateMessage("conversation.item.input_audio_transcription.completed", {
+      item_id: "item-C",
+      transcript: "fix the leak",
+    });
+    renewed.simulateMessage("conversation.item.input_audio_transcription.completed", {
+      item_id: "item-D",
+      transcript: "in the parser",
+    });
+    expect(
+      events.flatMap((e) =>
+        // The expired session's items retire empty; the replay's carry the words.
+        e.type === "complete" && e.text
+          ? [{ text: e.text, endsAtPause: e.endsAtPause === true, paused: e.paused === true }]
+          : []
+      )
+    ).toEqual([
+      { text: "fix the leak", endsAtPause: false, paused: true },
+      { text: "in the parser", endsAtPause: false, paused: false },
+    ]);
     service.stop();
   });
 

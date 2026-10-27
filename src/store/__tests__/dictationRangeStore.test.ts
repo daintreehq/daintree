@@ -476,8 +476,9 @@ describe("dictationRangeStore", () => {
       expect(only().utterances.every((utterance) => !utterance.pauses)).toBe(true);
     });
 
-    it("keeps a pause after words a file link swaps at the end of the link", () => {
+    it("keeps a pause after words a file link swaps at the end of the link, and the next utterance's where it was", () => {
       dictate("fix the padding, link to the router", target, undefined, [16, 35]);
+      dictate("and test", target, undefined, [8]);
       const from = draft().indexOf("link to the router");
       useDictationRangeStore
         .getState()
@@ -486,8 +487,26 @@ describe("dictationRangeStore", () => {
           [{ from, to: from + "link to the router".length, text: "@a.ts" }],
           (next) => setDraft(next)
         );
-      expect(draft()).toBe("fix the padding, @a.ts");
-      expect(only().utterances[0]!.pauses).toEqual([16, 22]);
+      expect(draft()).toBe("fix the padding, @a.ts and test");
+      expect(only().utterances.map((utterance) => utterance.pauses)).toEqual([[16, 22], [8]]);
+    });
+
+    it("adds the heard end of the latest words when only their written end was marked", () => {
+      // "/review" written for "Slash. review": the pause after "Slash." sits
+      // inside the heard words, and only the written end is marked yet.
+      const store = useDictationRangeStore.getState();
+      store.expectDraftChange(PANEL, PROJECT, "", "/review", { from: 0, to: 0, insert: "/review" });
+      setDraft("/review");
+      store.recordUtterance(target, {
+        insertion: { from: 0, to: 7 },
+        words: { from: 0, to: 7 },
+        heard: "Slash. review",
+        pauses: [7],
+        heardPauses: [6],
+      });
+      expect(store.markPause(target)).toBe(true);
+      expect(only().utterances[0]).toMatchObject({ pauses: [7], heardPauses: [6, 13] });
+      expect(store.markPause(target)).toBe(false);
     });
   });
 
