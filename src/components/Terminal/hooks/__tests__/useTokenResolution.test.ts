@@ -310,6 +310,30 @@ describe("useTokenResolution.sendText", () => {
     expect(clearDraftInput).toHaveBeenCalledTimes(1);
   });
 
+  it("leaves what a dictated send held back instead of clearing the draft (#14804)", async () => {
+    const { sendText, onSend, applyEditorValue, clearDraftInput } = setup();
+    const keepDraft = vi.fn();
+    await act(async () => {
+      await sendText("Hello world.", { keepDraft });
+    });
+
+    expect(onSend.mock.calls[0]![0].text).toBe("Hello world.");
+    expect(keepDraft).toHaveBeenCalledTimes(1);
+    expect(applyEditorValue).not.toHaveBeenCalled();
+    expect(clearDraftInput).not.toHaveBeenCalled();
+  });
+
+  it("holds nothing back over a draft that changed while the send was out", async () => {
+    const { sendText, clearDraftInput } = setup();
+    const keepDraft = vi.fn();
+    await act(async () => {
+      await sendText("Hello world.", { keepDraft, isDraftUnchanged: () => false });
+    });
+
+    expect(keepDraft).not.toHaveBeenCalled();
+    expect(clearDraftInput).not.toHaveBeenCalled();
+  });
+
   it("sends no image paths for a draft without any", async () => {
     const { sendText, onSend } = setup();
     await act(async () => {
@@ -624,6 +648,38 @@ describe("useTokenResolution dictionary learning", () => {
     expect(setSessionCorrectedText).toHaveBeenCalledWith("t1", null);
     expect(getSettings).not.toHaveBeenCalled();
     expect(setSettings).not.toHaveBeenCalled();
+  });
+
+  it("leaves a newer session's baseline alone on a send that doesn't take it (#14804)", async () => {
+    const recordSuggestions = vi
+      .fn()
+      .mockResolvedValue({ dictionary: [], suggestedDictionary: [] });
+    installElectron({
+      git: { getWorkingDiff: vi.fn() },
+      voiceDictionary: { recordSuggestions },
+    });
+    const setSessionCorrectedText = vi.fn();
+    voiceState.value = {
+      learnFromCorrections: true,
+      panelBuffers: {
+        t1: {
+          sessionCorrectedText: "the nxt prompt",
+          sessionDraftStart: "Hello world. ".length,
+          dictationSessionId: "newer",
+        },
+      },
+      setSessionCorrectedText,
+    };
+    dictated("Hello world. The next prompt.", "The next prompt.", "newer");
+
+    const { sendText, onSend } = setup();
+    await act(async () => {
+      await sendText("Hello world.", { dictationSessions: new Set(["stopped"]) });
+    });
+
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(setSessionCorrectedText).not.toHaveBeenCalled();
+    expect(recordSuggestions).not.toHaveBeenCalled();
   });
 
   it("still sends when main can't be reached", async () => {

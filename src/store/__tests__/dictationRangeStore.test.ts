@@ -1068,6 +1068,71 @@ describe("dictationRangeStore", () => {
       expect(without(spans)).toBe("KeepTyped. ");
     });
   });
+
+  // A send that holds a newer dictation back deletes everything in front of
+  // it, the space it was written with included (#14804).
+  describe("yieldLeadingSpace", () => {
+    const SENT = "Hello world.";
+
+    function dictateAfterSentText(): DictationRecord {
+      setDraft(SENT);
+      dictate("these are");
+      paragraphBreak();
+      dictate("more");
+      return only();
+    }
+
+    function deleteThrough(to: number): void {
+      const before = draft();
+      const after = before.slice(to);
+      useDictationRangeStore
+        .getState()
+        .expectDraftChange(PANEL, PROJECT, before, after, { from: 0, to, insert: "" });
+      setDraft(after);
+    }
+
+    it("leaves the dictation unedited, so it can still be taken back whole", () => {
+      const record = dictateAfterSentText();
+      const space = { from: SENT.length, to: SENT.length + 1 };
+
+      useDictationRangeStore.getState().yieldLeadingSpace(record.id, space);
+      deleteThrough(space.to);
+
+      expect(draft()).toBe("these are\nmore");
+      const kept = only();
+      expect(kept.range).toEqual({ from: 0, to: draft().length, edited: false });
+      expect(kept.utterances.map((u) => [textOf(u.insertion), u.insertion.edited])).toEqual([
+        ["these are", false],
+        ["more", false],
+      ]);
+      expect(dictatedSpans(kept, draft())!.map(textOf)).toEqual(["more", "\n", "these are"]);
+      expect(collectCorrectionPassages(kept, draft()).map((p) => p.text)).toEqual([
+        "these are\nmore",
+      ]);
+    });
+
+    it("is what keeps the delete from flagging it", () => {
+      dictateAfterSentText();
+
+      deleteThrough(SENT.length + 1);
+
+      expect(draft()).toBe("these are\nmore");
+      expect(only().range.edited).toBe(true);
+      expect(dictatedSpans(only(), draft())).toBeNull();
+    });
+
+    it("moves nothing that starts after the space", () => {
+      const record = dictateAfterSentText();
+      const before = only();
+
+      useDictationRangeStore
+        .getState()
+        .yieldLeadingSpace(record.id, { from: SENT.length + 1, to: SENT.length + 2 });
+
+      expect(only().utterances[1]).toEqual(before.utterances[1]);
+      expect(only().breaks).toEqual(before.breaks);
+    });
+  });
 });
 
 describe("insertion anchors (#14634)", () => {

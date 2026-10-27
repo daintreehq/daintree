@@ -8,6 +8,7 @@ import { useTerminalInputStore } from "@/store/terminalInputStore";
 vi.mock("@/services/VoiceRecordingService", () => ({
   voiceRecordingService: {
     stop: vi.fn().mockResolvedValue(undefined),
+    sendSessions: vi.fn(() => new Set<string>()),
     hasPendingCorrection: vi.fn(() => false),
     expectedCorrectionLanding: vi.fn(() => null),
     waitForPendingCorrections: vi.fn().mockResolvedValue(true),
@@ -43,6 +44,9 @@ const stopMock = vi.mocked(voiceRecordingService.stop);
 const hasPendingMock = vi.mocked(voiceRecordingService.hasPendingCorrection);
 const waitMock = vi.mocked(voiceRecordingService.waitForPendingCorrections);
 const onSpokenSendMock = vi.mocked(voiceRecordingService.onSpokenSend);
+const sendSessionsMock = vi.mocked(voiceRecordingService.sendSessions);
+// The sessions the latest send read as it started, which its wait and send take.
+const sessionsTaken = () => sendSessionsMock.mock.results.at(-1)?.value;
 
 const PANEL_ID = "test-panel";
 
@@ -133,7 +137,7 @@ describe("useVoiceWaitSubmit", () => {
       await act(async () => {
         spokenSendHandler()();
       });
-      expect(waitMock).toHaveBeenCalledWith(PANEL_ID, expect.any(AbortSignal));
+      expect(waitMock).toHaveBeenCalledWith(PANEL_ID, expect.any(AbortSignal), sessionsTaken());
       expect(sendFromEditor).not.toHaveBeenCalled();
 
       await act(async () => {
@@ -190,7 +194,10 @@ describe("useVoiceWaitSubmit", () => {
       });
 
       expect(claimSendHandBack).toHaveBeenCalledTimes(1);
-      expect(sendFromEditor).toHaveBeenCalledWith(handBack);
+      expect(sendFromEditor).toHaveBeenCalledWith(
+        handBack,
+        expect.objectContaining({ text: "fix the login bug", kept: "", sessions: sessionsTaken() })
+      );
     });
 
     it("only stops dictation when the composer is disabled", async () => {
@@ -281,7 +288,7 @@ describe("useVoiceWaitSubmit", () => {
       resolveStop();
     });
 
-    expect(sendFromEditor).toHaveBeenCalledWith(handBack);
+    expect(sendFromEditor).toHaveBeenCalledWith(handBack, expect.objectContaining({ kept: "" }));
     expect(claimSendHandBack).toHaveBeenCalledTimes(1);
     view.destroy();
   });
@@ -359,7 +366,7 @@ describe("useVoiceWaitSubmit", () => {
       result.current.startVoiceWaitSubmit();
     });
 
-    expect(waitMock).toHaveBeenCalledWith(PANEL_ID, expect.any(AbortSignal));
+    expect(waitMock).toHaveBeenCalledWith(PANEL_ID, expect.any(AbortSignal), sessionsTaken());
     expect(result.current.voiceSubmitPhase).toBe("polishing");
     expect(sendFromEditor).not.toHaveBeenCalled();
 
@@ -811,7 +818,11 @@ describe("useVoiceWaitSubmit submitFromEditor", () => {
     });
 
     expect(stopMock).not.toHaveBeenCalled();
-    expect(waitMock).toHaveBeenCalledWith("other-panel", expect.any(AbortSignal));
+    expect(waitMock).toHaveBeenCalledWith(
+      "other-panel",
+      expect.any(AbortSignal),
+      sessionsTaken()
+    );
     expect(sendFromEditor).not.toHaveBeenCalled();
 
     await act(async () => {
