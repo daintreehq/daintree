@@ -115,15 +115,32 @@ const DROPPED_PAIRS = new Set([
   "line break",
 ]);
 
-// Cleanup removes filler and merges misheard phrases into one term, so it may
-// drop more words than it adds. Answers and rewrites add words; summaries drop them.
-const MIN_REMOVED_BUDGET = 4;
-const MIN_ADDED_BUDGET = 2;
-const EDIT_BUDGET_RATIO = 0.15;
+/**
+ * How many words a cleanup may drop and add, filler aside: a share of the
+ * passage, with a floor for short ones. Answers and rewrites add words;
+ * summaries drop them.
+ */
+export interface CorrectionGuardLimits {
+  readonly removedRatio: number;
+  readonly addedRatio: number;
+  readonly minRemoved: number;
+  readonly minAdded: number;
+  /**
+   * What else a cleanup that resolved a self-correction or laid out a list
+   * may drop besides the words those allowances cover: a stutter, not a clause.
+   */
+  readonly minAllowanceRemoved: number;
+}
 
-// What else a cleanup that resolved a self-correction or laid out a list may
-// drop besides the words those allowances cover: a stutter, not a clause.
-const MIN_ALLOWANCE_REMOVED_BUDGET = 2;
+// Cleanup removes filler and merges misheard phrases into one term, so it may
+// drop more words than it adds.
+export const CORRECTION_GUARD_LIMITS: CorrectionGuardLimits = {
+  removedRatio: 0.15,
+  addedRatio: 0.15,
+  minRemoved: 4,
+  minAdded: 2,
+  minAllowanceRemoved: 2,
+};
 
 // Phrases a speaker uses to take back what they just said. "no wait" and
 // "scratch that" are set off by punctuation on both sides, so "there is no wait,"
@@ -603,20 +620,30 @@ function missingFrom(source: readonly string[], target: Map<string, number>): nu
   return missing;
 }
 
-function withinBudget(length: number, removed: number, added: number): boolean {
-  const scaled = Math.ceil(length * EDIT_BUDGET_RATIO);
+function withinBudget(
+  length: number,
+  removed: number,
+  added: number,
+  limits: CorrectionGuardLimits,
+  minRemoved = limits.minRemoved
+): boolean {
   return (
-    removed <= Math.max(MIN_REMOVED_BUDGET, scaled) && added <= Math.max(MIN_ADDED_BUDGET, scaled)
+    removed <= Math.max(minRemoved, Math.ceil(length * limits.removedRatio)) &&
+    added <= Math.max(limits.minAdded, Math.ceil(length * limits.addedRatio))
   );
 }
 
-function compareWords(raw: readonly string[], corrected: readonly string[]): CorrectionGuardResult {
+function compareWords(
+  raw: readonly string[],
+  corrected: readonly string[],
+  limits: CorrectionGuardLimits
+): CorrectionGuardResult {
   if (!sameSequence(negationAnchors(raw), negationAnchors(corrected))) {
     return { ok: false, reason: "negation" };
   }
   const removed = missingFrom(raw, countBy(corrected));
   const added = missingFrom(corrected, countBy(raw));
-  return withinBudget(raw.length, removed, added)
+  return withinBudget(raw.length, removed, added, limits)
     ? { ok: true }
     : { ok: false, reason: "edit_size" };
 }
@@ -676,7 +703,8 @@ function compareRetainedWords(
   raw: readonly WordToken[],
   corrected: readonly string[],
   kept: readonly boolean[],
-  free: Uint8Array
+  free: Uint8Array,
+  limits: CorrectionGuardLimits
 ): CorrectionGuardResult {
   for (let i = 0; i + 1 < raw.length; i++) {
     if (NEGATION_WORDS.has(raw[i].word) && kept[i] && !kept[i + 1] && free[i + 1]) {
@@ -688,15 +716,26 @@ function compareRetainedWords(
     return { ok: false, reason: "negation" };
   }
   const matched = kept.filter(Boolean).length;
-  const scaled = Math.ceil(retained.length * EDIT_BUDGET_RATIO);
-  return retained.length - matched <= Math.max(MIN_ALLOWANCE_REMOVED_BUDGET, scaled) &&
-    corrected.length - matched <= Math.max(MIN_ADDED_BUDGET, scaled)
+  return withinBudget(
+    retained.length,
+    retained.length - matched,
+    corrected.length - matched,
+    limits,
+    limits.minAllowanceRemoved
+  )
     ? { ok: true }
     : { ok: false, reason: "edit_size" };
 }
 
-/** Checks a cleanup of `raw` against the meaning guards. */
-export function validateCorrection(raw: string, corrected: string): CorrectionGuardResult {
+/**
+ * Checks a cleanup of `raw` against the meaning guards. `limits` is the
+ * cleanup benchmark's way to try other edit budgets on the same replies.
+ */
+export function validateCorrection(
+  raw: string,
+  corrected: string,
+  limits: CorrectionGuardLimits = CORRECTION_GUARD_LIMITS
+): CorrectionGuardResult {
   if (!keepsProtectedSpans(raw, corrected)) return { ok: false, reason: "protected_span" };
 
   // Raw list markers are set aside only when the cleanup kept the same ones,
@@ -732,7 +771,8 @@ export function validateCorrection(raw: string, corrected: string): CorrectionGu
   const rawTokens = mergeJoinedWords(spokenTokens, correctedWords);
   const verdict = compareWords(
     rawTokens.map((token) => token.word),
-    correctedWords
+    correctedWords,
+    limits
   );
   if (verdict.ok) return verdict;
 
@@ -753,7 +793,7 @@ export function validateCorrection(raw: string, corrected: string): CorrectionGu
     freeRetraction(rawText, rawTokens, alignment, marker, breaks, free);
   }
   freeEnumerators(rawTokens, alignment.kept, enumerators, correctedLayout.items, free);
-  return compareRetainedWords(rawTokens, correctedWords, alignment.kept, free);
+  return compareRetainedWords(rawTokens, correctedWords, alignment.kept, free, limits);
 }
 
 /**
