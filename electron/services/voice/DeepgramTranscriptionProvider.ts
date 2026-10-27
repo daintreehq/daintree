@@ -16,6 +16,7 @@ import {
   AUDIO_BUFFER_MAX_BYTES,
   AUDIO_BUFFER_MAX_CHUNKS,
   createAudioBufferOverflowError,
+  isRetryableHttpStatus,
   type ProviderSessionStats,
   type TranscriptionProvider,
   type VoiceStartResult,
@@ -72,13 +73,6 @@ const REPLAY_MAX_BYTES = RECONNECT_BUFFER_MAX_BYTES + 10 * AUDIO_BYTES_PER_SECON
 // Close codes that mean Deepgram refused what we sent (undecodable audio,
 // policy, oversized frame). A new connection would fail the same way.
 const PERMANENT_CLOSE_CODES = new Set<number>([1002, 1003, 1007, 1008, 1009]);
-
-// Upgrade statuses worth another attempt: concurrency/rate limits and server
-// faults. 400/401/402/403 mean bad params, key, credits, or scope.
-function isRetryableHttpStatus(statusCode: number | undefined): boolean {
-  if (statusCode === undefined) return false;
-  return statusCode === 408 || statusCode === 429 || (statusCode >= 500 && statusCode < 600);
-}
 
 // Deepgram caps Nova-3 keyterms at 100 terms and 500 aggregate tokens. The
 // tokenizer is syllable-based (~5 tokens per single-word term), so the term

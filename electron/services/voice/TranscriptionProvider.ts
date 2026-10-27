@@ -91,6 +91,13 @@ export function createTranscriptionItemFailedError(): VoiceInputError {
   };
 }
 
+// Upgrade statuses worth another attempt: concurrency/rate limits and server
+// faults. 400/401/402/403 mean bad params, key, credits, or scope.
+export function isRetryableHttpStatus(statusCode: number | undefined): boolean {
+  if (statusCode === undefined) return false;
+  return statusCode === 408 || statusCode === 429 || (statusCode >= 500 && statusCode < 600);
+}
+
 /**
  * One concrete transcription backend (OpenAI Realtime, Deepgram, …). The
  * orchestrator (`VoiceTranscriptionService`) talks only to this interface and
