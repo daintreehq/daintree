@@ -20,6 +20,7 @@ import { isScheduledQuietNow, nextOccurrenceTimestamp } from "@shared/utils/quie
 import { normalizeForDedup } from "@shared/utils/normalizeErrorMessage";
 import { UNDO_ACTION_LABEL } from "@/lib/undoToast";
 import { worktreeNameFromId } from "@/lib/notificationSourceLabel";
+import { isScreenLocked, subscribeScreenLock } from "@/lib/powerPolicyState";
 import type { ErrorRetryability, ErrorType } from "@/store/errorStore";
 import type { NotificationSettings } from "@shared/types/ipc/api";
 import type { NotificationPluginSource } from "@shared/types/ipc/maps";
@@ -500,10 +501,19 @@ export function _resetPendingSuppressedForTest(): void {
   _pendingSuppressed.clear();
 }
 
+/**
+ * Whether anyone can be looking at this window. A locked screen fires no blur,
+ * so focus alone keeps answering yes on one (#14885).
+ */
+function isWindowAttended(): boolean {
+  if (isScreenLocked()) return false;
+  return typeof document === "undefined" || document.hasFocus();
+}
+
 function isOriginSurfaceVisible(context: NotifyPayload["context"]): boolean {
   if (!context) return false;
   if (!_activeContextAccessors) return false;
-  if (typeof document !== "undefined" && !document.hasFocus()) return false;
+  if (!isWindowAttended()) return false;
 
   // A panel address is the narrower surface: its worktree being active doesn't
   // put that panel on screen, so the worktree only decides when no panel is named.
@@ -1084,9 +1094,8 @@ export function notify(payload: NotifyPayload): string {
     });
   }
 
-  const isFocused =
-    payload.pagedNatively !== true &&
-    (typeof document !== "undefined" ? document.hasFocus() : true);
+  // A locked screen counts as blurred, though it never fires a blur (#14885).
+  const isFocused = payload.pagedNatively !== true && isWindowAttended();
 
   const originVisible =
     payload.suppressWhenOriginVisible === true &&
@@ -1357,7 +1366,7 @@ function scheduleSuppressionGrace(
   // when the user returns.
   const unsubContext = subscriber
     ? subscriber(() => {
-        if (typeof document !== "undefined" && !document.hasFocus()) return;
+        if (!isWindowAttended()) return;
         promote();
       })
     : () => {};
@@ -1375,8 +1384,11 @@ function scheduleSuppressionGrace(
   // re-reads focus synchronously.
   let unsubBlur = (): void => {};
   let unsubFocus = (): void => {};
+  let unsubLock = (): void => {};
   if (typeof window !== "undefined") {
     const focusHandler = (): void => {
+      // Focus on a still-locked screen is no return; the unlock below is.
+      if (isScreenLocked()) return;
       window.removeEventListener("focus", focusHandler);
       unsubFocus = (): void => {};
       const entry = _pendingSuppressed.get(historyEntryId);
@@ -1399,12 +1411,21 @@ function scheduleSuppressionGrace(
     };
     window.addEventListener("blur", blurHandler);
     unsubBlur = (): void => window.removeEventListener("blur", blurHandler);
+    // Locking hides the affordance without a blur (#14885), so it pauses the
+    // same way. Unlocking into a focused window is the return, and focus read
+    // here, outside a focus handler, is current; unlocking anywhere else
+    // leaves the refocus listener to decide.
+    unsubLock = subscribeScreenLock((locked) => {
+      if (locked) blurHandler();
+      else if (document.hasFocus()) focusHandler();
+    });
   }
 
   const unsub = (): void => {
     unsubContext();
     unsubBlur();
     unsubFocus();
+    unsubLock();
   };
 
   const timerId = setTimeout(() => {

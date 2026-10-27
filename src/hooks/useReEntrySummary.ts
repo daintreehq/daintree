@@ -11,6 +11,7 @@ import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { SEVERITY_WEIGHTS } from "@/lib/notificationSeverity";
 import { APP_SOURCE_LABEL, worktreeNameFromId } from "@/lib/notificationSourceLabel";
 import { isOtherProjectContext } from "@/lib/notificationDestination";
+import { isScreenLocked, subscribeScreenLock } from "@/lib/powerPolicyState";
 
 const MIN_BLUR_MS = 3000;
 
@@ -146,6 +147,7 @@ const EMPTY: ReEntrySummaryState = {
 
 export function useReEntrySummary(): ReEntrySummaryState {
   const blurTimeRef = useRef<number | null>(null);
+  const lockTimeRef = useRef<number | null>(null);
   const [state, setState] = useState<Omit<ReEntrySummaryState, "dismiss">>({
     visible: false,
     entries: [],
@@ -159,13 +161,17 @@ export function useReEntrySummary(): ReEntrySummaryState {
   }, []);
 
   useEffect(() => {
-    const handleFocus = () => {
-      if (!document.hasFocus()) return;
-
+    // The absence began at the earlier of the blur and the lock, and one
+    // return spends both.
+    const summarizeReturn = () => {
       const blurTime = blurTimeRef.current;
+      const lockTime = lockTimeRef.current;
       blurTimeRef.current = null;
+      lockTimeRef.current = null;
+      const awaySince =
+        blurTime === null ? lockTime : lockTime === null ? blurTime : Math.min(blurTime, lockTime);
       const now = Date.now();
-      if (blurTime === null || now - blurTime < MIN_BLUR_MS) return;
+      if (awaySince === null || now - awaySince < MIN_BLUR_MS) return;
 
       const { entries, markSummarized } = useNotificationHistoryStore.getState();
       const ownerId = getViewWorkspaceId() ?? useProjectStore.getState().currentProject?.id;
@@ -176,7 +182,7 @@ export function useReEntrySummary(): ReEntrySummaryState {
         (e) =>
           !e.seenAsToast &&
           !e.summarized &&
-          e.timestamp >= blurTime &&
+          e.timestamp >= awaySince &&
           isFromThisView(e, ownerId, panelsById)
       );
       if (unseen.length === 0) return;
@@ -193,16 +199,40 @@ export function useReEntrySummary(): ReEntrySummaryState {
       });
     };
 
+    const handleFocus = () => {
+      if (!document.hasFocus()) return;
+      // Focus on a still-locked screen is no return; the unlock is.
+      if (isScreenLocked()) return;
+      summarizeReturn();
+    };
+
     const handleBlur = () => {
       blurTimeRef.current = Date.now();
     };
 
+    // Locking fires no blur, so it starts an absence of its own (#14885).
+    // Unlocking into a focused window is the return, and focus read here,
+    // outside a focus handler, is current; unlocking anywhere else waits for
+    // the focus event. Where lock events never fire, none of this runs.
+    const handleScreenLock = (locked: boolean) => {
+      if (locked) {
+        lockTimeRef.current ??= Date.now();
+        return;
+      }
+      if (document.hasFocus()) summarizeReturn();
+    };
+
     window.addEventListener("focus", handleFocus);
     window.addEventListener("blur", handleBlur);
+    const offScreenLock = subscribeScreenLock(handleScreenLock);
+    // Read after subscribing, so a lock the subscription replayed counts. A
+    // view that comes up on a locked screen has been away since it came up.
+    if (isScreenLocked()) lockTimeRef.current ??= Date.now();
 
     return () => {
       window.removeEventListener("focus", handleFocus);
       window.removeEventListener("blur", handleBlur);
+      offScreenLock();
     };
   }, []);
 
