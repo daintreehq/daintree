@@ -7,6 +7,7 @@ import {
   VOICE_DICTATION_REASONING_EFFORT,
   buildCorrectionSystemPrompt,
   buildRewriteSystemPrompt,
+  correctionInstructionsFor,
   type CorrectionInstructions,
   type CorrectionPromptContext,
   type CorrectionTargetContext,
@@ -170,7 +171,7 @@ export interface VoiceCorrectionSettings {
   model: string;
   /** Overrides VOICE_DICTATION_REASONING_EFFORT for cleanup, its warm-up and rewrite. */
   reasoningEffort?: VoiceReasoningEffort;
-  /** Cleanup rules in place of CORRECTION_INSTRUCTIONS: the cleanup benchmark's prompt variants. */
+  /** Cleanup rules in place of the model's own (`correctionInstructionsFor`): the cleanup benchmark's prompt variants. */
   instructions?: CorrectionInstructions;
   apiKey: string;
   customDictionary: string[];
@@ -879,7 +880,10 @@ export class VoiceCorrectionService {
       customInstructions,
       language,
     };
-    return buildCorrectionSystemPrompt(context, settings.instructions);
+    return buildCorrectionSystemPrompt(
+      context,
+      settings.instructions ?? correctionInstructionsFor(settings.model)
+    );
   }
 
   // The warm-up shares everything but the user turn and the output cap, so

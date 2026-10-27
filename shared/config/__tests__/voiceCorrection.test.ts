@@ -3,6 +3,8 @@ import {
   buildCorrectionSystemPrompt,
   buildRewriteSystemPrompt,
   CORE_CORRECTION_PROMPT,
+  correctionInstructionsFor,
+  LITERAL_CORRECTION_PROMPT,
 } from "../voiceCorrection.js";
 
 describe("CORE_CORRECTION_PROMPT", () => {
@@ -147,6 +149,21 @@ describe("CORE_CORRECTION_PROMPT cleanup of spoken prompts", () => {
       /leave it exactly as spoken when the retracted words contain a negation or a number/
     );
     expect(CORE_CORRECTION_PROMPT).toMatch(/is not a list: keep it inline/);
+  });
+});
+
+describe("correctionInstructionsFor", () => {
+  it("keeps Luna on the literal rules and every other model on the core ones", () => {
+    expect(correctionInstructionsFor("gpt-6-luna").core).toBe(LITERAL_CORRECTION_PROMPT);
+    expect(correctionInstructionsFor("gpt-6.1-terra").core).toBe(CORE_CORRECTION_PROMPT);
+    expect(correctionInstructionsFor("some-new-model").core).toBe(CORE_CORRECTION_PROMPT);
+  });
+
+  it("gives the literal rules the same cache floor and reply contract", () => {
+    const literal = correctionInstructionsFor("gpt-6-luna");
+    expect(literal.core.length).toBeGreaterThan(4800);
+    expect(literal.core).not.toContain("cloud code/clawed code");
+    expect(literal.suffix).toMatch(/^Return a JSON object/);
   });
 });
 

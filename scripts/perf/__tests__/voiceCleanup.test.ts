@@ -456,7 +456,7 @@ describe("run-ons and agent-ready text", () => {
 
 describe("prompt and guard variants", () => {
   it("keeps v11 frozen apart from production's constants and revises it edit by edit", () => {
-    const v11 = PROMPT_VARIANTS.v11!.instructions;
+    const v11 = PROMPT_VARIANTS.v11!.instructionsFor("gpt-6.1-terra");
     expect(v11.core).toContain("MEANING IS FIXED");
     expect(revise(v11, { core: [["MEANING IS FIXED", "MEANING IS FIXED!"]] }).core).toContain(
       "MEANING IS FIXED!"
@@ -466,7 +466,7 @@ describe("prompt and guard variants", () => {
   });
 
   it("keeps v11 byte for byte the rules production sent before #14786", () => {
-    const { core, suffix } = PROMPT_VARIANTS.v11!.instructions;
+    const { core, suffix } = PROMPT_VARIANTS.v11!.instructionsFor("gpt-6.1-terra");
     expect(
       createHash("sha256")
         .update(JSON.stringify([core, suffix]))
@@ -477,14 +477,25 @@ describe("prompt and guard variants", () => {
   it("gives every prompt variant its own rules", () => {
     const cores = Object.entries(PROMPT_VARIANTS)
       .filter(([name]) => name !== "production")
-      .map(([, variant]) => variant.instructions.core);
+      .map(([, variant]) => variant.instructionsFor("gpt-6.1-terra").core);
     expect(new Set(cores).size).toBe(cores.length);
+  });
+
+  it("sends Luna the frozen v11 rules and Terra the final ones as production", () => {
+    const production = PROMPT_VARIANTS.production!;
+    expect(production.instructionsFor("gpt-6-luna")).toEqual(
+      PROMPT_VARIANTS.v11!.instructionsFor("gpt-6-luna")
+    );
+    expect(production.instructionsFor("gpt-6.1-terra")).toEqual(
+      PROMPT_VARIANTS.final!.instructionsFor("gpt-6.1-terra")
+    );
   });
 
   it("builds every prompt variant", () => {
     for (const [name, variant] of Object.entries(PROMPT_VARIANTS)) {
-      expect(variant.instructions.core.length, name).toBeGreaterThan(4_800);
-      expect(variant.instructions.suffix, name).toContain("JSON object");
+      const { core, suffix } = variant.instructionsFor("gpt-6.1-terra");
+      expect(core.length, name).toBeGreaterThan(4_800);
+      expect(suffix, name).toContain("JSON object");
     }
   });
 

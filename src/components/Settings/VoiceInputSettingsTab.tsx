@@ -38,7 +38,7 @@ import { KbdChord } from "@/components/ui/Kbd";
 import { voiceErrorLogFields } from "@shared/utils/voiceLogFields";
 import { VOICE_LANGUAGES } from "@shared/config/voiceLanguages";
 import {
-  CORE_CORRECTION_PROMPT,
+  correctionInstructionsFor,
   VOICE_CLEANUP_AI_MODEL,
   VOICE_CLEANUP_MODELS,
 } from "@shared/config/voiceCorrection";
@@ -916,7 +916,7 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
                   onChange={(v) => void update({ correctionCustomInstructions: v })}
                 />
 
-                <CorePromptRow />
+                <CorePromptRow model={settings.correctionModel} />
               </SettingsDependents>
             )}
           </SettingsGroup>
@@ -1394,7 +1394,7 @@ function CustomInstructionsRow({
 
 // ── Core prompt row ──
 
-function CorePromptRow() {
+function CorePromptRow({ model }: { model: string }) {
   const [expanded, setExpanded] = useState(false);
 
   return (
@@ -1420,7 +1420,7 @@ function CorePromptRow() {
           </Button>
           {expanded && (
             <pre className="bg-surface-canvas border border-border-default rounded-[var(--radius-md)] px-3 py-2 text-xs font-mono text-text-secondary whitespace-pre-wrap overflow-y-auto max-h-48 select-text">
-              {CORE_CORRECTION_PROMPT}
+              {correctionInstructionsFor(model).core}
             </pre>
           )}
         </div>

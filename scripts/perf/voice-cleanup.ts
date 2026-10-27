@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { contentHash } from "../../e2e/helpers/voiceReplayScore";
 import {
   buildCorrectionSystemPrompt,
+  type CorrectionInstructions,
   type VoiceReasoningEffort,
 } from "../../shared/config/voiceCorrection";
 import { formatErrorMessage } from "../../shared/utils/errorMessage";
@@ -36,7 +37,7 @@ import {
   type TranscriptStyle,
 } from "./lib/voiceCleanupCorpus";
 import { ADVERSARIAL_PROPOSALS, GUARD_VARIANTS, type GuardVariant } from "./lib/voiceCleanupGuards";
-import { PROMPT_VARIANTS, type PromptVariant } from "./lib/voiceCleanupPrompts";
+import { PROMPT_VARIANTS } from "./lib/voiceCleanupPrompts";
 import {
   corpusProblems,
   fixesOf,
@@ -273,12 +274,16 @@ const ROUTING = {
   ...(process.env.OPENAI_PROJECT_ID ? { projectId: process.env.OPENAI_PROJECT_ID } : {}),
 };
 
+function instructionsOf(variant: Variant) {
+  return PROMPT_VARIANTS[variant.prompt]!.instructionsFor(variant.model);
+}
+
 function settingsFor(variant: Variant, profile: Profile, apiKey: string): VoiceCorrectionSettings {
   return {
     ...profile,
     model: variant.model,
     reasoningEffort: variant.effort,
-    instructions: PROMPT_VARIANTS[variant.prompt]!.instructions,
+    instructions: instructionsOf(variant),
     apiKey,
     ...ROUTING,
   };
@@ -528,8 +533,11 @@ export interface RunRecord {
   repeats: number;
   stream: boolean;
   variants: Variant[];
-  /** Each prompt the run sent, whole, so a later reader knows exactly what was asked. */
-  prompts: Record<string, PromptVariant & { hash: string }>;
+  /** The rules each variant sent, whole, so a later reader knows exactly what was asked. */
+  prompts: Record<
+    string,
+    { description: string; instructions: CorrectionInstructions; hash: string }
+  >;
   /** Each edit budget the replies were landed under. */
   guards: Record<string, GuardVariant>;
   profile: Profile;
@@ -971,7 +979,6 @@ async function main(): Promise<number> {
 
   const profile = profileFor(options);
   const guards = options.guards ?? ["v11", "production"];
-  const prompts = [...new Set(options.variants.map((variant) => variant.prompt))];
   const run: RunRecord = {
     schemaVersion: VOICE_CLEANUP_SCHEMA_VERSION,
     scoringVersion: VOICE_CLEANUP_SCORING_VERSION,
@@ -987,13 +994,14 @@ async function main(): Promise<number> {
     repeats: options.repeats,
     variants: options.variants,
     prompts: Object.fromEntries(
-      prompts.map((name) => {
-        const prompt = PROMPT_VARIANTS[name]!;
+      options.variants.map((variant) => {
+        const instructions = instructionsOf(variant);
         return [
-          name,
+          variant.id,
           {
-            ...prompt,
-            hash: contentHash(buildCorrectionSystemPrompt(profile, prompt.instructions)),
+            description: PROMPT_VARIANTS[variant.prompt]!.description,
+            instructions,
+            hash: contentHash(buildCorrectionSystemPrompt(profile, instructions)),
           },
         ];
       })

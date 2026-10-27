@@ -10,6 +10,10 @@ vi.mock("../../utils/logger.js", () => ({
 
 import { logWarn } from "../../utils/logger.js";
 import { VoiceCorrectionService } from "../VoiceCorrectionService.js";
+import {
+  CORE_CORRECTION_PROMPT,
+  LITERAL_CORRECTION_PROMPT,
+} from "../../../shared/config/voiceCorrection.js";
 import type { VoiceCommandTarget } from "../voiceCommandTarget.js";
 import { getAgentConfig } from "../../../shared/config/agentRegistry.js";
 import { getBuiltinSlashCommands } from "../../../shared/types/slashCommands.js";
@@ -428,6 +432,23 @@ describe("VoiceCorrectionService", () => {
     const both = await requestFor({ knownNames: ["Studio 1"], heardAs: rule });
     expect(new Set([without, studio, ruled, both].map((r) => r.prompt_cache_key)).size).toBe(4);
     expect(both.prompt_cache_key.length).toBeLessThanOrEqual(64);
+  });
+
+  it("sends each cleanup model its own rules", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(makeFetchResponse({ corrected_text: "Ok." }));
+    vi.stubGlobal("fetch", fetchMock);
+    const promptFor = async (model: string) => {
+      fetchMock.mockClear();
+      await new VoiceCorrectionService().correct({ rawText: "ok" }, { ...BASE_SETTINGS, model });
+      return (
+        JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string) as {
+          input: Array<{ content: string }>;
+        }
+      ).input[0].content;
+    };
+    expect((await promptFor("gpt-6-luna")).startsWith(LITERAL_CORRECTION_PROMPT)).toBe(true);
+    expect((await promptFor("gpt-6.1-terra")).startsWith(CORE_CORRECTION_PROMPT)).toBe(true);
+    expect(LITERAL_CORRECTION_PROMPT).not.toBe(CORE_CORRECTION_PROMPT);
   });
 
   it("sends other cleanup instructions under their own cache key", async () => {

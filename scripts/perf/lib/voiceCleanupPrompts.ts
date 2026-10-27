@@ -1,5 +1,5 @@
 import {
-  CORRECTION_INSTRUCTIONS,
+  correctionInstructionsFor,
   type CorrectionInstructions,
 } from "../../../shared/config/voiceCorrection";
 
@@ -7,15 +7,21 @@ import {
  * The cleanup prompts the benchmark can run (`--prompts`). `v11` is a frozen
  * copy of the rules production sent before #14786, so the comparison it was
  * chosen on can be rerun after production moves on; `production` is whatever
- * ships now. Every other variant is a revision of v11, written as the edits
+ * ships now, which depends on the model. Every other variant is a revision of v11, written as the edits
  * it makes, so each one reads as its difference and none drifts when
  * production changes.
  */
 
 export interface PromptVariant {
   description: string;
-  instructions: CorrectionInstructions;
+  /** The rules a model is sent under this variant. */
+  instructionsFor: (model: string) => CorrectionInstructions;
 }
+
+const fixed =
+  (instructions: CorrectionInstructions): PromptVariant["instructionsFor"] =>
+  () =>
+    instructions;
 
 const V11_CORE = `You are a speech-to-text correction engine for a developer dictating to AI coding agents.
 
@@ -273,30 +279,30 @@ const STRICT = revise(FINAL, {
 });
 
 export const PROMPT_VARIANTS: Readonly<Record<string, PromptVariant>> = {
-  v11: { description: "the rules production sent before #14786", instructions: V11 },
+  v11: { description: "the rules production sent before #14786", instructionsFor: fixed(V11) },
   firm: {
     description: "round 1: v11 with filler, tics and run-ons named, the verbatim brakes lifted",
-    instructions: FIRM,
+    instructionsFor: fixed(FIRM),
   },
   repair: {
     description: "round 1: firm, plus the fewest words a sentence needs to hold together",
-    instructions: REPAIR,
+    instructionsFor: fixed(REPAIR),
   },
   agent: {
     description:
       "round 2: repair, with spoken symbols written out again, run-ons and closing tags named, and agent names in <terms>",
-    instructions: AGENT,
+    instructionsFor: fixed(AGENT),
   },
   final: {
     description: "agent, keeping a hedge that says something only partly works",
-    instructions: FINAL,
+    instructionsFor: fixed(FINAL),
   },
   strict: {
     description: "final, without grammar repair and with every kept word the speaker's",
-    instructions: STRICT,
+    instructionsFor: fixed(STRICT),
   },
   production: {
-    description: "the rules production sends now",
-    instructions: CORRECTION_INSTRUCTIONS,
+    description: "the rules production sends each model now",
+    instructionsFor: correctionInstructionsFor,
   },
 };
