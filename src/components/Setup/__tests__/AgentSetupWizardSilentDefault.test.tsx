@@ -1011,6 +1011,24 @@ describe("AgentSetupWizard input step", () => {
     );
   });
 
+  it("shows each pick at once and saves the last one, even while earlier ones wait", async () => {
+    const settles: ((outcome: Outcome) => void)[] = [];
+    dispatchMock.mockImplementation(
+      inputAction(() => new Promise<Outcome>((resolve) => settles.push(resolve)))
+    );
+    await gotoInputStep();
+    for (const pick of ["Terminal", "Hybrid input", "Terminal"] as const) {
+      await act(async () => {
+        focusOption(pick).click();
+      });
+      expect(focusOption(pick).getAttribute("aria-checked")).toBe("true");
+    }
+    while (settles.length > 0) await settleWrite(settles, "ok");
+
+    expect(saved.get("hybridInputAutoFocus")).toBe(false);
+    expect(focusOption("Terminal").getAttribute("aria-checked")).toBe("true");
+  });
+
   it("refuses a write from a step that is animating out", async () => {
     await gotoInputStep();
     presence.isPresent = false;

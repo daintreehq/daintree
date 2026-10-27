@@ -33,10 +33,18 @@ const FOCUS_OPTIONS: readonly SettingsPresetOption<FocusTarget>[] = [
  * clicking straight through writes nothing.
  */
 export function AgentInputStep({ onBusyChange }: { onBusyChange: (busy: boolean) => void }) {
-  const hybridInputEnabled = useTerminalInputStore((state) => state.hybridInputEnabled);
-  const hybridInputAutoFocus = useTerminalInputStore((state) => state.hybridInputAutoFocus);
+  const savedHybridInputEnabled = useTerminalInputStore((state) => state.hybridInputEnabled);
+  const savedHybridInputAutoFocus = useTerminalInputStore((state) => state.hybridInputAutoFocus);
   // A step animating out is still clickable, but the lock it holds goes with it.
   const isPresent = useIsPresent();
+  // The newest pick of each setting until its write settles. A queued write
+  // only reaches the store when it runs, and a choice that didn't show would
+  // leave the next click acting on the one before it.
+  const [picked, setPicked] = useState<Partial<Record<InputAction, boolean>>>({});
+  const hybridInputEnabled =
+    picked["terminalConfig.setHybridInputEnabled"] ?? savedHybridInputEnabled;
+  const hybridInputAutoFocus =
+    picked["terminalConfig.setHybridInputAutoFocus"] ?? savedHybridInputAutoFocus;
   const [failed, setFailed] = useState<FailedWrite | null>(null);
   const inFlightRef = useRef(0);
   const latestAttemptRef = useRef<Partial<Record<InputAction, number>>>({});
@@ -53,6 +61,9 @@ export function AgentInputStep({ onBusyChange }: { onBusyChange: (busy: boolean)
       logError("Failed to persist a hybrid input setting from setup", error);
       if (latestAttemptRef.current[actionId] === attempt) setFailed({ actionId, enabled });
     } finally {
+      if (latestAttemptRef.current[actionId] === attempt) {
+        setPicked((prev) => ({ ...prev, [actionId]: undefined }));
+      }
       inFlightRef.current -= 1;
       if (inFlightRef.current === 0) onBusyChange(false);
     }
@@ -66,6 +77,7 @@ export function AgentInputStep({ onBusyChange }: { onBusyChange: (busy: boolean)
     if (!isPresent) return;
     const attempt = (latestAttemptRef.current[actionId] ?? 0) + 1;
     latestAttemptRef.current[actionId] = attempt;
+    setPicked((prev) => ({ ...prev, [actionId]: enabled }));
     inFlightRef.current += 1;
     onBusyChange(true);
     queueRef.current = queueRef.current.then(() => write(actionId, enabled, attempt));
