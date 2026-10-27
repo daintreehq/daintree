@@ -164,10 +164,8 @@ const SPOKEN_SYMBOLS: ReadonlyMap<string, string> = new Map([
   ["dash", "-"],
   ["hyphen", "-"],
 ]);
-// A run of typed symbols, alone, at the start, or at the end of some text.
-const SYMBOL_RUN_RE = /^[/\\._:-]+$/u;
-const LEADING_SYMBOLS_RE = /^[/\\._:-]+/u;
-const TRAILING_SYMBOLS_RE = /[/\\._:-]+$/u;
+// The symbols a spoken name can be typed as.
+const TYPED_SYMBOLS = new Set(SPOKEN_SYMBOLS.values());
 const WORD_CHAR_RE = /[\p{L}\p{N}_]/u;
 // "dash dash watch" is --watch, "dash dash no dash verify" is --no-verify,
 // and "dash v" is -v: a single dash takes a single letter. A doubled dash
@@ -319,7 +317,13 @@ function keepsProtectedSpans(
     spans.filter((span) => (span.kind !== "path") === strict).map((span) => span.text);
   if (!isSubsequence(texts(rawSpans, false), texts(correctedSpans, false))) return false;
   const spelled = spoken ? spelledFlags(raw, findProtectedRanges(raw)) : [];
-  if (spelled.length === 0) return sameSequence(texts(rawSpans, true), texts(correctedSpans, true));
+  // Past the alignment limit a spelled flag stays words, as the word checks do.
+  if (
+    spelled.length === 0 ||
+    (rawSpans.length + spelled.length + 1) * (correctedSpans.length + 1) > MAX_ALIGNMENT_CELLS
+  ) {
+    return sameSequence(texts(rawSpans, true), texts(correctedSpans, true));
+  }
   const expected = [
     ...rawSpans
       .filter((span) => span.kind !== "path")
@@ -364,14 +368,20 @@ function placeSpokenSymbols(
     index >= 0 && index < raw.length && alignment.kept[index]
       ? corrected[alignment.landed[index]]
       : undefined;
-  // A dot or colon counts only inside a word, never as a sentence's own.
-  const typedRun = (start: number, end: number): string[] => {
+  const isTyped = (at: number) => TYPED_SYMBOLS.has(correctedText[at] ?? "");
+  // The symbols typed in [start, end), counted. A dot or colon counts only
+  // inside a word, never as a sentence's own.
+  const typedIn = (start: number, end: number): Map<string, number> => {
     const inside =
       WORD_CHAR_RE.test(correctedText[start - 1] ?? "") &&
       WORD_CHAR_RE.test(correctedText[end] ?? "");
-    return [...correctedText.slice(start, end)].filter(
-      (symbol) => inside || (symbol !== "." && symbol !== ":")
-    );
+    const counts = new Map<string, number>();
+    for (let at = start; at < end; at++) {
+      const symbol = correctedText[at];
+      if (!inside && (symbol === "." || symbol === ":")) continue;
+      counts.set(symbol, (counts.get(symbol) ?? 0) + 1);
+    }
+    return counts;
   };
   const free = new Uint8Array(raw.length);
   for (let first = 0; first < raw.length; first++) {
@@ -380,41 +390,57 @@ function placeSpokenSymbols(
     while (last + 1 < raw.length && isSymbol(last + 1)) last++;
     const before = landedAt(first - 1);
     const after = landedAt(last + 1);
-    const runs: string[][] = [];
-    if (before && after && alignment.landed[last + 1] === alignment.landed[first - 1] + 1) {
-      const gap = correctedText.slice(before.end, after.start);
-      if (SYMBOL_RUN_RE.test(gap)) runs.push(typedRun(before.end, after.start));
-    }
+    // Typed right after the word before, else right before the word after:
+    // between them when they landed side by side with only symbols between.
+    const runs: Array<[number, number]> = [];
     if (before) {
-      const run = LEADING_SYMBOLS_RE.exec(correctedText.slice(before.end))?.[0] ?? "";
-      runs.push(typedRun(before.end, before.end + run.length));
+      let end = before.end;
+      while (isTyped(end)) end++;
+      runs.push([before.end, end]);
     }
     if (after) {
-      const run = TRAILING_SYMBOLS_RE.exec(correctedText.slice(0, after.start))?.[0] ?? "";
-      runs.push(typedRun(after.start - run.length, after.start));
+      let start = after.start;
+      while (start > 0 && isTyped(start - 1)) start--;
+      runs.push([start, after.start]);
     }
-    const typed = runs.find((run) => run.length > 0) ?? [];
+    let typed = new Map<string, number>();
+    for (const [start, end] of runs) {
+      typed = typedIn(start, end);
+      if (typed.size > 0) break;
+    }
     for (let index = first; index <= last; index++) {
       if (alignment.kept[index]) continue;
-      const at = typed.indexOf(SPOKEN_SYMBOLS.get(raw[index].word)!);
-      if (at < 0) continue;
-      typed.splice(at, 1);
+      const symbol = SPOKEN_SYMBOLS.get(raw[index].word)!;
+      const left = typed.get(symbol) ?? 0;
+      if (left === 0) continue;
+      typed.set(symbol, left - 1);
       free[index] = 1;
     }
     first = last;
   }
   return {
     tokens: raw.filter((_, index) => !free[index]),
+    // The words it was spelled with sit inside the typed flag, and it sits
+    // beside a word it was spoken beside, so it can't move to another command.
     holdsFlag: (spelled, typed) => {
+      const from = firstTokenFrom(raw, spelled.start);
+      if (from > 0 && raw[from - 1].end > spelled.start) return false;
+      let next = from;
       let named = false;
-      for (let index = 0; index < raw.length; index++) {
-        const token = raw[index];
-        if (token.end <= spelled.start || token.start >= spelled.end || isSymbol(index)) continue;
-        const landed = landedAt(index);
+      for (; next < raw.length && raw[next].start < spelled.end; next++) {
+        if (isSymbol(next)) continue;
+        const landed = landedAt(next);
         if (!landed || landed.start < typed.start || landed.end > typed.end) return false;
         named = true;
       }
-      return named;
+      if (!named) return false;
+      const firstTyped = firstTokenFrom(corrected, typed.start);
+      const lastTyped = firstTokenFrom(corrected, typed.end) - 1;
+      const beside = (index: number, at: number) =>
+        index < 0 || index >= raw.length
+          ? at < 0 || at >= corrected.length
+          : alignment.kept[index] && alignment.landed[index] === at;
+      return beside(from - 1, firstTyped - 1) || beside(next, lastTyped + 1);
     },
   };
 }

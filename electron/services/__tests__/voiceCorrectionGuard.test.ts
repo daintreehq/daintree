@@ -327,6 +327,14 @@ describe("validateCorrection", () => {
           symbols
         )
       ).toEqual({ ok: false, reason: "protected_span" });
+      // Its own words came along, but it sits by another command.
+      expect(
+        validateCorrection(
+          "commit dash dash no dash verify then push",
+          "Commit, then push --no-verify.",
+          symbols
+        )
+      ).toEqual({ ok: false, reason: "protected_span" });
       // Its neighbouring word comes again later: still not where it was said.
       expect(
         validateCorrection(
@@ -690,6 +698,18 @@ describe("validateCorrection on self-corrections and lists", () => {
       (scale: number) => `fix it, no${" ".repeat(1_500 * scale)}, sorry, now`,
       () => "Fix it now.",
       false,
+    ],
+    [
+      "typed slashes after a space",
+      () => "slash x",
+      (scale: number) => `${"/".repeat(1_500 * scale)} x`,
+      true,
+    ],
+    [
+      "spoken slashes typed as one run",
+      (scale: number) => `${"slash ".repeat(250 * scale)}x`,
+      (scale: number) => `${"/".repeat(250 * scale)}x`,
+      true,
     ],
     [
       "spoken dashes beside a typed one",
