@@ -81,12 +81,12 @@ const CLEANUP_MODEL_COPY: Record<VoiceCorrectionModel, { label: string; descript
   "gpt-6.1-terra": {
     label: "GPT-6.1 Terra (default)",
     description:
-      "Catches more misheard names and words that only make sense in context. A little slower on long passages, and about seven times the cost, still well under a tenth of a cent a cleanup.",
+      "Catches more misheard names and words that only make sense in context. Costs about seven times as much, still well under a tenth of a cent a cleanup.",
   },
   "gpt-6-luna": {
     label: "GPT-6 Luna",
     description:
-      "A little faster and cheaper, and better at writing out dictated paths and symbols. Misses more misheard names.",
+      "Cheaper, and better at writing out dictated paths and symbols. Misses more misheard names.",
   },
 };
 
