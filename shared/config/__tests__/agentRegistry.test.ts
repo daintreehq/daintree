@@ -823,6 +823,23 @@ describe("screen-mode flag capabilities (#11423)", () => {
   });
 });
 
+describe("Option/Alt chord capabilities (#14887)", () => {
+  const chordAgents = getAgentIds()
+    .map((id) => ({ id, chords: getAgentConfig(id)?.capabilities?.altChords }))
+    .filter((a) => a.chords !== undefined);
+
+  it("declares every chord as one lowercase letter, the only shape the composer matches", () => {
+    expect(chordAgents.length).toBeGreaterThan(0);
+    for (const { id, chords } of chordAgents) {
+      expect(chords?.length, `${id} declares an empty chord list`).toBeGreaterThan(0);
+      for (const chord of chords ?? []) {
+        expect(chord, `${id} declares a chord the composer can never match`).toMatch(/^[a-z]$/);
+      }
+      expect(new Set(chords).size, `${id} declares a chord twice`).toBe(chords?.length);
+    }
+  });
+});
+
 describe("resume configuration", () => {
   it("every session-id agent declares exactly one shutdown protocol", () => {
     // Weaker than "must have a quitCommand" on purpose: an agent may take a
