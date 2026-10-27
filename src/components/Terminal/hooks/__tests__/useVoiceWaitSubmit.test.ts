@@ -10,7 +10,7 @@ vi.mock("@/services/VoiceRecordingService", () => ({
     stop: vi.fn().mockResolvedValue(undefined),
     sendSessions: vi.fn(() => new Set<string>()),
     hasPendingCorrection: vi.fn(() => false),
-    expectedCorrectionLanding: vi.fn(() => null),
+    expectedCorrectionWindow: vi.fn(() => null),
     waitForPendingCorrections: vi.fn().mockResolvedValue(true),
     onSpokenSend: vi.fn(() => () => {}),
   },
@@ -44,7 +44,7 @@ const hasPendingMock = vi.mocked(voiceRecordingService.hasPendingCorrection);
 const waitMock = vi.mocked(voiceRecordingService.waitForPendingCorrections);
 const onSpokenSendMock = vi.mocked(voiceRecordingService.onSpokenSend);
 const sendSessionsMock = vi.mocked(voiceRecordingService.sendSessions);
-const landingMock = vi.mocked(voiceRecordingService.expectedCorrectionLanding);
+const landingMock = vi.mocked(voiceRecordingService.expectedCorrectionWindow);
 // The sessions a send reads as it starts, which its wait and send take.
 const OWNED = new Set(["owned-session"]);
 
@@ -87,7 +87,8 @@ describe("useVoiceWaitSubmit", () => {
     onSpokenSendMock.mockReturnValue(() => {});
     sendSessionsMock.mockReset();
     sendSessionsMock.mockReturnValue(OWNED);
-    landingMock.mockClear();
+    landingMock.mockReset();
+    landingMock.mockReturnValue(null);
     useTerminalInputStore.getState().clearDraftInput(PANEL_ID);
     panelState.focusedId = null;
     voiceState.status = "recording";
@@ -425,6 +426,23 @@ describe("useVoiceWaitSubmit", () => {
       resolveStop();
     });
     expect(sendFromEditor).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands the progress the cleanup's own start as well as its landing", async () => {
+    hasPendingMock.mockReturnValue(true);
+    waitMock.mockImplementation(() => new Promise<boolean>(() => {}));
+    landingMock.mockReturnValue({ startedAt: 1_000, landsAt: 3_000 });
+
+    const { result } = renderWaitSubmit();
+    await act(async () => {
+      result.current.startVoiceWaitSubmit();
+    });
+
+    expect(result.current.voiceSubmitWait).toMatchObject({
+      phase: "polishing",
+      beganAt: 1_000,
+      expectedAt: 3_000,
+    });
   });
 
   it("waits for a pending correction before it sends", async () => {

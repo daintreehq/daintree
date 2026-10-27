@@ -37,13 +37,15 @@ export type VoiceSubmitPhase = "finishing" | "polishing";
  * The wait as the composer draws it, on the `performance.now()` clock. A
  * correction's wait has no deadline: it lasts until the correction lands or
  * fails, or a second Enter sends what stands (#14780). `expectedAt` is when
- * past corrections say it should land (null: no estimate).
+ * past corrections say it should land, and `beganAt` when its request went out,
+ * which can be before Enter (both null: no estimate).
  */
 export type VoiceSubmitWait = { attempt: number; startedAt: number } & (
   | { phase: "finishing" }
   | {
       phase: "polishing";
       expectedAt: number | null;
+      beganAt: number | null;
       /** The dictation sessions whose cleanup this send waits for. */
       sessions: ReadonlySet<string>;
     }
@@ -334,11 +336,13 @@ export function useVoiceWaitSubmit({
             !controller.signal.aborted &&
             voiceRecordingService.hasPendingCorrection(voiceId, sessions)
           ) {
+            const landing = voiceRecordingService.expectedCorrectionWindow(voiceId, sessions);
             setVoiceSubmitWait({
               attempt,
               phase: "polishing",
               startedAt: performance.now(),
-              expectedAt: voiceRecordingService.expectedCorrectionLanding(voiceId, sessions),
+              expectedAt: landing?.landsAt ?? null,
+              beganAt: landing?.startedAt ?? null,
               sessions,
             });
             await voiceRecordingService.waitForPendingCorrections(

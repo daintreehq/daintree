@@ -4053,21 +4053,30 @@ class VoiceRecordingService {
   }
 
   /**
-   * When every correction pending for the panel should have landed, on the
-   * `performance.now()` clock, going by how long past ones took; null with none
-   * pending, or when one has no estimate (a spoken rewrite). Given `sessions`,
-   * only theirs count.
+   * When the corrections pending for the panel went out, the first of them,
+   * and when the last should land, going by how long past ones took, on the
+   * `performance.now()` clock; null with none pending, or when one has no
+   * estimate (a spoken rewrite). Given `sessions`, only theirs count.
    */
-  expectedCorrectionLanding(panelId: string, sessions?: ReadonlySet<string>): number | null {
-    let landsAt: number | null = null;
+  expectedCorrectionWindow(
+    panelId: string,
+    sessions?: ReadonlySet<string>
+  ): { startedAt: number; landsAt: number } | null {
+    let span: { startedAt: number; landsAt: number } | null = null;
     for (const correction of this.pendingCorrections) {
       if (!this.correctionFor(correction, panelId, sessions)) continue;
-      landsAt = Math.max(landsAt ?? 0, correction.startedAt + correction.expectedMs);
+      const landsAt = correction.startedAt + correction.expectedMs;
+      span = span
+        ? {
+            startedAt: Math.min(span.startedAt, correction.startedAt),
+            landsAt: Math.max(span.landsAt, landsAt),
+          }
+        : { startedAt: correction.startedAt, landsAt };
     }
     for (const rewrite of this.pendingRewrites) {
       if (rewrite.panelId === panelId) return null;
     }
-    return landsAt;
+    return span;
   }
 
   /**

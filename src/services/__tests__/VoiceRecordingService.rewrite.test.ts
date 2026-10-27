@@ -395,6 +395,8 @@ describe("VoiceRecordingService — rewrite selection by voice (#14635)", () => 
       instruction: "make it much shorter please",
     });
     expect(service.hasPendingCorrection("panel-1")).toBe(true);
+    // A spoken rewrite has no estimate, so a send's progress keeps no timeline.
+    expect(service.expectedCorrectionWindow("panel-1")).toBeNull();
 
     pending.resolve({ status: "replace", text: "Shorter." });
     await flush();

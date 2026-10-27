@@ -74,6 +74,18 @@ export function correctionStreamShare(
   return streaming && total > 0 ? Math.max(0, written / total) : null;
 }
 
+/**
+ * Where the fill stands at `now` on the cleanup's own timeline, from its
+ * request going out to its expected landing: a send whose Enter came partway
+ * through opens at the share already gone. Zero with no estimate.
+ */
+export function polishingShareAt(wait: VoiceSubmitWait, now: number): number {
+  if (wait.phase !== "polishing" || wait.expectedAt === null || wait.beganAt === null) return 0;
+  const span = wait.expectedAt - wait.beganAt;
+  if (span <= 0) return EXPECTED_SHARE;
+  return EXPECTED_SHARE * Math.min(1, Math.max(0, (now - wait.beganAt) / span));
+}
+
 /** The wait's caption: what it waits on, and the way out. */
 export function voiceSubmitWaitCaption(wait: VoiceSubmitWait): string {
   return `${wait.phase === "polishing" ? "Polishing…" : "Finishing…"} · Esc to cancel`;
@@ -118,6 +130,8 @@ export function VoiceSubmitProgress({
   const fillRef = useRef<HTMLDivElement>(null);
   // Where the fill stood when the cleanup began writing.
   const streamStartRef = useRef<number | null>(null);
+  // Whether this attempt's bar has been drawn yet.
+  const drawnRef = useRef(false);
   const captionRef = useRef<HTMLDivElement>(null);
   const [exiting, setExiting] = useState(false);
   const [wasShown, setWasShown] = useState(false);
@@ -147,23 +161,31 @@ export function VoiceSubmitProgress({
   useLayoutEffect(() => {
     const el = fillRef.current;
     if (!el || !wait || !shown) return;
+    const opening = !drawnRef.current;
+    drawnRef.current = true;
+    const drawn = progressOf(el);
     if (wait.phase === "finishing") {
-      restart(el, [at(progressOf(el)), at(FINISHING_CEILING)], {
+      restart(el, [at(drawn), at(FINISHING_CEILING)], {
         duration: FINISHING_CREEP_MS,
         easing: CREEP_EASING,
       });
       return;
     }
-    const from = progressOf(el);
     // Once the cleanup writes over the draft, the words are the progress: the
     // rest of the fill follows them, so the bar and the text finish together.
+    // A bar that opens on a cleanup already writing opens where the words are.
     if (streamed !== null) {
-      streamStartRef.current ??= from;
+      streamStartRef.current ??= opening ? 0 : drawn;
       const start = streamStartRef.current;
-      const target = Math.max(from, start + (OVERRUN_CEILING - start) * Math.min(1, streamed));
-      restart(el, [at(from), at(target)], { duration: MIN_SEGMENT_MS, easing: "ease-out" });
+      const target = Math.max(drawn, start + (OVERRUN_CEILING - start) * Math.min(1, streamed));
+      restart(el, [at(opening ? target : drawn), at(target)], {
+        duration: MIN_SEGMENT_MS,
+        easing: "ease-out",
+      });
       return;
     }
+    const now = performance.now();
+    const from = Math.max(drawn, polishingShareAt(wait, now));
     if (from >= EXPECTED_SHARE) {
       restart(el, [at(from), at(Math.max(from, OVERRUN_CEILING))], {
         duration: OVERRUN_CREEP_MS,
@@ -171,8 +193,12 @@ export function VoiceSubmitProgress({
       });
       return;
     }
-    const expectedAt = wait.expectedAt ?? wait.startedAt + UNESTIMATED_MS;
-    const first = Math.max(expectedAt - performance.now(), MIN_SEGMENT_MS);
+    // An estimate lands the fill at its share on time; the floor is for a
+    // guessed landing, which owes nobody punctuality.
+    const first =
+      wait.expectedAt !== null
+        ? Math.max(wait.expectedAt - now, 1)
+        : Math.max(wait.startedAt + UNESTIMATED_MS - now, MIN_SEGMENT_MS);
     const total = first + OVERRUN_CREEP_MS;
     restart(
       el,
