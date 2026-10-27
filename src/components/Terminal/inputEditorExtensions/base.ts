@@ -256,7 +256,7 @@ export function buildInputBarTheme(theme: ITheme): Extension {
       ".cm-voice-interim": {
         opacity: "0.55",
         fontStyle: "italic",
-        transition: "opacity 150ms ease-out",
+        transition: `opacity ${UI_ANIMATION_DURATION}ms ease-out`,
       },
       ".cm-voice-pending-ai": {
         textDecorationLine: "underline",
@@ -264,7 +264,7 @@ export function buildInputBarTheme(theme: ITheme): Extension {
         textDecorationColor: `color-mix(in oklab, ${c.successColor} 82%, transparent)`,
         textDecorationThickness: "2px",
         textUnderlineOffset: "3px",
-        transition: "text-decoration-color 150ms ease-out",
+        transition: `text-decoration-color ${UI_ANIMATION_DURATION}ms ease-out`,
       },
       // The pending underline's hue, drawn solid once the correction has
       // landed, and only under what it changed.

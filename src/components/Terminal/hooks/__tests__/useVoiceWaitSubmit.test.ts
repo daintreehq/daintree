@@ -9,6 +9,7 @@ vi.mock("@/services/VoiceRecordingService", () => ({
   voiceRecordingService: {
     stop: vi.fn().mockResolvedValue(undefined),
     hasPendingCorrection: vi.fn(() => false),
+    expectedCorrectionLanding: vi.fn(() => null),
     waitForPendingCorrections: vi.fn().mockResolvedValue(true),
     onSpokenSend: vi.fn(() => () => {}),
   },

@@ -114,6 +114,7 @@ import {
 } from "@shared/config/voiceCorrection";
 import type { VoiceRewriteOutcome } from "@shared/types/voice";
 import { VoiceSessionTimeline, type VoiceCorrectionOutcome } from "@/services/voiceSessionTimeline";
+import { estimateCorrectionMs, recordCorrectionPace } from "@/services/voiceCorrectionPace";
 
 const LOG_PREFIX = "[VoiceRecording]";
 const REPLACED_ELSEWHERE_ANNOUNCEMENT =
@@ -336,6 +337,14 @@ interface PendingCorrection {
   settle: () => void;
   /** The summary of the session that dictated the passages. */
   timeline: VoiceSessionTimeline | null;
+  /** `performance.now()` when the request went out. */
+  startedAt: number;
+  /** How long this machine's corrections of passages this long have taken. */
+  expectedMs: number;
+}
+
+function longestPassage(passages: CorrectionPassage[]): number {
+  return passages.reduce((longest, passage) => Math.max(longest, passage.text.length), 0);
 }
 
 /**
@@ -2822,6 +2831,8 @@ class VoiceRecordingService {
       }),
       settle: () => settle(),
       timeline,
+      startedAt: performance.now(),
+      expectedMs: estimateCorrectionMs(longestPassage(passages)),
     };
     timeline?.beginCorrection();
     this.pendingCorrections.add(correction);
@@ -2840,6 +2851,14 @@ class VoiceRecordingService {
       correction.passages.map((passage) => this.requestPassageCorrection(passage, correction))
     );
     correction.timeline?.noteCorrectionReplies(lastTiming);
+    // Timed whether or not its draft is still there to take it: the call cost
+    // the same either way.
+    if (results.every((result) => !result.failed)) {
+      recordCorrectionPace(
+        longestPassage(correction.passages),
+        performance.now() - correction.startedAt
+      );
+    }
 
     // The history keeps the cleaned text even when the draft it was meant for
     // was sent or edited first: that is when it's worth recovering.
@@ -3134,6 +3153,23 @@ class VoiceRecordingService {
       if (rewrite.panelId === panelId) return true;
     }
     return false;
+  }
+
+  /**
+   * When every correction pending for the panel should have landed, on the
+   * `performance.now()` clock, going by how long past ones took; null with none
+   * pending, or when one has no estimate (a spoken rewrite).
+   */
+  expectedCorrectionLanding(panelId: string): number | null {
+    let landsAt: number | null = null;
+    for (const correction of this.pendingCorrections) {
+      if (correction.panelId !== panelId) continue;
+      landsAt = Math.max(landsAt ?? 0, correction.startedAt + correction.expectedMs);
+    }
+    for (const rewrite of this.pendingRewrites) {
+      if (rewrite.panelId === panelId) return null;
+    }
+    return landsAt;
   }
 
   /**

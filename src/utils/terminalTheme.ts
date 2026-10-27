@@ -46,12 +46,25 @@ export interface InputBarColors {
   placeholder: string;
   placeholderSelected: string;
   placeholderMore: string;
+  /**
+   * A voice send's progress: the wash behind the draft, and the trace along
+   * the shell's foot. Neutral, as progress is status and the shell's perimeter
+   * already spends the accent. The trace is fitted to 3:1 against the shell
+   * with and without the wash, and the pane around it.
+   */
+  waitFill: string;
+  waitEdge: string;
+  /** The wait's caption, on the border: fitted to 4.5:1 over the pane, the shell and the wash. */
+  waitCaption: string;
   isDark: boolean;
 }
 
 type Rgb = readonly [number, number, number];
 
 const BLACK: Rgb = [0, 0, 0];
+
+/** How much foreground the voice send's progress wash carries over the shell. */
+const WAIT_FILL_MIX = 8;
 
 interface ParsedColor {
   rgb: Rgb;
@@ -189,6 +202,8 @@ export function resolveInputBarColors(theme: ITheme): InputBarColors {
   let focusRing = mix(acInk?.css ?? accent, 60, background);
   let placeholderPct = 67;
   let placeholderSelectedPct = 72;
+  let waitEdgePct = 60;
+  let waitCaptionPct = 72;
   if (fg && bg) {
     const rest = mixOklab(bg, BLACK, restDim);
     const hover = mixOklab(bg, BLACK, hoverDim);
@@ -198,6 +213,9 @@ export function resolveInputBarColors(theme: ITheme): InputBarColors {
       100,
       Math.max(placeholderPct + 6, fitMix(fg, bg, 48, 4.6, [selected]) ?? 100)
     );
+    const waitFill = mixOklab(fg, rest, WAIT_FILL_MIX / 100);
+    waitEdgePct = fitMix(fg, bg, 40, 3.1, [rest, waitFill, bg]) ?? 100;
+    waitCaptionPct = fitMix(fg, bg, 48, 4.6, [rest, waitFill, bg]) ?? 100;
     if (acInk) {
       const ringPct = fitMix(acInk.rgb, bg, 60, 3.1, [bg]);
       // A cursor too close to its background (Rosé Pine Dawn's) cannot reach
@@ -232,6 +250,9 @@ export function resolveInputBarColors(theme: ITheme): InputBarColors {
     placeholder: mix(fgCss, placeholderPct, background),
     placeholderSelected: mix(fgCss, placeholderSelectedPct, background),
     placeholderMore: mix(fgCss, Math.max(85, placeholderSelectedPct), background),
+    waitFill: mix(fgCss, WAIT_FILL_MIX, mix(background, restDim * 100, "black")),
+    waitEdge: mix(fgCss, waitEdgePct, background),
+    waitCaption: mix(fgCss, waitCaptionPct, background),
     isDark,
   };
 }

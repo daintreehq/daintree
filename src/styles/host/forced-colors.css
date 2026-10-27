@@ -221,6 +221,19 @@
     color: GrayText;
   }
 
+  /* A voice send's wait: the wash goes with every fill, so the 2px trace
+     alone is the progress. The caption's border mask is a gradient, which the
+     UA drops, so it takes a solid Canvas backing or the edge strikes through
+     it. */
+  [data-voice-submit-progress] {
+    border-bottom-color: CanvasText;
+  }
+
+  [data-voice-submit-caption] {
+    background: Canvas;
+    color: CanvasText;
+  }
+
   /* Highlight follows the keyboard. A selected pane wears it because its
      terminal holds the keys; once its own composer takes them, the composer's
      ring says so and the pane edge steps down to the system ink, rather than
