@@ -3,6 +3,7 @@ import type { PowerPolicyLevel } from "@shared/types/powerPolicy";
 import type { ResourceProfile } from "@shared/types/resourceProfile";
 import { useResourceProfileStore } from "@/store/resourceProfileStore";
 import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
+import { getPowerPolicyLevel, subscribePowerPolicyLevel } from "@/lib/powerPolicyState";
 
 export interface DecorativeMotionSignals {
   powerLevel: PowerPolicyLevel;
@@ -31,12 +32,6 @@ export function loopingMotionMode(signals: DecorativeMotionSignals): LoopingMoti
   if (signals.powerLevel === "saving" || signals.profile === "efficiency") return "reduced";
   return "full";
 }
-
-// Latest level from main, kept at module scope (one view per V8 context). The
-// preload replays a pre-subscriber push to the first subscriber only, so an
-// effect torn down and re-run (StrictMode, a remount) must not fall back to
-// `active` and lose it.
-let latestPowerLevel: PowerPolicyLevel = "active";
 
 /**
  * Mirrors {@link loopingMotionMode} onto `body[data-power-saving]` (stopped) and
@@ -68,7 +63,7 @@ export function usePowerSavingMotion(): void {
     document.querySelectorAll(".animate-spin-slow").forEach(synchronizeSpinner);
     const apply = () => {
       const mode = loopingMotionMode({
-        powerLevel: latestPowerLevel,
+        powerLevel: getPowerPolicyLevel(),
         profile: useResourceProfileStore.getState().profile,
         viewCached: isProjectViewCached(),
         documentHidden: document.visibilityState === "hidden",
@@ -85,10 +80,7 @@ export function usePowerSavingMotion(): void {
       }
     };
 
-    const offPolicy = window.electron?.events?.on("system:power-policy-changed", (snapshot) => {
-      latestPowerLevel = snapshot.level;
-      apply();
-    });
+    const offPolicy = subscribePowerPolicyLevel(apply);
     const offLifecycle = subscribeProjectViewLifecycle(apply);
     const offProfile = useResourceProfileStore.subscribe((state, previous) => {
       if (state.profile !== previous.profile) apply();
@@ -97,7 +89,7 @@ export function usePowerSavingMotion(): void {
     apply();
 
     return () => {
-      offPolicy?.();
+      offPolicy();
       offLifecycle();
       offProfile();
       document.removeEventListener("visibilitychange", apply);
@@ -106,8 +98,4 @@ export function usePowerSavingMotion(): void {
       delete document.body.dataset.motionRate;
     };
   }, []);
-}
-
-export function resetPowerSavingMotionForTests(): void {
-  latestPowerLevel = "active";
 }

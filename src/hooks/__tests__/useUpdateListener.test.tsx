@@ -4,6 +4,9 @@ import { renderHook, act } from "@testing-library/react";
 import { useUpdateListener } from "../useUpdateListener";
 import { useDistributionStore } from "@/store/distributionStore";
 import type { NotifyPayload } from "@/lib/notify";
+import { __resetPowerPolicyStateForTests, isScreenLocked } from "@/lib/powerPolicyState";
+import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
+import type { PowerPolicySnapshot } from "@shared/types/powerPolicy";
 
 interface MockNotification {
   id: string;
@@ -526,6 +529,46 @@ describe("useUpdateListener", () => {
     });
 
     expect(notifyDismissMock).not.toHaveBeenCalled();
+  });
+
+  it("leaves the ready stage unread when it lands on a locked screen (#14885)", () => {
+    let pushPolicy: ((snapshot: PowerPolicySnapshot) => void) | null = null;
+    (window.electron as unknown as { events: unknown }).events = {
+      on: (name: string, cb: (snapshot: PowerPolicySnapshot) => void) => {
+        if (name === "system:power-policy-changed") pushPolicy = cb;
+        return () => {};
+      },
+    };
+    // A locked screen fires no blur: the window still reports focus.
+    const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    useNotificationHistoryStore.setState({ entries: [], unreadCount: 0 });
+    try {
+      renderHook(() => useUpdateListener());
+      act(() => {
+        capturedAvailable!({ version: "2.5.0" });
+      });
+      isScreenLocked();
+      pushPolicy!({
+        level: "deep",
+        canObserve: false,
+        onBattery: false,
+        screenLocked: true,
+        anyWindowFocused: true,
+        anyWindowVisible: true,
+      });
+
+      act(() => {
+        capturedDownloaded!({ version: "2.5.0" });
+      });
+
+      const ready = useNotificationHistoryStore
+        .getState()
+        .entries.find((e) => e.title === "Update ready");
+      expect(ready?.seenAsToast).toBe(false);
+    } finally {
+      hasFocus.mockRestore();
+      __resetPowerPolicyStateForTests();
+    }
   });
 
   it("clears both update controls when update-available fires after update-ready (stage regression)", () => {
