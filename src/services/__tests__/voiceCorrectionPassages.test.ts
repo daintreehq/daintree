@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { settlePassageReplies } from "../voiceCorrectionPassages";
+import { VoiceCorrectionPassagesSchema } from "@shared/types/voiceSessionSummary";
+import {
+  countPassageFates,
+  settlePassageReplies,
+  type PassageFate,
+} from "../voiceCorrectionPassages";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -36,5 +41,40 @@ describe("settlePassageReplies", () => {
     second.resolve({ text: "B", timing: null });
 
     expect((await settled).lastTiming).toBeNull();
+  });
+});
+
+describe("countPassageFates", () => {
+  const fates: PassageFate[] = [
+    "applied",
+    "unchanged",
+    "skipped",
+    "rejected_edit_size",
+    "rejected_negation",
+    "rejected_number",
+    "rejected_protected_span",
+    "rejected_command",
+    "rejected_low_confidence",
+    "failed",
+    "timed_out",
+    "dropped",
+    "unlanded",
+  ];
+
+  it("counts every fate under a field of its own, once", () => {
+    const counts = countPassageFates(fates);
+    const { sent, ...byFate } = counts;
+    expect(sent).toBe(fates.length);
+    expect(Object.values(byFate)).toEqual(fates.map(() => 1));
+    expect(VoiceCorrectionPassagesSchema.safeParse(counts).success).toBe(true);
+  });
+
+  it("adds repeats up and counts none for no passages", () => {
+    expect(countPassageFates(["applied", "applied", "failed"])).toMatchObject({
+      sent: 3,
+      applied: 2,
+      failed: 1,
+    });
+    expect(countPassageFates([]).sent).toBe(0);
   });
 });

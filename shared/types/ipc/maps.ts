@@ -7,7 +7,11 @@ import type {
   VoiceRevealRequest,
   VoiceSessionEndReason,
 } from "../voice.js";
-import type { VoiceCorrectionTiming, VoiceSessionReport } from "../voiceSessionSummary.js";
+import type {
+  VoiceCorrectionTiming,
+  VoiceCorrectionVerdict,
+  VoiceSessionReport,
+} from "../voiceSessionSummary.js";
 import type {
   Project,
   ProjectAddOptions,
@@ -1320,6 +1324,8 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
       action: "no_change" | "replace";
       correctedText: string;
       failed?: true;
+      /** Why the passage came back as it did: a code, never text. */
+      verdict?: VoiceCorrectionVerdict;
       timing?: VoiceCorrectionTiming;
     };
   };

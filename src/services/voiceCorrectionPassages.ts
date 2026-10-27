@@ -1,4 +1,8 @@
 import type {
+  VoiceCorrectionPassages,
+  VoiceCorrectionVerdict,
+} from "@shared/types/voiceSessionSummary";
+import type {
   DictationRecord,
   DictationTextSpan,
   DictationUtterance,
@@ -154,6 +158,48 @@ export function transcribedPassage(
     at = to;
   }
   return { text, uncertain };
+}
+
+/** Where one passage's cleanup ended: main's verdict, or what became of it here. */
+export type PassageFate =
+  Exclude<VoiceCorrectionVerdict, "replaced"> | "applied" | "unlanded" | "dropped";
+
+const PASSAGE_FATE_FIELDS: Record<PassageFate, Exclude<keyof VoiceCorrectionPassages, "sent">> = {
+  applied: "applied",
+  unchanged: "unchanged",
+  skipped: "skipped",
+  rejected_edit_size: "rejectedEditSize",
+  rejected_negation: "rejectedNegation",
+  rejected_number: "rejectedNumber",
+  rejected_protected_span: "rejectedProtectedSpan",
+  rejected_command: "rejectedCommand",
+  rejected_low_confidence: "rejectedLowConfidence",
+  failed: "failed",
+  timed_out: "timedOut",
+  dropped: "dropped",
+  unlanded: "unlanded",
+};
+
+/** Each passage counted once, under its fate. */
+export function countPassageFates(fates: readonly PassageFate[]): VoiceCorrectionPassages {
+  const counts: VoiceCorrectionPassages = {
+    sent: fates.length,
+    applied: 0,
+    unchanged: 0,
+    skipped: 0,
+    rejectedEditSize: 0,
+    rejectedNegation: 0,
+    rejectedNumber: 0,
+    rejectedProtectedSpan: 0,
+    rejectedCommand: 0,
+    rejectedLowConfidence: 0,
+    failed: 0,
+    timedOut: 0,
+    dropped: 0,
+    unlanded: 0,
+  };
+  for (const fate of fates) counts[PASSAGE_FATE_FIELDS[fate]]++;
+  return counts;
 }
 
 /** One learning baseline for the session, from each passage's settled text. */

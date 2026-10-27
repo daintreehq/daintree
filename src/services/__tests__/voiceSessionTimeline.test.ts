@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VOICE_SESSION_SUMMARY_MESSAGE } from "@shared/utils/voiceLogFields";
+import { countPassageFates } from "../voiceCorrectionPassages";
 import {
   VOICE_FRAME_WAIT_MS,
   VOICE_PRESS_WINDOW_MS,
@@ -177,8 +178,26 @@ describe("VoiceSessionTimeline", () => {
     t.finish("send");
     expect(log).not.toHaveBeenCalled();
     clock = 1_850;
-    t.endCorrection("applied");
+    t.endCorrection("applied", countPassageFates(["applied"]));
     expect(logged()).toMatchObject({ correctionMs: 850, correction: "applied" });
+  });
+
+  it("logs the fate of each passage sent, and none for a session without cleanup", () => {
+    const none = timeline();
+    none.finish("user");
+    expect(logged().correctionPassages).toEqual(countPassageFates([]));
+
+    log.mockClear();
+    const t = timeline();
+    t.beginCorrection();
+    t.finish("user");
+    t.endCorrection("discarded", countPassageFates(["applied", "rejected_number", "unlanded"]));
+    expect(logged().correctionPassages).toMatchObject({
+      sent: 3,
+      applied: 1,
+      rejectedNumber: 1,
+      unlanded: 1,
+    });
   });
 
   it("splits the correction into main's preparation, the round trip and applying it", () => {
@@ -189,7 +208,7 @@ describe("VoiceSessionTimeline", () => {
     clock = 2_450;
     t.noteCorrectionReplies({ prepMs: 12.4, requestMs: 1_380.6 });
     clock = 2_470;
-    t.endCorrection("applied");
+    t.endCorrection("applied", countPassageFates(["applied"]));
     expect(logged()).toMatchObject({
       correctionMs: 1_470,
       correctionPrepMs: 12,
@@ -205,7 +224,7 @@ describe("VoiceSessionTimeline", () => {
     clock = 1_900;
     t.noteCorrectionReplies({ prepMs: 3, requestMs: 800, prompt: "fix the login bug" });
     clock = 1_910;
-    t.endCorrection("applied");
+    t.endCorrection("applied", countPassageFates(["applied"]));
     const line = logged();
     expect(line).toMatchObject({
       correctionPrepMs: null,
@@ -221,7 +240,7 @@ describe("VoiceSessionTimeline", () => {
     t.beginCorrection();
     t.finish("user");
     clock = 1_300;
-    t.endCorrection("discarded");
+    t.endCorrection("discarded", countPassageFates(["dropped"]));
     t.noteCorrectionReplies({ prepMs: 4, requestMs: 900 });
     t.reportEnded("stopped", report);
     expect(logged()).toMatchObject({
@@ -237,7 +256,7 @@ describe("VoiceSessionTimeline", () => {
     t.beginCorrection();
     t.finish("user");
     clock = 1_300;
-    t.endCorrection("discarded");
+    t.endCorrection("discarded", countPassageFates(["dropped"]));
     expect(logged()).toMatchObject({
       correctionMs: 300,
       correctionPrepMs: null,

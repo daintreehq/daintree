@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { z } from "zod";
 import {
+  VoiceCorrectionPassagesSchema,
   VoiceCorrectionTimingSchema,
   VoiceSessionReportSchema,
   VoiceSessionSummarySchema,
@@ -16,6 +17,20 @@ function leafType(field: z.ZodType): string {
     def = def.innerType._zod.def as Def;
   }
   return def.type;
+}
+
+// Every field, nested objects flattened to dotted paths.
+function leaves(shape: Record<string, z.ZodType>, prefix = ""): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [field, type] of Object.entries(shape)) {
+    const kind = leafType(type);
+    if (kind === "object") {
+      Object.assign(out, leaves((type as z.ZodObject).shape, `${prefix}${field}.`));
+    } else {
+      out[`${prefix}${field}`] = kind;
+    }
+  }
+  return out;
 }
 
 const report: VoiceSessionReport = {
@@ -46,6 +61,22 @@ const summary: VoiceSessionSummary = {
   correctionRequestMs: 1_400,
   correctionApplyMs: 6,
   correction: "applied",
+  correctionPassages: {
+    sent: 1,
+    applied: 1,
+    unchanged: 0,
+    skipped: 0,
+    rejectedEditSize: 0,
+    rejectedNegation: 0,
+    rejectedNumber: 0,
+    rejectedProtectedSpan: 0,
+    rejectedCommand: 0,
+    rejectedLowConfidence: 0,
+    failed: 0,
+    timedOut: 0,
+    dropped: 0,
+    unlanded: 0,
+  },
   droppedQueued: 0,
   charsCommitted: 42,
   audioNoText: false,
@@ -56,13 +87,22 @@ describe("voice session summary schema", () => {
     ["summary", VoiceSessionSummarySchema],
     ["report", VoiceSessionReportSchema],
     ["correction timing", VoiceCorrectionTimingSchema],
+    ["correction passages", VoiceCorrectionPassagesSchema],
   ])("%s holds only numbers, enums and flags", (_name, schema) => {
-    for (const [field, type] of Object.entries(schema.shape)) {
-      expect([field, leafType(type)]).toEqual([
-        field,
-        expect.stringMatching(/^(number|enum|boolean)$/),
-      ]);
+    for (const [field, type] of Object.entries(leaves(schema.shape))) {
+      expect([field, type]).toEqual([field, expect.stringMatching(/^(number|enum|boolean)$/)]);
     }
+  });
+
+  it("leaves the passage counts as counts", () => {
+    expect(
+      VoiceCorrectionPassagesSchema.safeParse({ ...summary.correctionPassages, applied: "text" })
+        .success
+    ).toBe(false);
+    expect(
+      VoiceCorrectionPassagesSchema.safeParse({ ...summary.correctionPassages, rejected: "x" })
+        .success
+    ).toBe(false);
   });
 
   it("rejects a field it does not declare", () => {

@@ -11,6 +11,7 @@ import {
   type CorrectionTargetContext,
 } from "../../shared/config/voiceCorrection.js";
 import type { VoiceRewriteOutcome } from "../../shared/types/voice.js";
+import type { VoiceCorrectionVerdict } from "../../shared/types/voiceSessionSummary.js";
 import { voiceErrorLogFields } from "../../shared/utils/voiceLogFields.js";
 import { buildOpenAIHeaders } from "../../shared/utils/openaiHeaders.js";
 import { createTimeoutSignal, withTimeoutSignal } from "../../shared/utils/timeoutSignal.js";
@@ -198,6 +199,8 @@ export interface VoiceCorrectionResult {
   correctedText: string;
   confidence: "low" | "medium" | "high";
   confirmedText: string;
+  /** Why the passage came back as it did, for the session summary: a code, never text. */
+  verdict: VoiceCorrectionVerdict;
   /** The request failed or was cancelled, so the raw text stands untried. */
   failed?: true;
   /** When the OpenAI request went out (performance.now()) and how long it took; absent when none did. */
@@ -319,6 +322,25 @@ class CorrectionDiscardedError extends Error {
   }
 }
 
+function rejectionVerdict(
+  rejection: CorrectionRejectReason | "low_confidence" | VoiceCommandEditRejection
+): VoiceCorrectionVerdict {
+  switch (rejection) {
+    case "edit_size":
+      return "rejected_edit_size";
+    case "negation":
+      return "rejected_negation";
+    case "number":
+      return "rejected_number";
+    case "protected_span":
+      return "rejected_protected_span";
+    case "low_confidence":
+      return "rejected_low_confidence";
+    default:
+      return "rejected_command";
+  }
+}
+
 export class VoiceCorrectionService {
   // When each correction prompt last reached OpenAI, by account and content.
   private readonly promptUsedAt = new Map<string, number>();
@@ -359,6 +381,7 @@ export class VoiceCorrectionService {
         correctedText: request.rawText,
         confidence: "high",
         confirmedText: request.rawText,
+        verdict: "skipped",
       };
     }
 
@@ -372,6 +395,7 @@ export class VoiceCorrectionService {
         correctedText: request.rawText,
         confidence: "high",
         confirmedText: request.rawText,
+        verdict: "skipped",
       };
     }
 
@@ -418,6 +442,7 @@ export class VoiceCorrectionService {
             correctedText: request.rawText,
             confidence: result.confidence,
             confirmedText: request.rawText,
+            verdict: rejectionVerdict(rejection),
           };
         }
         confirmedText = candidate;
@@ -438,6 +463,7 @@ export class VoiceCorrectionService {
         action,
         correctedText: confirmedText,
         confirmedText,
+        verdict: action === "replace" ? "replaced" : "unchanged",
       };
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
@@ -447,6 +473,7 @@ export class VoiceCorrectionService {
           confidence: "low",
           confirmedText: request.rawText,
           failed: true,
+          verdict: "failed",
         };
       }
       const rejection = error instanceof OpenAIRequestError ? error : undefined;
@@ -461,6 +488,8 @@ export class VoiceCorrectionService {
         confidence: "low",
         confirmedText: request.rawText,
         failed: true,
+        verdict:
+          error instanceof DOMException && error.name === "TimeoutError" ? "timed_out" : "failed",
       };
     }
   }
@@ -816,7 +845,7 @@ export class VoiceCorrectionService {
     trace: RequestTrace,
     signal: AbortSignal | undefined,
     onText: ((text: string) => void) | undefined
-  ): Promise<Omit<VoiceCorrectionResult, "confirmedText">> {
+  ): Promise<Omit<VoiceCorrectionResult, "confirmedText" | "verdict">> {
     const systemPrompt = this.buildSystemPrompt(settings);
     const userMessage = this.buildUserMessage(request);
     logDebug(`${P} Calling Responses API`, {
@@ -1032,7 +1061,7 @@ export class VoiceCorrectionService {
     signal: AbortSignal,
     trace: RequestTrace,
     onText: ((text: string) => void) | undefined
-  ): Promise<Omit<VoiceCorrectionResult, "confirmedText">> {
+  ): Promise<Omit<VoiceCorrectionResult, "confirmedText" | "verdict">> {
     const maxOutputTokens = this.getMaxOutputTokens(request);
     const body = JSON.stringify({
       ...this.correctionBody(settings, systemPrompt, userMessage, maxOutputTokens),
@@ -1068,7 +1097,7 @@ export class VoiceCorrectionService {
     signal: AbortSignal,
     maxOutputTokens: number,
     onText: ((text: string) => void) | undefined
-  ): Promise<Omit<VoiceCorrectionResult, "confirmedText">> {
+  ): Promise<Omit<VoiceCorrectionResult, "confirmedText" | "verdict">> {
     const response = await fetch(RESPONSES_URL, {
       method: "POST",
       headers: {

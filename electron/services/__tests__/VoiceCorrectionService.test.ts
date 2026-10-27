@@ -784,6 +784,143 @@ describe("VoiceCorrectionService", () => {
     });
   });
 
+  describe("verdicts", () => {
+    async function verdictOf(
+      rawText: string,
+      reply: { action?: "no_change" | "replace"; corrected_text: string; confidence?: string }
+    ) {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(makeFetchResponse(reply)));
+      return (await new VoiceCorrectionService().correct({ rawText }, BASE_SETTINGS)).verdict;
+    }
+
+    it("names an applied cleanup replaced", async () => {
+      expect(
+        await verdictOf("um wire up the racked component", {
+          corrected_text: "Wire up the React component.",
+        })
+      ).toBe("replaced");
+    });
+
+    it("names a model that left the text alone, or only restated it, unchanged", async () => {
+      expect(await verdictOf("react is great", { action: "no_change", corrected_text: "" })).toBe(
+        "unchanged"
+      );
+      expect(await verdictOf("react is great", { corrected_text: "react is great" })).toBe(
+        "unchanged"
+      );
+    });
+
+    it.each([
+      [
+        "rejected_low_confidence",
+        "the promise rejects when it times out",
+        { corrected_text: "The promise regex when it times out.", confidence: "low" },
+      ],
+      [
+        "rejected_negation",
+        "Don't push to main, no wait, push to the release branch.",
+        { corrected_text: "Push to the release branch." },
+      ],
+      [
+        "rejected_number",
+        "retry the request 3 times",
+        { corrected_text: "Retry the request 4 times." },
+      ],
+      [
+        "rejected_protected_span",
+        "check @src/App.tsx for the bug",
+        { corrected_text: "Check @src/App.jsx for the bug." },
+      ],
+      [
+        "rejected_edit_size",
+        "the parser keeps the tokens in order",
+        { corrected_text: "A completely different sentence about databases, caching and queues." },
+      ],
+    ] as const)("names a guard's refusal %s", async (verdict, rawText, reply) => {
+      expect(await verdictOf(rawText, reply)).toBe(verdict);
+    });
+
+    it("names a refused command rejected_command", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(makeFetchResponse({ corrected_text: "/compact" }))
+      );
+      const result = await new VoiceCorrectionService().correct(
+        { rawText: "run the compact command", startsPrompt: true },
+        BASE_SETTINGS
+      );
+      expect(result.verdict).toBe("rejected_command");
+    });
+
+    it("names a passage it never sent skipped", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      const service = new VoiceCorrectionService();
+      expect((await service.correct({ rawText: "   " }, BASE_SETTINGS)).verdict).toBe("skipped");
+      expect(
+        (await service.correct({ rawText: "word ".repeat(2_500) }, BASE_SETTINGS)).verdict
+      ).toBe("skipped");
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it("names a refused request, a malformed reply and a cancelled request failed", async () => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(makeFetchResponse({}, false, 500)));
+      expect(
+        (await new VoiceCorrectionService().correct({ rawText: "react is great" }, BASE_SETTINGS))
+          .verdict
+      ).toBe("failed");
+
+      expect(
+        await verdictOf("react is great", {
+          corrected_text: "React is great.",
+          confidence: "certain",
+        })
+      ).toBe("failed");
+
+      const controller = new AbortController();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockImplementation(
+          (_url: string, init: RequestInit) =>
+            new Promise((_resolve, reject) => {
+              init.signal!.addEventListener("abort", () => reject(init.signal!.reason), {
+                once: true,
+              });
+            })
+        )
+      );
+      const cancelled = new VoiceCorrectionService().correct(
+        { rawText: "react is great" },
+        BASE_SETTINGS,
+        controller.signal
+      );
+      controller.abort();
+      expect((await cancelled).verdict).toBe("failed");
+    });
+
+    it("names a request that ran out its deadline timed_out", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockImplementation(
+          (_url: string, init: RequestInit) =>
+            new Promise((_resolve, reject) => {
+              init.signal!.addEventListener("abort", () => reject(init.signal!.reason), {
+                once: true,
+              });
+            })
+        )
+      );
+      const pending = new VoiceCorrectionService().correct(
+        { rawText: "type script compiler" },
+        BASE_SETTINGS
+      );
+      await vi.advanceTimersByTimeAsync(7_000);
+      const result = await pending;
+      expect(result.verdict).toBe("timed_out");
+      expect(result.failed).toBe(true);
+    });
+  });
+
   describe("target commands", () => {
     function userSkill(agentId: "claude" | "codex", name: string, description: string) {
       return {
