@@ -130,6 +130,7 @@ beforeEach(async () => {
           return () => {};
         }),
         onParagraphBoundary: vi.fn(() => () => {}),
+        onCorrectionProgress: vi.fn(() => () => {}),
         onFileTokenResolved: vi.fn(() => () => {}),
         onError: vi.fn(() => () => {}),
         onStatus: vi.fn(() => () => {}),
