@@ -72,6 +72,19 @@ const PRECONNECT_WAIT_MS = 250;
 // there for a passage sent now.
 const PRECONNECT_FRESH_MS = 2000;
 const LEADING_FILLER_RE = /^(?:\s*(?:um|uh)[\s,.;:!-]+)+/i;
+// How often a streaming correction reports its text so far: a sweep of a few
+// dozen steps a second, not one per token.
+const STREAM_PROGRESS_INTERVAL_MS = 33;
+// The strict schema writes `action` first, so a reply that replaces the text
+// says so before any of it streams.
+const STREAMED_TEXT_START_RE = /^\s*\{\s*"action"\s*:\s*"replace"\s*,\s*"corrected_text"\s*:\s*"/;
+const JSON_ESCAPES: Record<string, string> = {
+  b: "\b",
+  f: "\f",
+  n: "\n",
+  r: "\r",
+  t: "\t",
+};
 // Two flagged words with only spaces between them are one unsure phrase.
 const UNCERTAIN_JOIN_RE = /^[^\S\r\n]+$/;
 
@@ -203,6 +216,76 @@ interface CorrectionApiResult {
   confidence: "low" | "medium" | "high";
 }
 
+/** The Responses API reply, read whole or rebuilt from its stream. */
+interface CorrectionReply {
+  output_text?: string;
+  output?: Array<{ content?: Array<{ text?: string }> }>;
+  status?: string;
+  incomplete_details?: { reason?: string };
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    input_tokens_details?: { cached_tokens?: number };
+  };
+}
+
+interface CorrectionStreamEvent {
+  type?: string;
+  delta?: string;
+  response?: CorrectionReply & { error?: { code?: unknown } | null };
+  error?: { code?: unknown };
+}
+
+/**
+ * The corrected text a partial reply has written so far, as it would land:
+ * leading filler gone, and cut at its last whitespace so a word still
+ * arriving isn't shown half-written. Null until a reply that replaces the
+ * text has started it.
+ */
+function streamedCorrectionText(reply: string): string | null {
+  const start = STREAMED_TEXT_START_RE.exec(reply);
+  if (!start) return null;
+  let text = "";
+  for (let i = start[0].length; i < reply.length; i++) {
+    const ch = reply[i]!;
+    if (ch === '"') break;
+    if (ch !== "\\") {
+      text += ch;
+      continue;
+    }
+    const escaped = reply[i + 1];
+    if (escaped === undefined) break;
+    if (escaped === "u") {
+      const hex = reply.slice(i + 2, i + 6);
+      if (!/^[0-9a-f]{4}$/i.test(hex)) break;
+      text += String.fromCharCode(parseInt(hex, 16));
+      i += 5;
+    } else {
+      text += JSON_ESCAPES[escaped] ?? escaped;
+      i++;
+    }
+  }
+  const cleaned = text.replace(LEADING_FILLER_RE, "").trimStart();
+  const cut = cleaned.search(/\s\S*$/);
+  return cut > 0 ? cleaned.slice(0, cut) : "";
+}
+
+/** Each complete server-sent event's JSON in `buffer`, and what's left of it. */
+function takeStreamEvents(buffer: string): { events: CorrectionStreamEvent[]; rest: string } {
+  const frames = buffer.split(/\r?\n\r?\n/);
+  const rest = frames.pop() ?? "";
+  const events: CorrectionStreamEvent[] = [];
+  for (const frame of frames) {
+    const data = frame
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).replace(/^ /, ""))
+      .join("\n");
+    if (data) events.push(JSON.parse(data) as CorrectionStreamEvent);
+  }
+  return { events, rest };
+}
+
 // Carries the status and OpenAI error code only; the body's message can echo request content.
 class OpenAIRequestError extends Error {
   constructor(
@@ -242,15 +325,18 @@ export class VoiceCorrectionService {
 
   /**
    * Cleans up one passage. `signal` belongs to the request alone: nothing
-   * another dictation does can cancel it.
+   * another dictation does can cancel it. With `onText`, the reply streams,
+   * and `onText` hears the corrected text so far as it grows; the result is
+   * still judged whole, and is the same one the reply would give unstreamed.
    */
   async correct(
     request: VoiceCorrectionRequest,
     settings: VoiceCorrectionSettings,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    onText?: (text: string) => void
   ): Promise<VoiceCorrectionResult> {
     const trace: RequestTrace = {};
-    const result = await this.correctPassage(request, settings, trace, signal);
+    const result = await this.correctPassage(request, settings, trace, signal, onText);
     if (trace.sentAt === undefined) return result;
     const ms = (trace.settledAt ?? performance.now()) - trace.sentAt;
     return { ...result, roundTrip: { sentAt: trace.sentAt, ms } };
@@ -260,7 +346,8 @@ export class VoiceCorrectionService {
     request: VoiceCorrectionRequest,
     settings: VoiceCorrectionSettings,
     trace: RequestTrace,
-    signal: AbortSignal | undefined
+    signal: AbortSignal | undefined,
+    onText: ((text: string) => void) | undefined
   ): Promise<VoiceCorrectionResult> {
     const trimmedRaw = request.rawText.trim();
     if (!trimmedRaw) {
@@ -295,7 +382,8 @@ export class VoiceCorrectionService {
         },
         settings,
         trace,
-        signal
+        signal,
+        onText
       );
 
       let confirmedText: string;
@@ -723,7 +811,8 @@ export class VoiceCorrectionService {
     request: VoiceCorrectionRequest,
     settings: VoiceCorrectionSettings,
     trace: RequestTrace,
-    signal: AbortSignal | undefined
+    signal: AbortSignal | undefined,
+    onText: ((text: string) => void) | undefined
   ): Promise<Omit<VoiceCorrectionResult, "confirmedText">> {
     const systemPrompt = this.buildSystemPrompt(settings);
     const userMessage = this.buildUserMessage(request);
@@ -739,7 +828,15 @@ export class VoiceCorrectionService {
     return await withTimeoutSignal(
       this.getCorrectionTimeoutMs(request),
       (deadline) =>
-        this.requestCorrection(request, settings, systemPrompt, userMessage, deadline, trace),
+        this.requestCorrection(
+          request,
+          settings,
+          systemPrompt,
+          userMessage,
+          deadline,
+          trace,
+          onText
+        ),
       signal
     );
   }
@@ -930,12 +1027,14 @@ export class VoiceCorrectionService {
     systemPrompt: string,
     userMessage: string,
     signal: AbortSignal,
-    trace: RequestTrace
+    trace: RequestTrace,
+    onText: ((text: string) => void) | undefined
   ): Promise<Omit<VoiceCorrectionResult, "confirmedText">> {
     const maxOutputTokens = this.getMaxOutputTokens(request);
-    const body = JSON.stringify(
-      this.correctionBody(settings, systemPrompt, userMessage, maxOutputTokens)
-    );
+    const body = JSON.stringify({
+      ...this.correctionBody(settings, systemPrompt, userMessage, maxOutputTokens),
+      ...(onText ? { stream: true } : {}),
+    });
     if (this.preconnecting) {
       await this.awaitPreconnect(this.preconnecting);
       // Nothing went out, so there is no round trip to report.
@@ -944,7 +1043,14 @@ export class VoiceCorrectionService {
     const sentAt = performance.now();
     trace.sentAt = sentAt;
     try {
-      const result = await this.sendCorrection(request, settings, body, signal, maxOutputTokens);
+      const result = await this.sendCorrection(
+        request,
+        settings,
+        body,
+        signal,
+        maxOutputTokens,
+        onText
+      );
       this.notePromptUsed(this.promptIdentity(settings, systemPrompt), sentAt);
       return result;
     } finally {
@@ -957,7 +1063,8 @@ export class VoiceCorrectionService {
     settings: VoiceCorrectionSettings,
     body: string,
     signal: AbortSignal,
-    maxOutputTokens: number
+    maxOutputTokens: number,
+    onText: ((text: string) => void) | undefined
   ): Promise<Omit<VoiceCorrectionResult, "confirmedText">> {
     const response = await fetch(RESPONSES_URL, {
       method: "POST",
@@ -973,17 +1080,9 @@ export class VoiceCorrectionService {
       throw await OpenAIRequestError.fromResponse(response);
     }
 
-    const data = (await response.json()) as {
-      output_text?: string;
-      output?: Array<{ content?: Array<{ text?: string }> }>;
-      status?: string;
-      incomplete_details?: { reason?: string };
-      usage?: {
-        input_tokens?: number;
-        output_tokens?: number;
-        input_tokens_details?: { cached_tokens?: number };
-      };
-    };
+    const data = onText
+      ? await this.readCorrectionStream(response, onText)
+      : ((await response.json()) as CorrectionReply);
     // A cut-off reply can still parse, so check the status before the body:
     // the passage is corrected whole or not at all.
     if (data.status === "incomplete") {
@@ -1018,5 +1117,62 @@ export class VoiceCorrectionService {
           : this.normalizeCorrectedText(parsed.corrected_text),
       confidence: parsed.confidence,
     };
+  }
+
+  /**
+   * Reads a streamed reply to its end and rebuilds the reply the request
+   * would have returned whole, with the text its deltas wrote. Meanwhile
+   * `onText` hears the corrected text so far, once it has grown and at most
+   * every STREAM_PROGRESS_INTERVAL_MS. A stream that ends before its last
+   * event is a cut-off reply.
+   */
+  private async readCorrectionStream(
+    response: Response,
+    onText: (text: string) => void
+  ): Promise<CorrectionReply> {
+    const reader = response.body?.getReader();
+    if (!reader) throw new CorrectionDiscardedError("malformed");
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let text = "";
+    let reply: CorrectionReply | null = null;
+    let reported = "";
+    let reportedAt = -Infinity;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        buffer += decoder.decode(value, { stream: !done });
+        const { events, rest } = takeStreamEvents(done ? `${buffer}\n\n` : buffer);
+        buffer = rest;
+        for (const event of events) {
+          if (event.type === "response.output_text.delta" && typeof event.delta === "string") {
+            text += event.delta;
+          } else if (event.type === "response.completed" || event.type === "response.incomplete") {
+            reply = event.response ?? {};
+          } else if (event.type === "response.failed" || event.type === "error") {
+            const code = event.response?.error?.code ?? event.error?.code;
+            throw new OpenAIRequestError(
+              response.status,
+              typeof code === "string" ? code : undefined
+            );
+          }
+        }
+        if (done) break;
+        const now = performance.now();
+        if (reply === null && now - reportedAt >= STREAM_PROGRESS_INTERVAL_MS) {
+          const shown = streamedCorrectionText(text);
+          if (shown && shown.length > reported.length) {
+            reported = shown;
+            reportedAt = now;
+            onText(shown);
+          }
+        }
+      }
+    } catch (error) {
+      void reader.cancel().catch(() => undefined);
+      throw error;
+    }
+    if (reply === null) throw new CorrectionDiscardedError("incomplete");
+    return text ? { ...reply, output_text: text } : reply;
   }
 }
