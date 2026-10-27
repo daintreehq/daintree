@@ -126,7 +126,11 @@ async function mountBoth(onPaneSend = vi.fn(), onReplySend = vi.fn()) {
 
 function dictating(target: VoiceRecordingTarget) {
   act(() => {
-    useVoiceRecordingStore.setState({ status: "recording", activeTarget: target, micSignal: "live" });
+    useVoiceRecordingStore.setState({
+      status: "recording",
+      activeTarget: target,
+      micSignal: "live",
+    });
   });
 }
 

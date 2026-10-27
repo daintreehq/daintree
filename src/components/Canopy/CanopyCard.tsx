@@ -553,7 +553,10 @@ export function CanopyCard({
       };
     }
     if (reconnecting) {
-      return { ok: false, message: "Its host is reconnecting. Try dictation again once it's back." };
+      return {
+        ok: false,
+        message: "Its host is reconnecting. Try dictation again once it's back.",
+      };
     }
     if (stream.watchId === null) {
       return {

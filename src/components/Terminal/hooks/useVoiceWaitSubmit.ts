@@ -283,7 +283,9 @@ export function useVoiceWaitSubmit({
     () =>
       voiceRecordingService.onSpokenSend(
         voiceId,
-        ownVoice ? voiceProjectId : (voiceProjectId ?? useProjectStore.getState().currentProject?.id),
+        ownVoice
+          ? voiceProjectId
+          : (voiceProjectId ?? useProjectStore.getState().currentProject?.id),
         () => {
           if (isDisabledRef.current?.()) {
             void voiceRecordingService.stop("Dictation stopped.", { reason: "send" });
@@ -304,10 +306,7 @@ export function useVoiceWaitSubmit({
 
   /** A send from the editor that waits for dictation still finishing or being corrected. */
   const submitFromEditor = useCallback(() => {
-    if (
-      isVoiceSessionActiveFor(voiceId) ||
-      voiceRecordingService.hasPendingCorrection(voiceId)
-    ) {
+    if (isVoiceSessionActiveFor(voiceId) || voiceRecordingService.hasPendingCorrection(voiceId)) {
       startVoiceWaitSubmit();
       return;
     }
