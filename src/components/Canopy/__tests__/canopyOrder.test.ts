@@ -348,7 +348,10 @@ describe("the Needs you band", () => {
     const held = order(["a", "b"], { rankedFor: 2, band: ["a", "b"] });
     const step = nextCanopyOrder(
       held,
-      input({ a: 90, b: 0 }, { needsYou: ["a"], archived: ["b"], selected: "b", pointerInList: true })
+      input(
+        { a: 90, b: 0 },
+        { needsYou: ["a"], archived: ["b"], selected: "b", pointerInList: true }
+      )
     );
     expect(idsOf(step)).toEqual(["a", "b"]);
     expect(bandOf(step)).toEqual(["a"]);

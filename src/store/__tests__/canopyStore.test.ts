@@ -122,7 +122,9 @@ describe("orders", () => {
   afterEach(() => window.localStorage.removeItem("daintree-canopy-order"));
 
   it("opens a view loaded later on the order last shown, to be placed afresh", async () => {
-    useCanopyStore.getState().setOrder("all", { ids: ["b", "a"], rankedFor: 7, urgent: ["b"], band: ["b"] });
+    useCanopyStore
+      .getState()
+      .setOrder("all", { ids: ["b", "a"], rankedFor: 7, urgent: ["b"], band: ["b"] });
     vi.resetModules();
     const { useCanopyStore: reloaded } = await import("../canopyStore");
     expect(reloaded.getState().orders.all).toEqual({
@@ -141,8 +143,12 @@ describe("orders", () => {
       return (await import("../canopyStore")).useCanopyStore;
     };
     try {
-      (await viewOf("p1")).getState().setOrder("project", { ids: ["x"], rankedFor: 1, urgent: [], band: [] });
-      (await viewOf("p2")).getState().setOrder("project", { ids: ["y"], rankedFor: 1, urgent: [], band: [] });
+      (await viewOf("p1"))
+        .getState()
+        .setOrder("project", { ids: ["x"], rankedFor: 1, urgent: [], band: [] });
+      (await viewOf("p2"))
+        .getState()
+        .setOrder("project", { ids: ["y"], rankedFor: 1, urgent: [], band: [] });
       expect((await viewOf("p1")).getState().orders.project?.ids).toEqual(["x"]);
       expect((await viewOf("p2")).getState().orders.project?.ids).toEqual(["y"]);
     } finally {
@@ -153,7 +159,9 @@ describe("orders", () => {
   it("never drops the scope another view saved", async () => {
     vi.resetModules();
     const { useCanopyStore: other } = await import("../canopyStore");
-    useCanopyStore.getState().setOrder("all", { ids: ["a", "b"], rankedFor: 1, urgent: [], band: [] });
+    useCanopyStore
+      .getState()
+      .setOrder("all", { ids: ["a", "b"], rankedFor: 1, urgent: [], band: [] });
     other.getState().setOrder("project", { ids: ["c"], rankedFor: 1, urgent: [], band: [] });
     vi.resetModules();
     const { useCanopyStore: reloaded } = await import("../canopyStore");
@@ -175,8 +183,12 @@ describe("orders per host", () => {
   });
 
   it("keys each host's order by the host, and never mixes them", async () => {
-    useCanopyStore.getState().setOrder("all", { ids: ["mine"], rankedFor: 1, urgent: [], band: [] });
-    useCanopyStore.getState().setHostOrder("studio", { ids: ["theirs"], rankedFor: 1, urgent: [], band: [] });
+    useCanopyStore
+      .getState()
+      .setOrder("all", { ids: ["mine"], rankedFor: 1, urgent: [], band: [] });
+    useCanopyStore
+      .getState()
+      .setHostOrder("studio", { ids: ["theirs"], rankedFor: 1, urgent: [], band: [] });
     expect(stored()).toEqual({ "local|all": ["mine"], "studio|all": ["theirs"] });
     const reloaded = await reload();
     expect(reloaded.getState().orders.all?.ids).toEqual(["mine"]);

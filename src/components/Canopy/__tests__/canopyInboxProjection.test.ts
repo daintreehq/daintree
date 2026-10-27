@@ -379,8 +379,8 @@ describe("projectCanopyInbox", () => {
       undefined,
       new Map([["replied", { runId: "replied", spawnedAt: SPAWNED, kind: "replied", at: NOW }]])
     );
-    const listed = ["crossed", "replied", "held"].map(
-      (id) => items.find((item) => item.runId === id)!
+    const listed = ["crossed", "replied", "held"].map((id) =>
+      items.find((item) => item.runId === id)!
     );
     // Held in the band after a reply, and newly over the floor while the band holds.
     const projection = project(items, [], {
