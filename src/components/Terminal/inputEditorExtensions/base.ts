@@ -1,5 +1,5 @@
 import { EditorView, Decoration, WidgetType, keymap, placeholder } from "@codemirror/view";
-import type { Extension } from "@codemirror/state";
+import type { Extension, Range } from "@codemirror/state";
 import { StateField, StateEffect, Prec } from "@codemirror/state";
 import { insertNewline } from "@codemirror/commands";
 import type { ITheme } from "@xterm/xterm";
@@ -431,7 +431,35 @@ export const interimWidgetField = StateField.define<InterimPreview>({
 
 const pendingAIMark = Decoration.mark({ class: "cm-voice-pending-ai" });
 
-export const setPendingAIRanges = StateEffect.define<{ from: number; to: number }[]>();
+// The cleanup streamed so far, drawn over the dictated words it has replaced.
+// The draft keeps what was dictated until the whole correction lands.
+class CorrectionRewriteWidget extends WidgetType {
+  constructor(readonly text: string) {
+    super();
+  }
+  eq(other: CorrectionRewriteWidget): boolean {
+    return other.text === this.text;
+  }
+  toDOM(): HTMLElement {
+    const span = document.createElement("span");
+    span.className = "cm-voice-pending-ai cm-voice-rewrite";
+    span.textContent = this.text;
+    return span;
+  }
+  // A click lands at the edge of the rewritten words, as on any text.
+  ignoreEvent(): boolean {
+    return false;
+  }
+}
+
+export interface PendingAIRange {
+  from: number;
+  to: number;
+  /** Show the draft from `from` to `rewrite.to` as `rewrite.text`. */
+  rewrite?: { to: number; text: string };
+}
+
+export const setPendingAIRanges = StateEffect.define<PendingAIRange[]>();
 
 export const pendingAIField = StateField.define({
   create() {
@@ -446,14 +474,23 @@ export const pendingAIField = StateField.define({
         const ranges = effect.value;
         if (ranges.length === 0) return Decoration.none;
         const docLen = tr.state.doc.length;
-        const marks = ranges
-          .map((r) => ({
-            from: Math.max(0, r.from),
-            to: Math.min(docLen, r.to),
-          }))
-          .filter((r) => r.from < r.to)
-          .map((r) => pendingAIMark.range(r.from, r.to));
-        return marks.length > 0 ? Decoration.set(marks, true) : Decoration.none;
+        const decorations: Range<Decoration>[] = [];
+        for (const r of ranges) {
+          const from = Math.max(0, r.from);
+          const to = Math.min(docLen, r.to);
+          if (from >= to) continue;
+          const rewriteTo = r.rewrite ? Math.min(to, r.rewrite.to) : from;
+          if (r.rewrite && rewriteTo > from) {
+            decorations.push(
+              Decoration.replace({ widget: new CorrectionRewriteWidget(r.rewrite.text) }).range(
+                from,
+                rewriteTo
+              )
+            );
+          }
+          if (rewriteTo < to) decorations.push(pendingAIMark.range(rewriteTo, to));
+        }
+        return decorations.length > 0 ? Decoration.set(decorations, true) : Decoration.none;
       }
     }
     return value;
@@ -504,9 +541,12 @@ export function createAutoSize(config: AutoSizeConfig = {}) {
   return EditorView.updateListener.of((update) => {
     // Interim dictation is an effect-only change to a widget on an otherwise
     // empty doc, so none of the layout flags fire for it (#13103).
+    // A streamed cleanup's rewrite is the same: its words can change the
+    // passage's line count without touching the doc.
     const interimChanged =
       update.startState.field(interimWidgetField, false) !==
-      update.state.field(interimWidgetField, false);
+        update.state.field(interimWidgetField, false) ||
+      update.startState.field(pendingAIField, false) !== update.state.field(pendingAIField, false);
     if (!update.docChanged && !update.viewportChanged && !update.geometryChanged && !interimChanged)
       return;
 

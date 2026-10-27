@@ -193,13 +193,26 @@ function joinLiveItems(items: VoiceLiveItem[]): string {
 export interface VoiceCorrectionRange {
   from: number;
   to: number;
+  /** The cleanup streamed so far: the draft from `from` to `rewrite.to` shows as `rewrite.text`. */
+  rewrite?: { to: number; text: string };
 }
 
 // Shared empty value, so an idle buffer's ranges keep one identity.
 const NO_CORRECTION_RANGES: VoiceCorrectionRange[] = [];
 
 function sameCorrectionRanges(a: VoiceCorrectionRange[], b: VoiceCorrectionRange[]): boolean {
-  return a.length === b.length && a.every((r, i) => r.from === b[i]!.from && r.to === b[i]!.to);
+  return (
+    a.length === b.length &&
+    a.every((r, i) => {
+      const other = b[i]!;
+      return (
+        r.from === other.from &&
+        r.to === other.to &&
+        r.rewrite?.to === other.rewrite?.to &&
+        r.rewrite?.text === other.rewrite?.text
+      );
+    })
+  );
 }
 
 interface VoiceTranscriptBuffer {

@@ -1165,6 +1165,59 @@ describe("pendingAIField", () => {
     view.destroy();
   });
 
+  function spans(view: EditorView) {
+    const out: { from: number; to: number; widget: boolean }[] = [];
+    const iter = view.state.field(pendingAIField).iter();
+    while (iter.value) {
+      out.push({ from: iter.from, to: iter.to, widget: iter.value.spec.widget !== undefined });
+      iter.next();
+    }
+    return out;
+  }
+
+  it("draws a streamed rewrite over the words it replaced, leaving the doc as dictated", () => {
+    const doc = "um so fix the bug";
+    const view = makeView(doc);
+    view.dispatch({
+      effects: setPendingAIRanges.of([{ from: 0, to: 17, rewrite: { to: 9, text: "So fix" } }]),
+    });
+
+    expect(spans(view)).toEqual([
+      { from: 0, to: 9, widget: true },
+      { from: 9, to: 17, widget: false },
+    ]);
+    expect(view.state.doc.toString()).toBe(doc);
+    expect(view.contentDOM.querySelector(".cm-voice-rewrite")?.textContent).toBe("So fix");
+    expect(view.contentDOM.textContent).toBe("So fix the bug");
+    view.destroy();
+  });
+
+  it("draws a rewrite of the whole passage with no underline left after it", () => {
+    const view = makeView("fix the bug");
+    view.dispatch({
+      effects: setPendingAIRanges.of([{ from: 0, to: 11, rewrite: { to: 11, text: "Fix the bug." } }]),
+    });
+
+    expect(spans(view)).toEqual([{ from: 0, to: 11, widget: true }]);
+    expect(view.contentDOM.textContent).toBe("Fix the bug.");
+    view.destroy();
+  });
+
+  it("drops the rewrite when the correction lands over it", () => {
+    const view = makeView("um so fix the bug");
+    view.dispatch({
+      effects: setPendingAIRanges.of([{ from: 0, to: 17, rewrite: { to: 9, text: "So fix" } }]),
+    });
+    view.dispatch({
+      changes: { from: 0, to: 17, insert: "So fix the bug." },
+      effects: setPendingAIRanges.of([]),
+    });
+
+    expect(spans(view)).toEqual([]);
+    expect(view.contentDOM.textContent).toBe("So fix the bug.");
+    view.destroy();
+  });
+
   it("filters ranges where clamped from >= clamped to", () => {
     const view = makeView("hi");
     view.dispatch({ effects: setPendingAIRanges.of([{ from: 50, to: 100 }]) });

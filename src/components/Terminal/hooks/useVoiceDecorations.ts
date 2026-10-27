@@ -61,7 +61,11 @@ export function useVoiceDecorations({ terminalId, editorViewRef }: UseVoiceDecor
 
     const docLen = view.state.doc.length;
     const pendingRanges = correctionRanges.filter(
-      (range) => range.from >= 0 && range.to <= docLen && range.from < range.to
+      (range) =>
+        range.from >= 0 &&
+        range.to <= docLen &&
+        range.from < range.to &&
+        (!range.rewrite || (range.rewrite.to > range.from && range.rewrite.to <= range.to))
     );
 
     view.dispatch({
