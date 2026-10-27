@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildCodeNameIndex, matchCodeNames } from "../voiceCodeNames.js";
+import { buildCodeNameIndex, diffCodeNames, matchCodeNames } from "../voiceCodeNames.js";
 
 const FILES = [
   "src/services/VoiceRecordingService.ts",
@@ -104,5 +104,35 @@ describe("buildCodeNameIndex", () => {
   it("never indexes a secret-shaped name", () => {
     const index = buildCodeNameIndex(["config/sk-live-AbCdEf1234567890XyZ.ts"]);
     expect([...index.values()].some((name) => name.includes("sk-live"))).toBe(false);
+  });
+});
+
+describe("diffCodeNames", () => {
+  const diff = [
+    "diff --git a/src/services/voiceCorrectionRequest.ts b/src/services/voiceCorrectionRequest.ts",
+    "--- a/src/services/voiceCorrectionRequest.ts",
+    "+++ b/src/services/voiceCorrectionRequest.ts",
+    "@@ -1,2 +1,3 @@",
+    "-const removedHelperName = 1;",
+    "+export function annotateUncertainSpans(text, spans) {",
+    "+  const project_id = readProjectId(text);",
+    "+  return the plain words stay out;",
+  ].join("\n");
+
+  it("names the files a diff touches and the identifiers its added lines write", () => {
+    expect(diffCodeNames(diff)).toEqual([
+      "voiceCorrectionRequest",
+      "annotateUncertainSpans",
+      "project_id",
+      "readProjectId",
+    ]);
+  });
+
+  it("feeds code names that a passage then matches", () => {
+    const index = buildCodeNameIndex([], diffCodeNames(diff));
+    expect(matchCodeNames("make annotate uncertain spans skip the project ID", index)).toEqual([
+      "annotateUncertainSpans",
+      "project_id",
+    ]);
   });
 });

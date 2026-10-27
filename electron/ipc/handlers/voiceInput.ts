@@ -119,6 +119,7 @@ import {
 } from "../../services/voice/TranscriptionProvider.js";
 import { voiceFileLinkResolver } from "../../services/VoiceFileLinkResolver.js";
 import { fileSearchService } from "../../services/FileSearchService.js";
+import { readWorktreeDiffNames } from "../../services/voiceDiffNames.js";
 import {
   buildCodeNameIndex,
   matchCodeNames,
@@ -496,6 +497,9 @@ interface PrefetchRun {
 // The project's file listing is cached once read, but the first read of a
 // large repository can take a while; past this a passage goes without names.
 const CODE_NAME_READ_BUDGET_MS = 300;
+// The worktree's diff is read as the dictation starts and wanted only at its
+// cleanup, so it has longer than the start's other reads.
+const DIFF_NAMES_READ_BUDGET_MS = 800;
 
 // A pause's prefetch covers the passage so far, so a session's dictation pays
 // for its opening again at each one. Past these a stop just sends its own.
@@ -908,6 +912,8 @@ interface CorrectionSessionContext {
    * names cleanup may be told; null wherever the repository names are withheld.
    */
   codeNameRoot: string | null;
+  /** The names the dictated worktree's diff is working on, for the code names too. */
+  diffNames: string[];
 }
 
 const NO_SESSION_CONTEXT: CorrectionSessionContext = {
@@ -915,6 +921,7 @@ const NO_SESSION_CONTEXT: CorrectionSessionContext = {
   repositoryNames: [],
   worktree: null,
   codeNameRoot: null,
+  diffNames: [],
 };
 
 // Each recent dictation's context, kept whether or not cleanup was on at its
@@ -1525,15 +1532,24 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       : readPaneKeytermReads({ ...keytermTarget, ptyClient: deps.ptyClient });
     // The correction gets the same screened names as the keyterms. Its own
     // record, so a slow read from an older session can't stand in for this one's.
+    // The work in progress where it's dictated: the terminal's worktree, read
+    // only where the repository names are.
+    const diffNames: Promise<string[]> = keytermTarget.projectPath
+      ? resolveFileLinkCwd(session.projectId, terminalId, keytermTarget.projectPath, deps.ptyClient)
+          .then((cwd) => (cwd ? readWorktreeDiffNames(cwd, DIFF_NAMES_READ_BUDGET_MS) : []))
+          .catch((): string[] => [])
+      : Promise.resolve([]);
     const sessionContext: Promise<CorrectionSessionContext> = Promise.all([
       dictationContext,
       paneReads ?? NO_PANE_KEYTERM_READS,
+      diffNames,
     ]).then(
-      ([read, reads]) => ({
+      ([read, reads, diff]) => ({
         names: flattenDictationNames(screenDictationNames(read.names)),
         repositoryNames: screenCorrectionRepositoryNames(reads.repoNames),
         worktree: screenDictationWorktree(read.worktree),
         codeNameRoot: keytermTarget.projectPath ?? null,
+        diffNames: diff,
       }),
       () => NO_SESSION_CONTEXT
     );
@@ -2525,7 +2541,11 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     const codeNames =
       context.codeNameRoot &&
       correctionInstructionsFor(settings.correctionModel).core.includes("<code_names>")
-        ? await readCodeNames(context.codeNameRoot, context.repositoryNames, request.rawText)
+        ? await readCodeNames(
+            context.codeNameRoot,
+            [...context.repositoryNames, ...context.diffNames],
+            request.rawText
+          )
         : [];
     return {
       request: {

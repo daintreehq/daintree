@@ -201,8 +201,13 @@ async function readRepoContext(): Promise<RepoContext> {
   };
   const { names } = await deriveRepoNames(REPO_ROOT);
   const repositoryNames = screenCorrectionRepositoryNames(names);
-  // The listing production reads for a pane's repository.
+  // The listing production reads for a pane's repository, and its worktree's diff.
   const files = await fileSearchService.listFiles(REPO_ROOT);
+  const diffModule = "../../electron/services/voiceDiffNames";
+  const { readWorktreeDiffNames } = (await import(diffModule)) as {
+    readWorktreeDiffNames: (cwd: string, timeoutMs?: number) => Promise<string[]>;
+  };
+  const diffNames = await readWorktreeDiffNames(REPO_ROOT, 5_000);
   return {
     keyterms: await assembleKeyterms({
       customDictionary: [],
@@ -210,7 +215,7 @@ async function readRepoContext(): Promise<RepoContext> {
       paneReads: { repoNames: names, branchName: null, terminalTerms: [] },
     }),
     repositoryNames,
-    codeNames: buildCodeNameIndex(files, repositoryNames),
+    codeNames: buildCodeNameIndex(files, [...repositoryNames, ...diffNames]),
   };
 }
 

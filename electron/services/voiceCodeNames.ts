@@ -33,6 +33,13 @@ const MAX_SCANNED_FILES = 100_000;
 const MAX_RUN_WORDS = 6;
 export const MAX_CODE_NAMES_PER_PASSAGE = 12;
 
+// An identifier in source: what a diff's added lines are mined for.
+const IDENTIFIER_RE = /[A-Za-z_$][\w$]*/g;
+// project_id, db_generate: parts joined by underscores.
+const SNAKE_CASE_RE = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/;
+// The names a diff can give, newest work first.
+const MAX_DIFF_NAMES = 2_000;
+
 export type CodeNameIndex = ReadonlyMap<string, string>;
 
 function keyOf(name: string): string {
@@ -127,4 +134,34 @@ export function matchCodeNames(text: string, index: CodeNameIndex): string[] {
     }
   }
   return found;
+}
+
+/**
+ * The names a worktree's diff is working on: identifier-shaped names of the
+ * files it touches and the identifiers its added lines write, in the order
+ * they appear, at most `MAX_DIFF_NAMES`. They name what the speaker is most
+ * likely to say right now ("annotate uncertain spans"), which the files'
+ * names alone don't cover.
+ */
+export function diffCodeNames(diff: string): string[] {
+  const names: string[] = [];
+  const seen = new Set<string>();
+  const add = (name: string) => {
+    if (seen.has(name) || names.length >= MAX_DIFF_NAMES) return;
+    seen.add(name);
+    names.push(name);
+  };
+  for (const line of diff.split("\n")) {
+    if (names.length >= MAX_DIFF_NAMES) break;
+    if (line.startsWith("+++ ")) {
+      for (const name of pathNames(line.slice(4).replace(/^b\//, ""))) {
+        if (CODE_SHAPED_RE.test(name)) add(name);
+      }
+    } else if (line.startsWith("+")) {
+      for (const match of line.slice(1).matchAll(IDENTIFIER_RE)) {
+        if (CODE_SHAPED_RE.test(match[0]) || SNAKE_CASE_RE.test(match[0])) add(match[0]);
+      }
+    }
+  }
+  return names;
 }

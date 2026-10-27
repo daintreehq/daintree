@@ -34,8 +34,11 @@ const P = "[VoiceTranscription:grok]";
 
 const GROK_BASE_URL = process.env.DAINTREE_GROK_WS_URL ?? "wss://api.x.ai/v1/stt";
 const GROK_MODEL = "grok-voice-transcribe-2.0";
-// Words scored below this reach cleanup as unsure. xAI publishes no guidance
-// on what its scores mean, so this is Deepgram's cut-off.
+// Words scored below this would reach cleanup as unsure. The streaming API
+// sends no word confidence (only `text`, `start`, `end`; batch transcription
+// scores words, streaming doesn't), so no Grok word is ever flagged: this is
+// Deepgram's cut-off, kept for if xAI starts scoring streamed words, and to be
+// measured before it is trusted.
 const UNCERTAIN_BELOW = 0.65;
 // `format` (inverse text normalisation) needs an explicit language, and xAI
 // lists only these for it.
