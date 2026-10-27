@@ -1647,6 +1647,44 @@ describe("VoiceRecordingService adversarial", () => {
     expect(runtime.voiceFns.setLastError).not.toHaveBeenCalled();
   });
 
+  it("reports lost stop speech and a failed passage as separate warnings in one stop", async () => {
+    const stopDeferred = deferred<void>();
+    runtime.stopQueue.push(stopDeferred.promise);
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const { notify } = await import("@/lib/notify");
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Panel One" });
+    runtime.voiceState.activeTarget = { panelId: "panel-1", panelTitle: "Panel One" };
+    runtime.voiceState.status = "reconnecting";
+    runtime.voiceState.panelBuffers["panel-1"] = createPanelBuffer({ liveText: "" });
+
+    const stopPromise = voiceRecordingService.stop("Dictation stopped.");
+    await vi.waitFor(() => {
+      expect(runtime.voiceFns.setStatus).toHaveBeenCalledWith("finishing");
+    });
+    vi.mocked(notify).mockClear();
+    emitError({
+      severity: "transient",
+      code: TRANSCRIPTION_ITEM_FAILED_CODE,
+      message: "Part of what you said didn't transcribe.",
+    });
+    emitError(STOP_AUDIO_LOST);
+    emitStatus("idle");
+    stopDeferred.resolve();
+    await stopPromise;
+
+    expect(vi.mocked(notify)).toHaveBeenCalledTimes(2);
+    const [passage, lost] = vi.mocked(notify).mock.calls.map(([payload]) => payload);
+    expect(passage).toMatchObject({
+      title: "Passage not transcribed",
+      replaceKey: "voice-passage-failed",
+    });
+    expect(lost).toMatchObject({ title: "Dictation incomplete", message: STOP_AUDIO_LOST.message });
+    expect(lost).not.toHaveProperty("replaceKey");
+    expect(runtime.voiceFns.finishSession).toHaveBeenCalledTimes(1);
+    expect(runtime.voiceFns.setLastError).not.toHaveBeenCalled();
+  });
+
   it("tells the user about lost speech from a drain this view didn't start", async () => {
     const { voiceRecordingService } = await import("../VoiceRecordingService");
     const { notify } = await import("@/lib/notify");
