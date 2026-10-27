@@ -52,6 +52,18 @@ export interface VoiceRecordingTarget {
   terminalId?: string;
   /** The reply types to a terminal on this host, not the window's. */
   otherHostId?: string;
+  /** The Canopy row the reply belongs to, for the indicator to go back to. */
+  canopyRow?: CanopyReplyRow;
+}
+
+/**
+ * A Canopy row as the panel listed it: the run's id in that list (All hosts
+ * names it with its host) and the host the panel showed, null for the window's
+ * own. Shown under that host again, the row's reply is the same draft.
+ */
+export interface CanopyReplyRow {
+  runId: string;
+  hostScope: string | null;
 }
 
 /**

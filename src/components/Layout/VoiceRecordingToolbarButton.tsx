@@ -19,6 +19,7 @@ import { focusRecoveredComposer } from "@/services/recentDictationRecovery";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { useRecentDictationsStore } from "@/store/recentDictationsStore";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
+import { isCanopyReplyTarget } from "@/services/canopyReplyDictation";
 import { useScratchStore } from "@/store/scratchStore";
 import { actionService } from "@/services/ActionService";
 import { useHostList } from "@/components/Hosts/hostList";
@@ -606,7 +607,9 @@ export function VoiceRecordingToolbarButton({
               <span className="text-text-secondary">{contextLabel}</span>
             )}
             {elapsedLabel && <span className="text-text-secondary">{elapsedLabel}</span>}
-            <span className="text-text-secondary">Click to jump to panel</span>
+            <span className="text-text-secondary">
+              {isCanopyReplyTarget(labelTarget) ? "Click to go to reply" : "Click to jump to panel"}
+            </span>
             {actionCombo && (
               <span className="text-text-secondary">
                 {createTooltipContent(isPaused ? "Resume" : "Stop", actionCombo)}

@@ -4160,12 +4160,17 @@ class VoiceRecordingService {
     const target = pendingTarget ?? activeTarget;
     if (!target) return false;
 
-    // Only while its row is still the selected one: there is no pane to bring forward.
+    // Its row, wherever Canopy is now: already in front, the keyboard goes
+    // into its reply; otherwise Canopy opens on it (#14778).
     if (isCanopyReplyTarget(target)) {
       const reply = useCanopyStore.getState().isOpen ? resolveCanopyReplyDictation() : null;
-      if (!reply?.ok || reply.target.panelId !== target.panelId) return false;
-      reply.focus();
-      return true;
+      if (reply?.ok && reply.target.panelId === target.panelId) {
+        reply.focus();
+        return true;
+      }
+      return (
+        target.canopyRow !== undefined && useCanopyStore.getState().revealReply(target.canopyRow)
+      );
     }
 
     const currentProjectId = useProjectStore.getState().currentProject?.id;
@@ -4685,6 +4690,15 @@ class VoiceRecordingService {
     }
     const draft = useTerminalInputStore.getState().getDraftInput(panelId, projectId);
     const handler = this.spokenSendHandlers.get(spokenSendKey(panelId, projectId));
+    // A Canopy reply off screen, or on its way off as Canopy closes, has
+    // nothing to send from: its words stay in its draft and the dictation
+    // goes on (#14778).
+    if (
+      isCanopyReplyTarget(voiceState.activeTarget) &&
+      (!handler || !useCanopyStore.getState().isOpen)
+    ) {
+      return;
+    }
     if (handler && isSpokenSendable(draft)) {
       handler();
       return;

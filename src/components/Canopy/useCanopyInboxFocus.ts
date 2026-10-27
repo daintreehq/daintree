@@ -10,6 +10,18 @@ import { canopyAssistantDomId, openAssistantItem } from "./openAssistantItem";
 import { placeOf } from "./canopyInboxPlace";
 import { canopyResumeTarget, type CanopyResume } from "./canopyResume";
 import { useCanopyStore } from "@/store/canopyStore";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { formatTypingLocatorMessage, useTypingLocatorStore } from "@/store/typingLocatorStore";
+
+/** How long a row asked for waits on its host's runs before it is taken as not there. */
+const REPLY_REVEAL_WAIT_MS = 10_000;
+
+/** The dictation keeps writing to the reply's draft: only going there failed. */
+function reportReplyHidden(why: string): void {
+  const message = { kind: "draft-refused" as const, lead: `The reply you're dictating ${why}` };
+  useTypingLocatorStore.getState().showLocator(message);
+  useAnnouncerStore.getState().announce(formatTypingLocatorMessage(message), "polite");
+}
 
 /**
  * Where the keyboard and the pane are: the run or assistant selected, the
@@ -26,6 +38,7 @@ export function useCanopyInboxFocus({
   otherHost,
   everyHost,
   items,
+  loaded,
   listed,
   visible,
   workerNavigation,
@@ -48,6 +61,8 @@ export function useCanopyInboxFocus({
   otherHost: boolean;
   everyHost: boolean;
   items: CanopyItem[];
+  /** The host's runs have arrived: a run not among them now isn't there. */
+  loaded: boolean;
   listed: CanopyItem[];
   visible: CanopyItem[];
   /** The workers the keyboard walks, as the inbox projection orders them. */
@@ -221,6 +236,9 @@ export function useCanopyInboxFocus({
       window.removeEventListener("keydown", touch, { capture: true });
     };
   }, [isOpen]);
+  // A dictated reply asked for is where this opening lands, once it is found;
+  // only one that can't be shown leaves the opening to land as it would.
+  const replyReveal = useCanopyStore((s) => s.replyReveal);
   useEffect(() => {
     if (!isOpen) {
       landedRef.current = false;
@@ -229,7 +247,7 @@ export function useCanopyInboxFocus({
       return;
     }
     focusAfterCloseRef.current = null;
-    if (landedRef.current || items.length === 0) return;
+    if (landedRef.current || items.length === 0 || replyReveal !== null) return;
     // The search it was left with is in force before the run is picked from it.
     const restore = restoreRef.current;
     if (restore !== null && appliedQuery !== restore.query) return;
@@ -273,7 +291,7 @@ export function useCanopyInboxFocus({
       cancelAnimationFrame(outer);
       cancelAnimationFrame(inner);
     };
-  }, [isOpen, items, visible, focusCardNow, setQuery, appliedQuery, firstAssistant]);
+  }, [isOpen, items, visible, focusCardNow, setQuery, appliedQuery, firstAssistant, replyReveal]);
 
   // The focused card left (trashed, answered into another section, exited):
   // put the keyboard on the card that took its place instead of dropping it on
@@ -376,6 +394,46 @@ export function useCanopyInboxFocus({
     setFocusedId(null);
     setPaneFocus(null);
   }, [hostId, isOpen]);
+
+  // The recording indicator asked for the row a dictation writes its reply
+  // into (#14778). After the host reset above, which the same request may
+  // have caused. The filters stand: a row they hide is said to be hidden, and
+  // the dictation goes on into its draft either way.
+  useEffect(() => {
+    if (!isOpen || replyReveal === null) return;
+    const settle = () => useCanopyStore.getState().settleReplyReveal(replyReveal.id);
+    // Another host picked since: that list has no such row.
+    if (replyReveal.hostScope !== hostId) {
+      settle();
+      return;
+    }
+    if (!loaded) {
+      // A host that never answers doesn't hold the opening forever.
+      const timer = setTimeout(() => {
+        settle();
+        reportReplyHidden("isn't in Canopy");
+      }, REPLY_REVEAL_WAIT_MS);
+      return () => clearTimeout(timer);
+    }
+    settle();
+    const item = items.find((entry) => entry.runId === replyReveal.runId);
+    if (item === undefined) {
+      reportReplyHidden("isn't in Canopy");
+      return;
+    }
+    const shown =
+      workersShown && inWork(item) && (!searching || visible.some((v) => v.runId === item.runId));
+    if (!shown) {
+      reportReplyHidden("is hidden by Canopy's filters");
+      return;
+    }
+    landedRef.current = true;
+    restoreRef.current = null;
+    setAssistantId(null);
+    setPaneFocus({ runId: item.runId, focus: "dictation" });
+    setFocusedId(item.runId);
+    document.getElementById(canopyCardDomId(item.runId))?.scrollIntoView({ block: "nearest" });
+  }, [isOpen, replyReveal, hostId, loaded, items, workersShown, inWork, searching, visible]);
 
   /**
    * Where the cursor goes once a run is dealt with — archived, answered,

@@ -2066,6 +2066,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                     surface={voiceTarget.surface}
                     terminalId={voiceTarget.terminalId}
                     otherHostId={voiceTarget.otherHostId}
+                    canopyRow={voiceTarget.canopyRow}
                     disabled={disabled}
                   />
                 ) : (

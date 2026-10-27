@@ -124,8 +124,11 @@ export interface CanopyCardHandle {
   dictation: () => CanopyReplyDictation;
 }
 
-/** Where the keyboard lands in the pane when it opens: what the user was in on the agent before. */
-export type CanopyPaneFocus = "composer" | "terminal" | null;
+/**
+ * Where the keyboard lands in the pane when it opens: what the user was in on
+ * the agent before, or the reply a dictation is writing into.
+ */
+export type CanopyPaneFocus = "composer" | "terminal" | "dictation" | null;
 
 interface CanopyCardProps extends CanopyCardHandlers {
   item: CanopyItem;
@@ -151,6 +154,8 @@ interface CanopyCardProps extends CanopyCardHandlers {
    * offered to it.
    */
   otherHostId?: string;
+  /** The host the panel lists the run under: null for the window's own, else that host or All hosts. */
+  hostScope?: string | null;
   /** Park and snooze for a run on the window's own host; absent where they can't be offered. */
   aside?: CanopyAsideActions;
   /** The run's host's Canopy; the window's own by default. */
@@ -252,6 +257,7 @@ export function CanopyCard({
   armTrash,
   renameRequest,
   otherHostId,
+  hostScope = null,
   aside,
   terminalApi = ownCanopyTerminalApi,
   reconnecting = false,
@@ -311,7 +317,7 @@ export function CanopyCard({
   });
   useEffect(() => {
     const initialFocus = initialFocusRef.current;
-    if (initialFocus === null) return;
+    if (initialFocus === null || initialFocus === "dictation") return;
     let frame = 0;
     const settle = () => onSettledRef.current?.();
     const attempt = (tries: number) => {
@@ -500,8 +506,14 @@ export function CanopyCard({
   // and its listeners together.
   const stopHandoffRef = useRef<() => void>(() => {});
   useEffect(() => () => stopHandoffRef.current(), []);
-  const focusComposer = (forDictation = false): boolean => {
+  const focusComposer = (forDictation = false, onDone?: () => void): boolean => {
     stopHandoffRef.current();
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      onDone?.();
+    };
     // No reply here (a secret is being asked for, perhaps before the card
     // knows it): the keyboard goes to the live terminal, where it is typed,
     // once the menu that asked has closed.
@@ -510,8 +522,12 @@ export function CanopyCard({
         sectionRef.current
           ?.querySelector<HTMLElement>("[data-canopy-terminal] textarea")
           ?.focus({ preventScroll: true });
+        finish();
       });
-      stopHandoffRef.current = () => cancelAnimationFrame(frame);
+      stopHandoffRef.current = () => {
+        cancelAnimationFrame(frame);
+        finish();
+      };
       return true;
     }
     // The composer is a lazy chunk: on a cold pane it may not exist yet, so
@@ -524,6 +540,7 @@ export function CanopyCard({
       cancelAnimationFrame(listenFrame);
       window.removeEventListener("pointerdown", stop, true);
       window.removeEventListener("keydown", onKey, true);
+      finish();
     };
     stopHandoffRef.current = stop;
     // Listened for after this frame, so the press that chose Reply isn't one,
@@ -558,6 +575,7 @@ export function CanopyCard({
     surface: "canopy-reply",
     ...(otherHostId !== undefined ? { otherHostId } : {}),
     ...(ownsContext ? { terminalId: item.runId } : {}),
+    canopyRow: { runId: item.runId, hostScope },
   };
   const voiceMicNotice = useVoiceRecordingStore((s) =>
     selectMicNoticeForPanel(s, voiceTarget.panelId)
@@ -597,6 +615,18 @@ export function CanopyCard({
     };
   };
   useImperativeHandle(ref, () => ({ handleKey, focusComposer: () => focusComposer(), dictation }));
+
+  // Sent back here by the recording indicator (#14778): the keyboard goes to
+  // the reply, from the indicator or wherever the opening panel put it, and
+  // stays with the user once they press anything themselves.
+  const focusComposerRef = useRef(focusComposer);
+  useEffect(() => {
+    focusComposerRef.current = focusComposer;
+  });
+  useEffect(() => {
+    if (initialFocusRef.current !== "dictation") return;
+    focusComposerRef.current(true, () => onSettledRef.current?.());
+  }, []);
 
   const agentId = isBuiltInAgentId(run.agentId) ? run.agentId : undefined;
   // The grid's chip rules: nothing while idle, and a settled agent keeps its
