@@ -664,10 +664,11 @@ describe("GrokTranscriptionProvider", () => {
     it("sends Finalize for an Enter mid-utterance, and doesn't treat its final as a pause", async () => {
       const { provider, events } = setup();
       const socket = await bringSessionReady(provider);
+      for (let i = 0; i < 10; i++) provider.sendAudioChunk(pcm(0));
       socket.simulateMessage(partial("write the tests", { start: 0, duration: 1 }));
       provider.commitParagraphBoundary();
       expect(socket.textFrames()).toEqual([{ type: "Finalize" }]);
-      socket.simulateMessage(utteranceFinal("Write the tests.", 0, 1.1));
+      socket.simulateMessage(utteranceFinal("Write the tests.", 0, 1));
       expect(completesOf(events)).toEqual([
         { type: "complete", text: "Write the tests.", itemId: deltasOf(events)[0].itemId },
       ]);
@@ -677,11 +678,12 @@ describe("GrokTranscriptionProvider", () => {
       provider.stop();
     });
 
-    it("treats a final forced before any preview as Enter's, not a pause", async () => {
+    it("treats a final forced before any preview as Enter's, however late it lands", async () => {
       const { provider, events } = setup();
       const socket = await bringSessionReady(provider);
       provider.sendAudioChunk(pcm(3_000));
       provider.commitParagraphBoundary();
+      vi.advanceTimersByTime(5_000);
       socket.simulateMessage(utteranceFinal("Fix it, send it.", 0, 0.1));
       expect(completesOf(events)[0]).toEqual({
         type: "complete",
@@ -691,29 +693,39 @@ describe("GrokTranscriptionProvider", () => {
       provider.stop();
     });
 
-    it("answers one forced final per Enter", async () => {
+    it("takes two Enters on one utterance as one forced final", async () => {
       const { provider, events } = setup();
       const socket = await bringSessionReady(provider);
+      for (let i = 0; i < 5; i++) provider.sendAudioChunk(pcm(0));
       socket.simulateMessage(partial("one", { start: 0, duration: 0.3 }));
       provider.commitParagraphBoundary();
       provider.commitParagraphBoundary();
       socket.simulateMessage(utteranceFinal("One.", 0, 0.4));
-      socket.simulateMessage(utteranceFinal("Two.", 0.5, 0.4));
-      socket.simulateMessage(utteranceFinal("Three.", 1, 0.4));
-      expect(completesOf(events).map((c) => c.endOfSpeech === true)).toEqual([false, false, true]);
+      socket.simulateMessage(utteranceFinal("Two.", 0.6, 0.4));
+      expect(completesOf(events).map((c) => c.endOfSpeech === true)).toEqual([false, true]);
       provider.stop();
     });
 
-    it("an Enter with nothing open stops counting before the next utterance ends", async () => {
+    it("an Enter with nothing open leaves the next utterance's pause intact", async () => {
       const { provider, events } = setup();
       const socket = await bringSessionReady(provider);
+      for (let i = 0; i < 5; i++) provider.sendAudioChunk(pcm(0));
       provider.commitParagraphBoundary();
-      vi.advanceTimersByTime(1_999);
-      socket.simulateMessage(utteranceFinal("Soon.", 0, 0.5));
+      provider.sendAudioChunk(pcm(3_000));
+      socket.simulateMessage(utteranceFinal("Send it.", 0.5, 0.1));
+      expect(completesOf(events)[0]).toMatchObject({ text: "Send it.", endOfSpeech: true });
+      provider.stop();
+    });
+
+    it("an Enter the server never answered doesn't take a later utterance's pause", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      // Noise the onset guard took for speech, then Enter: nothing to finalise.
+      provider.sendAudioChunk(pcm(3_000));
       provider.commitParagraphBoundary();
-      vi.advanceTimersByTime(2_000);
-      socket.simulateMessage(utteranceFinal("Send it.", 1, 0.8));
-      expect(completesOf(events).map((c) => c.endOfSpeech === true)).toEqual([false, true]);
+      for (let i = 0; i < 10; i++) provider.sendAudioChunk(pcm(0));
+      socket.simulateMessage(utteranceFinal("Send it.", 0.4, 0.6));
+      expect(completesOf(events)[0]).toMatchObject({ text: "Send it.", endOfSpeech: true });
       provider.stop();
     });
 
@@ -782,6 +794,24 @@ describe("GrokTranscriptionProvider", () => {
           endOfSpeech: true,
         },
       ]);
+    });
+
+    it("keeps a tail word that starts exactly where the last final ended", async () => {
+      const { provider, events } = setup();
+      const socket = await bringSessionReady(provider);
+      // 0.1 + 0.2 is 0.30000000000000004 in float seconds.
+      socket.simulateMessage(utteranceFinal("Okay.", 0.1, 0.2));
+      const stopPromise = provider.stopGracefully();
+      socket.simulateMessage({
+        type: "transcript.done",
+        words: [
+          { text: "Okay.", start: 0.1, end: 0.3 },
+          { text: "Then", start: 0.3, end: 0.5 },
+          { text: "this.", start: 0.5, end: 0.8 },
+        ],
+      });
+      await stopPromise;
+      expect(completesOf(events).map((c) => c.text)).toEqual(["Okay.", "Then this."]);
     });
 
     it("lands transcript.done's tail even when no preview ever showed it", async () => {

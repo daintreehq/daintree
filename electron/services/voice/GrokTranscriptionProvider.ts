@@ -100,9 +100,9 @@ const TRIMMED_RETRY_KEYTERMS = 20;
 // Two results belong to the same stretch of audio when one starts this close
 // to where the other ends.
 const RESULT_TIMING_TOLERANCE_SECONDS = 0.1;
-// The server answers a Finalize at once when an utterance is open; one sent
-// with nothing open is never answered, and stops counting after this.
-const FINALIZE_ANSWER_MS = 2_000;
+// A transcript.done word starting this close to where the last utterance
+// final ended is past it: the two are the same instant in float seconds.
+const WORD_BOUNDARY_EPSILON_SECONDS = 0.001;
 
 // Grok sends nothing when speech starts, which a held spoken "send it" waits
 // on (Deepgram's `SpeechStarted`). A plain level check over the outgoing audio
@@ -269,9 +269,14 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
   // Where the last utterance completed on this connection ends, in its
   // seconds, so `transcript.done` can tell the tail no final covered.
   private connectionCompletedEnd = 0;
-  // When each Finalize went out. The utterance final that answers one ends
-  // its utterance because Enter did, not because the speaker paused.
-  private finalizeSentAt: number[] = [];
+  // The connection's audio position, in seconds, when a Finalize went out
+  // with something open; null with none outstanding. The utterance final that
+  // answers it, the one whose utterance started before that point, ends
+  // because Enter did, not because the speaker paused.
+  private finalizeAtSeconds: number | null = null;
+  // The onset guard heard speech since the last utterance final, so the
+  // server may have an utterance open before any preview of it arrived.
+  private speechSinceFinal = false;
 
   // Onset guard state, over fresh audio only.
   private onsetSpeaking = false;
@@ -290,7 +295,12 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
     if (!this.connection || !this.isReady || this.isDraining) return;
     try {
       this.connection.send(JSON.stringify({ type: "Finalize" }));
-      this.finalizeSentAt.push(performance.now());
+      // With nothing open the server has nothing to finalise, and the next
+      // utterance's own final must still end speech.
+      if (this.utteranceItemId !== null || this.speechSinceFinal) {
+        this.finalizeAtSeconds =
+          (this.unconfirmedOffset + this.unconfirmedBytes) / AUDIO_BYTES_PER_SECOND;
+      }
       logDebug(`${P} → Finalize (paragraph boundary)`);
     } catch (err) {
       logWarn(`${P} Failed to send Finalize`, voiceErrorLogFields(err));
@@ -947,9 +957,12 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
     if (start !== null && duration !== null) {
       this.connectionCompletedEnd = Math.max(this.connectionCompletedEnd, start + duration);
     }
-    const now = performance.now();
-    this.finalizeSentAt = this.finalizeSentAt.filter((at) => now - at < FINALIZE_ANSWER_MS);
-    const forced = this.finalizeSentAt.shift() !== undefined;
+    // An utterance begun after the Finalize point isn't its answer, which
+    // then never came.
+    const forced =
+      this.finalizeAtSeconds !== null && (start === null || start < this.finalizeAtSeconds);
+    this.finalizeAtSeconds = null;
+    this.speechSinceFinal = this.onsetSpeaking;
     this.resetUtterance();
     if (itemId || full) {
       this.emit({
@@ -978,7 +991,13 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
       const word = (entry ?? {}) as { text?: unknown; start?: unknown };
       const start = finiteSeconds(word.start);
       const text = typeof word.text === "string" ? word.text.trim() : "";
-      if (start !== null && start >= this.connectionCompletedEnd && text) tail.push(text);
+      if (
+        start !== null &&
+        start + WORD_BOUNDARY_EPSILON_SECONDS >= this.connectionCompletedEnd &&
+        text
+      ) {
+        tail.push(text);
+      }
     }
     return tail.length > 0 ? tail.join(" ") : null;
   }
@@ -1063,6 +1082,7 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
         this.onsetLoudWindows = rms >= ONSET_RMS ? this.onsetLoudWindows + 1 : 0;
         if (this.onsetLoudWindows >= ONSET_WINDOWS) {
           this.onsetSpeaking = true;
+          this.speechSinceFinal = true;
           this.onsetQuietWindows = 0;
           logDebug(`${P} speech onset`);
           this.emit({ type: "speech_started" });
@@ -1168,7 +1188,7 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
     this.carriedText = [...this.carriedText, ...this.lockedChunks.map((chunk) => chunk.text)];
     this.lockedChunks = [];
     this.connectionCompletedEnd = 0;
-    this.finalizeSentAt = [];
+    this.finalizeAtSeconds = null;
     const unconfirmed = this.unconfirmedAudio;
     const buffered = this.preConnectBuffer;
     this.unconfirmedAudio = [];
@@ -1219,7 +1239,8 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
     this.preConnectBufferOverflowWarned = false;
     this.resetUtterance();
     this.connectionCompletedEnd = 0;
-    this.finalizeSentAt = [];
+    this.finalizeAtSeconds = null;
+    this.speechSinceFinal = false;
     this.resetOnset();
     this.replayEvictionWarned = false;
     this.isReady = false;
