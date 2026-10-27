@@ -830,46 +830,51 @@ describe("voiceInput — session identity", () => {
       return shared.cleanups.find((c) => c.rawText === rawText)!;
     };
 
-    // A follow-up pressed straight after A's stop, and how it ends.
-    const followUps: Array<[string, () => Promise<unknown>]> = [
-      ["stops", async () => (await start(ownerA, "b"), stop(ownerA, "b"))],
-      ["is cancelled", async () => (await start(ownerA, "b"), cancel(ownerA, "b"))],
+    // A follow-up pressed around A's stop: how it starts, and how it ends.
+    const followUps: Array<[string, () => Promise<unknown>, () => unknown]> = [
+      ["stops", () => start(ownerA, "b"), () => stop(ownerA, "b")],
+      ["is cancelled", () => start(ownerA, "b"), () => cancel(ownerA, "b")],
       [
         "fails to start",
         () => {
           shared.startResult = { ok: false, error: "OpenAI API key not configured" };
           return start(ownerA, "b");
         },
+        () => {},
       ],
-      [
-        "runs in another view that goes away",
-        async () => (await start(ownerB, "b"), ownerB.destroy()),
-      ],
+      ["runs in another view that goes away", () => start(ownerB, "b"), () => ownerB.destroy()],
     ];
+
+    const expectLanded = async (
+      cleanupA: Promise<unknown>,
+      requestA: Awaited<ReturnType<typeof requestFor>>
+    ) => {
+      expect(getLiveVoiceSession()).toBeNull();
+      expect(requestA.signal?.aborted).toBe(false);
+      requestA.finish("Fix the bug.");
+      await expect(cleanupA).resolves.toMatchObject({
+        action: "replace",
+        correctedText: "Fix the bug.",
+      });
+    };
 
     it.each(followUps)(
       "keeps a dictation's cleanup running when the next one %s while it's out",
-      async (_label, followUp) => {
+      async (_label, startB, endB) => {
         await start(ownerA, "a");
         await stop(ownerA, "a");
         const cleanupA = correct(ownerA, "a", "fix the bug");
         const requestA = await requestFor("fix the bug");
 
-        await followUp();
-        expect(getLiveVoiceSession()).toBeNull();
-
-        expect(requestA.signal?.aborted).toBe(false);
-        requestA.finish("Fix the bug.");
-        await expect(cleanupA).resolves.toMatchObject({
-          action: "replace",
-          correctedText: "Fix the bug.",
-        });
+        await startB();
+        await endB();
+        await expectLanded(cleanupA, requestA);
       }
     );
 
     it.each(followUps)(
       "keeps a dictation's cleanup running when the next one %s while it reads its context",
-      async (_label, followUp) => {
+      async (_label, startB, endB) => {
         shared.projects.set(ownerA.id, "proj-a");
         let readVocabulary!: () => void;
         shared.vocabulary = new Promise((resolve) => {
@@ -881,13 +886,27 @@ describe("voiceInput — session identity", () => {
         await settle();
         expect(shared.cleanups).toEqual([]);
 
-        await followUp();
+        await startB();
         readVocabulary();
-
         const requestA = await requestFor("fix the bug");
-        expect(requestA.signal?.aborted).toBe(false);
-        requestA.finish("Fix the bug.");
-        await expect(cleanupA).resolves.toMatchObject({ correctedText: "Fix the bug." });
+        await endB();
+        await expectLanded(cleanupA, requestA);
+      }
+    );
+
+    // Pressed again while A's stop was still draining: B is up before A's
+    // cleanup is asked for.
+    it.each(followUps)(
+      "keeps a dictation's cleanup asked for after the next one starts running when it %s",
+      async (_label, startB, endB) => {
+        await start(ownerA, "a");
+        await stop(ownerA, "a");
+        await startB();
+        const cleanupA = correct(ownerA, "a", "fix the bug");
+        const requestA = await requestFor("fix the bug");
+
+        await endB();
+        await expectLanded(cleanupA, requestA);
       }
     );
 

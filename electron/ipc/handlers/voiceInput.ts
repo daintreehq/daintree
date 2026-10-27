@@ -741,7 +741,7 @@ function hostPaneFor(viewProjectKey: string | null, outsideView: boolean): HostP
 
 // The names each recent dictation sent, so its cleanup spells them the same
 // way, whatever has started since. Kept whether or not cleanup was on at its
-// start, for the same sessions as the cleanup context.
+// start, as many as the cleanup context keeps.
 interface SessionNames {
   readonly sessionId: string;
   readonly webContentsId: number;
@@ -1298,7 +1298,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       webContentsId: session.webContentsId,
       names: [],
     };
-    recentSessionNames = [sessionNames, ...recentSessionNames].slice(0, CORRECTION_PREP_MEMORY);
+    if (session.intent === "dictation") {
+      recentSessionNames = [sessionNames, ...recentSessionNames].slice(0, CORRECTION_PREP_MEMORY);
+    }
     const screenedNames = names.then((gathered) =>
       flattenDictationNames(screenDictationNames(gathered))
     );
