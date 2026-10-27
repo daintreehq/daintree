@@ -23,7 +23,7 @@ import { cn } from "@/lib/utils";
 import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { CLOSE_OWNER_ATTR, CLOSE_REQUEST_EVENT } from "@/lib/closeRequest";
 import { Button } from "@/components/ui/button";
-import { Kbd } from "@/components/ui/Kbd";
+import { Kbd, KbdChord } from "@/components/ui/Kbd";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { SURFACE_HEADER_FOCUS_LIFT_CLASS, SurfaceHeader } from "@/components/ui/SurfaceHeader";
@@ -98,9 +98,10 @@ export interface CanopyCardHandlers {
   onArchive: (item: CanopyItem) => void;
   /**
    * Something was sent to the run from the pane: a reply from the composer, or
-   * Return typed straight into the live terminal.
+   * Return typed straight into the live terminal. `moveOnTo`: sent with ⌘↩,
+   * the run the reply named as it was pressed.
    */
-  onSent: (item: CanopyItem, via: "composer" | "terminal") => void;
+  onSent: (item: CanopyItem, moveOnTo?: string) => void;
   /** Main refused what the composer sent; the draft stays in the composer. */
   onSendFailed: (item: CanopyItem, error: unknown) => void;
   /** Pick one of the options the run's dialog shows, by its label. */
@@ -169,6 +170,8 @@ interface CanopyCardProps extends CanopyCardHandlers {
   reconnecting?: boolean;
   /** Which assistant started it or holds it, from main's own records; null when none is known. */
   workLabel?: string | null;
+  /** Where ⌘↩ from the reply goes on to once it sends, named in the reply; null for nowhere. */
+  moveOnTo?: CanopyItem | null;
 }
 
 /**
@@ -269,6 +272,7 @@ export function CanopyCard({
   terminalApi = ownCanopyTerminalApi,
   reconnecting = false,
   workLabel = null,
+  moveOnTo = null,
 }: CanopyCardProps) {
   const otherHost = otherHostId !== undefined;
   const [stream, setStream] = useState<CanopyStreamState>({
@@ -692,7 +696,11 @@ export function CanopyCard({
   // or to nothing.
   // The draft clears only once main has taken the text: a refused send (the
   // agent exited, the terminal respawned) leaves the reply where it was typed.
-  const submit = async (text: string, imagePaths?: readonly string[]): Promise<boolean> => {
+  const submit = async (
+    text: string,
+    imagePaths?: readonly string[],
+    moveOnTo?: string
+  ): Promise<boolean> => {
     const watchId = stream.watchId;
     if (watchId === null) return false;
     try {
@@ -705,8 +713,42 @@ export function CanopyCard({
       onSendFailed(item, error);
       return false;
     }
-    onSent(item, "composer");
+    onSent(item, moveOnTo);
     return true;
+  };
+  const sendKey = (key: string, moveOnTo?: string) => {
+    // Escape in a dialog means leave: here it goes back to the list rather
+    // than to the agent, where it would interrupt a working turn. The
+    // terminal above still takes it.
+    if (key === "escape") {
+      onLeavePane(item);
+      return;
+    }
+    const watchId = stream.watchId;
+    if (watchId === null) return;
+    terminalApi.terminalSendKey(watchId, key).then(
+      // Only Enter answers anything; arrows and Escape steer the agent's own
+      // menu and are not a reply.
+      () => {
+        if (key === "enter") onSent(item, moveOnTo);
+      },
+      (error: unknown) => onSendFailed(item, error)
+    );
+  };
+  // ⌘↩ sends as Enter does, then moves on to the run the reply names at the
+  // press, wherever the list has gone by the time the send lands. A dictated
+  // send lands after a wait: it goes through the stream open then.
+  const sendRef = useRef({ submit, sendKey });
+  useEffect(() => {
+    sendRef.current = { submit, sendKey };
+  });
+  const routeModEnter = () => {
+    const to = moveOnTo?.runId;
+    return {
+      submitText: (text: string, imagePaths: readonly string[]) =>
+        sendRef.current.submit(text, imagePaths, to),
+      sendEnter: () => sendRef.current.sendKey("enter", to),
+    };
   };
 
   return (
@@ -963,7 +1005,7 @@ export function CanopyCard({
           api={terminalApi}
           reconnecting={reconnecting}
           onStreamChange={setStream}
-          onSubmitted={() => onSent(item, "terminal")}
+          onSubmitted={() => onSent(item)}
           onGoTo={(event) => onOpen(item, isNewWindowClick(event))}
         />
         {(answerChoices.length > 0 || (question !== null && canReply)) && (
@@ -981,6 +1023,7 @@ export function CanopyCard({
                   variant={armed ? "ghost-danger" : "subtle"}
                   size="xs"
                   disabled={reconnecting}
+                  data-canopy-choice=""
                   data-armed={armed || undefined}
                   aria-keyshortcuts={String(index + 1)}
                   className={cn("max-w-full", armed && "bg-status-error/10")}
@@ -1035,27 +1078,26 @@ export function CanopyCard({
                 disabled={stream.watchId === null}
                 onSend={({ text, imagePaths }) => void submit(text, imagePaths)}
                 submitText={submit}
-                onSendKey={(key) => {
-                  // Escape in a dialog means leave: here it goes back to the
-                  // list rather than to the agent, where it would interrupt a
-                  // working turn. The terminal above still takes it.
-                  if (key === "escape") {
-                    onLeavePane(item);
-                    return;
-                  }
-                  const watchId = stream.watchId;
-                  if (watchId === null) return;
-                  terminalApi.terminalSendKey(watchId, key).then(
-                    // Only Enter answers anything; arrows and Escape steer the
-                    // agent's own menu and must not move the panel on.
-                    () => {
-                      if (key === "enter") onSent(item, "composer");
-                    },
-                    (error: unknown) => onSendFailed(item, error)
-                  );
-                }}
+                onSendKey={sendKey}
+                modEnterSend={routeModEnter}
               />
             </Suspense>
+            {/* Held whenever the reply is, named or blank, so a target coming
+                and going never resizes the terminal above. */}
+            <p
+              data-canopy-move-on=""
+              className="flex h-6 shrink-0 items-center gap-1.5 px-3.5 pb-1.5 text-xs text-text-secondary"
+            >
+              {moveOnTo !== null && (
+                <>
+                  <KbdChord shortcut="Cmd+Enter" density="compact" />
+                  <span className="shrink-0">Send and go to</span>
+                  <TruncatedTooltip content={moveOnTo.row.title}>
+                    <span className="min-w-0 truncate text-text-primary">{moveOnTo.row.title}</span>
+                  </TruncatedTooltip>
+                </>
+              )}
+            </p>
           </div>
         ) : (
           <p className="flex shrink-0 items-center gap-1.5 px-3.5 py-3 text-xs text-text-secondary">

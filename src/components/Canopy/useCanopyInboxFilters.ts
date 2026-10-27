@@ -281,7 +281,7 @@ export function useCanopyInboxFilters({
       shownInbox,
     ]
   );
-  // Moving on after an answer lands on a worker: the cursor handlers act on a worker's run.
+  // Moving on, after an archive or ⌘↩ from a reply, lands on a worker: the cursor handlers act on a worker's run.
   const firstAssistant = useMemo(() => {
     const first = projection.navigation[0];
     return first?.role === "assistant" ? first.item : null;

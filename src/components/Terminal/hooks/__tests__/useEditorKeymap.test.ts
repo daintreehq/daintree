@@ -164,6 +164,84 @@ describe("useEditorKeymap", () => {
     });
   });
 
+  describe("Mod+Enter", () => {
+    const route = () => ({ submitText: vi.fn(async () => true), sendEnter: vi.fn() });
+
+    it("is left alone by a composer that gives no route", () => {
+      const { handlers } = renderKeymap(
+        makeLatest({ isAutocompleteOpen: false, autocompleteItems: [], value: "hello" })
+      );
+      expect(handlers.onModEnter()).toBe(false);
+      expect(sendFromEditor).not.toHaveBeenCalled();
+    });
+
+    it("sends as Enter does, by the route taken at the press, dictation wait included", () => {
+      const onSendKey = vi.fn<(key: string) => void>();
+      const routes: ReturnType<typeof route>[] = [];
+      const latest = makeLatest({
+        isAutocompleteOpen: false,
+        autocompleteItems: [],
+        value: "hello",
+        onSendKey,
+        modEnterSend: () => {
+          routes.push(route());
+          return routes.at(-1)!;
+        },
+      });
+      const { handlers } = renderKeymap(latest);
+
+      expect(handlers.onModEnter()).toBe(true);
+      expect(sendFromEditor).toHaveBeenCalledWith(routes[0]);
+
+      latest.value = "";
+      expect(handlers.onModEnter()).toBe(true);
+      expect(routes[1]!.sendEnter).toHaveBeenCalledTimes(1);
+      expect(onSendKey).not.toHaveBeenCalled();
+
+      latest.value = "still talking";
+      latest.isVoiceActiveForPanel = true;
+      expect(handlers.onModEnter()).toBe(true);
+      expect(startVoiceWaitSubmit).toHaveBeenCalledWith({ route: routes[2] });
+
+      // Plain Enter goes the composer's own way, with no route.
+      latest.isVoiceActiveForPanel = false;
+      latest.value = "";
+      expect(handlers.onEnter()).toBe(true);
+      expect(onSendKey).toHaveBeenCalledWith("enter");
+    });
+
+    it("sends nothing by the route mid-composition or while disabled", () => {
+      const routed = route();
+      const latest = makeLatest({
+        isAutocompleteOpen: false,
+        autocompleteItems: [],
+        value: "hello",
+        modEnterSend: () => routed,
+      });
+      const isComposingRef = { current: true };
+      const { handlers } = renderKeymap(latest, { isComposingRef });
+      // The input method's own key: left for it.
+      expect(handlers.onModEnter()).toBe(false);
+
+      isComposingRef.current = false;
+      latest.disabled = true;
+      expect(handlers.onModEnter()).toBe(true);
+      expect(sendFromEditor).not.toHaveBeenCalled();
+      expect(startVoiceWaitSubmit).not.toHaveBeenCalled();
+      expect(routed.submitText).not.toHaveBeenCalled();
+      expect(routed.sendEnter).not.toHaveBeenCalled();
+    });
+
+    it("lets a completion row take it as its own, with nothing sent by the route", () => {
+      const routed = route();
+      const { handlers } = renderKeymap(makeLatest({ modEnterSend: () => routed }));
+      expect(handlers.onModEnter()).toBe(true);
+      expect(applyAutocompleteSelection).toHaveBeenCalledWith("enter");
+      expect(sendFromEditor).not.toHaveBeenCalled();
+      expect(routed.submitText).not.toHaveBeenCalled();
+    });
+  });
+
   describe("Tab", () => {
     it("completes the selected item when fresh", () => {
       const second: AutocompleteItem = { ...fileItem, key: "src/b.ts", insertText: "src/b.ts" };

@@ -2,8 +2,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { HostId } from "@shared/types/remoteHosts";
 import { CANOPY_SEEN_HEARTBEAT_MS, canopyViewIsWatched, reportCanopySeen } from "@/lib/canopySeen";
 import { subscribeProjectViewObservability } from "@/lib/viewCacheState";
-import type { CanopyItem } from "./canopyModel";
-import { nextAfterEntry, type CanopyWorkerEntry } from "./canopyInboxProjection";
+import { itemArchived, type CanopyItem } from "./canopyModel";
+import {
+  entryShelved,
+  nextAfterEntry,
+  nextBelowEntry,
+  type CanopyWorkerEntry,
+} from "./canopyInboxProjection";
 import { canopyCardDomId, type CanopyCardHandle, type CanopyPaneFocus } from "./CanopyCard";
 import type { CanopyAssistantItem, CanopyRoleFilter } from "./canopyAssistants";
 import { canopyAssistantDomId, openAssistantItem } from "./openAssistantItem";
@@ -453,14 +458,30 @@ export function useCanopyInboxFocus({
   );
 
   /**
-   * Where the cursor goes once a run is dealt with — archived, answered,
-   * replied to: the next run after it that needs you or has something unread,
-   * else the one before it that does, else simply its neighbour.
+   * Where the cursor goes once an archived run leaves: the next run after it
+   * that needs you or has something unread, else the one before it that does,
+   * else simply its neighbour.
    */
   const nextAfter = useCallback((runId: string): CanopyItem | undefined => {
     const order = workerNavigationRef.current;
     const key = order.find((entry) => entry.item.runId === runId)?.key ?? null;
     return nextAfterEntry(order, key)?.item;
+  }, []);
+  // Where ⌘↩ from the pane's reply goes on to, down the list as it shows now:
+  // the reply names it before it is pressed.
+  const moveOnTo =
+    focusedItem === null
+      ? null
+      : (nextBelowEntry(
+          workerNavigation,
+          workerNavigation.find((entry) => entry.item.runId === focusedItem.runId)?.key ?? null
+        )?.item ?? null);
+  // The run a ⌘↩ named, once its send lands: only while it is still listed and
+  // the user hasn't put it aside or archived it since. Never a stand-in.
+  const moveOnTarget = useCallback((runId: string): CanopyItem | undefined => {
+    const entry = workerNavigationRef.current.find((candidate) => candidate.item.runId === runId);
+    if (entry === undefined || entryShelved(entry) || itemArchived(entry.item)) return undefined;
+    return entry.item;
   }, []);
   // Escape from the pane lands on the run's row; a run folded away in
   // Archived has no row to land on, so the keyboard takes the fold instead
@@ -596,6 +617,8 @@ export function useCanopyInboxFocus({
     openAssistant,
     settlePaneFocus,
     nextAfter,
+    moveOnTo,
+    moveOnTarget,
     leavePane,
     showsHost,
     isSelected,

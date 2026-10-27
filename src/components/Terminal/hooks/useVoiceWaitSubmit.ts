@@ -28,6 +28,7 @@ import { useDictationRangeStore } from "@/store/dictationRangeStore";
 import { isSpokenSendable } from "@/services/voiceSpokenSend";
 import { claimVoiceWaitKeys } from "@/lib/voiceWaitKeys";
 import type { ClaimSendHandBack, SendHandBack } from "./useSendHandBack";
+import type { ComposerSendRoute } from "./useEditorKeymap";
 
 /** What a voice send is waiting on: the transcript draining, or its correction. */
 export type VoiceSubmitPhase = "finishing" | "polishing";
@@ -69,11 +70,13 @@ interface UseVoiceWaitSubmitParams {
    * Whether it took the draft, or a promise of it while an expansion or a
    * submission is awaited; a send held back (an upload still going) did not.
    * A dictated send passes what it takes: its sessions, and the words of any
-   * that started after it, which stay behind.
+   * that started after it, which stay behind. A send routed at its key
+   * press goes by that route.
    */
   sendFromEditor: (
     handBack?: SendHandBack,
-    voiceSend?: VoiceDraftSend
+    voiceSend?: VoiceDraftSend,
+    route?: ComposerSendRoute
   ) => boolean | Promise<boolean> | void;
   /**
    * Claims the keyboard's hand-back for the send at the Enter that starts the
@@ -87,6 +90,8 @@ interface UseVoiceWaitSubmitParams {
 interface VoiceWaitSubmitOptions {
   /** Sent by a spoken "send it": a draft too short to be a prompt stays unsent. */
   spoken?: boolean;
+  /** Taken at the key press that started the wait, and gone with it if the wait is called off. */
+  route?: ComposerSendRoute;
 }
 
 const isCopyOrSelectAll = (event: KeyboardEvent) =>
@@ -379,7 +384,7 @@ export function useVoiceWaitSubmit({
             sessions
           );
           if (options?.spoken && !isSpokenSendable(voiceSend.text)) return;
-          sent = sendFromEditorRef.current(handBack, voiceSend) ?? true;
+          sent = sendFromEditorRef.current(handBack, voiceSend, options?.route) ?? true;
         } finally {
           releaseKeys();
           releaseSend();

@@ -295,6 +295,81 @@ describe("HybridInputBar — Canopy's reply beside the pane's own composer", () 
     expect(onReplySend).toHaveBeenCalledTimes(1);
   });
 
+  it("sends on ⌘↩ by the reply's route, a dictated send after its wait, and leaves the pane's composer alone", async () => {
+    let finish!: () => void;
+    vi.spyOn(voiceRecordingService, "stop").mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        })
+    );
+    const routed = vi.fn(async (_text: string, _imagePaths: readonly string[]) => true);
+    const submitText = vi.fn(async (_text: string, _imagePaths: readonly string[]) => true);
+    const onPaneSend = vi.fn();
+    const { getByTestId } = render(
+      <TooltipProvider>
+        <WorktreeStoreContext.Provider value={createWorktreeStore()}>
+          <div data-testid="pane">
+            <HybridInputBar terminalId="term-1" cwd={WT_ID} agentId="claude" onSend={onPaneSend} />
+          </div>
+          <div data-testid="reply">
+            <HybridInputBar
+              isolated
+              terminalId="term-1"
+              cwd=""
+              agentId="claude"
+              onSend={() => {}}
+              submitText={submitText}
+              voiceTarget={REPLY}
+              modEnterSend={() => ({ submitText: routed, sendEnter: vi.fn() })}
+            />
+          </div>
+        </WorktreeStoreContext.Provider>
+      </TooltipProvider>
+    );
+    await act(async () => {});
+    const viewOf = (testId: string) =>
+      EditorView.findFromDOM(getByTestId(testId).querySelector<HTMLElement>(".cm-editor")!)!;
+    const isMac = /Mac/.test(navigator.platform);
+    const modEnter = async (view: EditorView, text: string) => {
+      await act(async () => {
+        view.dispatch({ changes: { from: 0, insert: text }, userEvent: "input.type" });
+      });
+      await act(async () => {
+        runScopeHandlers(
+          view,
+          new KeyboardEvent("keydown", { key: "Enter", metaKey: isMac, ctrlKey: !isMac }),
+          "editor"
+        );
+      });
+    };
+
+    routed.mockResolvedValueOnce(false);
+    await modEnter(viewOf("reply"), "refused");
+    expect(routed).toHaveBeenCalledWith("refused", []);
+    // Refused, the reply keeps what was typed, as a refused Enter does.
+    expect(viewOf("reply").state.doc.toString()).toBe("refused");
+    await act(async () => {
+      viewOf("reply").dispatch({ changes: { from: 0, to: viewOf("reply").state.doc.length } });
+    });
+
+    await modEnter(viewOf("reply"), "go on");
+    expect(routed).toHaveBeenLastCalledWith("go on", []);
+    expect(submitText).not.toHaveBeenCalled();
+    expect(viewOf("reply").state.doc.toString()).toBe("");
+
+    dictating(REPLY);
+    await modEnter(viewOf("reply"), "then the next");
+    expect(routed).toHaveBeenCalledTimes(2);
+    await act(async () => finish());
+    expect(routed).toHaveBeenLastCalledWith("then the next", []);
+    expect(submitText).not.toHaveBeenCalled();
+
+    await modEnter(viewOf("pane"), "not sent");
+    expect(onPaneSend).not.toHaveBeenCalled();
+    expect(viewOf("pane").state.doc.toString()).toBe("not sent");
+  });
+
   it("keeps the dictation key with the reply once it is expanded out of Canopy's pane", async () => {
     const { surface } = await mountBoth();
     const { view } = surface("reply");

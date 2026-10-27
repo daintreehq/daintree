@@ -117,7 +117,7 @@ import {
 import { useVoiceDecorations } from "./hooks/useVoiceDecorations";
 import { useContextDetection } from "./hooks/useContextDetection";
 import { draftUnchangedSince, useTokenResolution } from "./hooks/useTokenResolution";
-import { useEditorKeymap } from "./hooks/useEditorKeymap";
+import { useEditorKeymap, type ComposerSendRoute } from "./hooks/useEditorKeymap";
 import { useCompartmentDriver } from "./hooks/useCompartmentDriver";
 import { usePasteExtensions } from "./hooks/usePasteExtensions";
 import { useAutocompleteState } from "./hooks/useAutocompleteState";
@@ -253,6 +253,13 @@ export interface HybridInputBarProps {
    * composer's own draft. Without it an isolated composer takes none.
    */
   voiceTarget?: VoiceRecordingTarget;
+  /**
+   * Cmd+Enter (Ctrl+Enter off the Mac) sends as Enter does, by the route this gives
+   * at the press in place of `submitText` and `onSendKey("enter")`: Canopy's
+   * reply names the agent it moves on to once that send lands. Without it the
+   * chord does nothing here.
+   */
+  modEnterSend?: () => ComposerSendRoute;
 }
 
 interface LatestState {
@@ -283,6 +290,7 @@ interface LatestState {
   ) => string | null;
   isVoiceActiveForPanel: boolean;
   isExpanded: boolean;
+  modEnterSend?: () => ComposerSendRoute;
 }
 
 interface HybridInputE2EController {
@@ -368,6 +376,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       submitText,
       selected,
       voiceTarget,
+      modEnterSend,
     },
     ref
   ) => {
@@ -890,6 +899,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         navigateHistory,
         isVoiceActiveForPanel,
         isExpanded,
+        modEnterSend,
       };
     });
 
@@ -1156,7 +1166,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // or submission has: a voice send completes its progress only then.
     const sendFromEditor = (
       handBack?: SendHandBack,
-      voiceSend?: VoiceDraftSend
+      voiceSend?: VoiceDraftSend,
+      route?: ComposerSendRoute
     ): boolean | Promise<boolean> => {
       // An upload still on its way would leave its reference out of what is sent.
       if (hasPendingUploads(uploadSurface)) return false;
@@ -1211,12 +1222,15 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       });
       if (intercepted) return true;
 
+      const imagePaths = readImageChipPaths(view);
       return sendText(text, {
-        imagePaths: readImageChipPaths(view),
+        imagePaths,
         isDraftUnchanged,
         onHandedOff: handBack,
         keepDraft,
         dictationSessions: voiceSend?.sessions,
+        // Routed at its key press: through the route, in place of `submitText`.
+        ...(route && { submit: (outgoing: string) => route.submitText(outgoing, imagePaths) }),
       });
     };
 
@@ -1580,7 +1594,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       historyPaletteOpenRef,
       applyAutocompleteSelection,
       handleHistoryNavigation,
-      sendFromEditor,
+      sendFromEditor: (route) => sendFromEditor(undefined, undefined, route),
       startVoiceWaitSubmit,
       cancelVoiceWaitSubmit,
       handleDictationEscape,

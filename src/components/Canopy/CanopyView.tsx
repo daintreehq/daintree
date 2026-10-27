@@ -525,7 +525,11 @@ function CanopyShortcuts() {
       heading: "In a reply or the terminal",
       rows: [
         { keys: [`${step}+ArrowUp`, `${step}+ArrowDown`], label: "Next agent" },
-        { keys: ["Enter"], label: "In a reply: send, then move to the next agent" },
+        { keys: ["Enter"], label: "In a reply: send" },
+        {
+          keys: ["Cmd+Enter"],
+          label: "In a reply: send, then go to the next agent below that needs you or is unread",
+        },
         { keys: ["Shift+Enter"], label: "New line in a reply" },
         { keys: ["Escape"], label: "Back to the list from a reply" },
         ...(paneClose
@@ -761,6 +765,8 @@ function CanopyInbox({
     openAssistant,
     settlePaneFocus,
     nextAfter,
+    moveOnTo,
+    moveOnTarget,
     leavePane,
     showsHost,
     isSelected,
@@ -844,6 +850,7 @@ function CanopyInbox({
     focusCardNow,
     openPaneNow,
     nextAfter,
+    moveOnTarget,
     leavePane,
     showsHost,
     isSelected,
@@ -1947,6 +1954,7 @@ function CanopyInbox({
                       aside={setAside}
                       terminalApi={terminalApi}
                       workLabel={workLabelOf(focusedItem)}
+                      moveOnTo={moveOnTo}
                       reconnecting={
                         everyHost
                           ? focusedLinkStatus !== undefined && focusedLinkStatus !== "connected"

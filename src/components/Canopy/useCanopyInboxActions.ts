@@ -13,7 +13,12 @@ import { consumePaletteFocusRestoreSuppression } from "@/components/ui/paletteFo
 import { switchToHost } from "@/components/Hosts/hostSwitching";
 import type { AgentSnoozeDurationOption } from "@shared/utils/agentSnoozeDurations";
 import { itemArchived, itemSubject, type CanopyItem } from "./canopyModel";
-import type { CanopyCardHandle, CanopyCardHandlers, CanopyPaneFocus } from "./CanopyCard";
+import {
+  canopyCardDomId,
+  type CanopyCardHandle,
+  type CanopyCardHandlers,
+  type CanopyPaneFocus,
+} from "./CanopyCard";
 import type { CanopyRowMenuActions } from "./CanopyRowMenu";
 import type { CanopyApi, CanopyTerminalApi } from "./canopyHostSource";
 import { placeOf } from "./canopyInboxPlace";
@@ -60,6 +65,7 @@ export function useCanopyInboxActions({
   focusCardNow,
   openPaneNow,
   nextAfter,
+  moveOnTarget,
   leavePane,
   showsHost,
   isSelected,
@@ -85,6 +91,7 @@ export function useCanopyInboxActions({
   focusCardNow: (runId: string) => void;
   openPaneNow: (runId: string, focus: CanopyPaneFocus) => void;
   nextAfter: (runId: string) => CanopyItem | undefined;
+  moveOnTarget: (runId: string) => CanopyItem | undefined;
   leavePane: (item: CanopyItem) => void;
   showsHost: (hostId: HostId | null) => boolean;
   isSelected: (runId: string) => boolean;
@@ -171,19 +178,18 @@ export function useCanopyInboxActions({
     return {
       onOpen: openRun,
       onLeavePane: leavePane,
-      onSent: (item, via) => {
+      onSent: (item, moveOnTo) => {
         readNow(item);
-        // Typed straight into the terminal: the keys stay there, since a menu
-        // or a prompt may have more to ask. The run reads as replied where it
-        // is, and its pane stays open where the user is typing.
-        if (via === "terminal") return;
+        // A reply stays on the run it answered, from the reply or typed
+        // straight into the terminal, so the user can watch it picked up, as
+        // Send stays on the thread in mail. The answered one reads as replied
+        // where it is, and leaves the band at a later re-rank.
+        if (moveOnTo === undefined) return;
         // The user moved to another run while the reply was on its way, or
         // closed the panel: their choice stands.
         if (!showsHost(hostId) || !isSelected(item.runId)) return;
-        // Replied from the composer: on to the next run that needs you, into
-        // its composer, as Send moves on in a mail queue. The answered one
-        // reads as replied where it is, and leaves the band at a later re-rank.
-        const next = nextAfter(item.runId);
+        // ⌘↩: on to the run the reply named as it was pressed, into its reply.
+        const next = moveOnTarget(moveOnTo);
         if (!next || next.runId === item.runId) return;
         if (searchRef.current !== null && document.activeElement === searchRef.current) {
           selectNow(next.runId);
@@ -247,19 +253,26 @@ export function useCanopyInboxActions({
       onSendFailed: (item, error) => failToast("Couldn't send to agent", error, goTo(item)),
       onAnswer: function answer(item, label) {
         readNow(item);
-        // On to the next run that needs you, as a reply from the composer does —
-        // on its row, where the next answer is one key away.
-        const next = nextAfter(item.runId);
+        // The answer stays on the run it answered, as a reply does.
         safeFireAndForget(
           terminalApi.answer(item.runId, target(item), label).then(
             () => {
               if (!showsHost(hostId) || !isSelected(item.runId)) return;
-              if (!next || next.runId === item.runId) return;
-              // Back in the search since: the selection moves on, the keyboard stays to type.
-              if (searchRef.current !== null && document.activeElement === searchRef.current) {
-                selectNow(next.runId);
+              // A choice in the pane goes away with the screen it answered, and
+              // the keyboard with it, to the page: it goes to the run's row
+              // instead, where the next answer is one key away. Anywhere else,
+              // Reply and Go to terminal beside the choices included, it stays.
+              const active = document.activeElement;
+              const lost =
+                active === null ||
+                active === document.body ||
+                active.closest("[data-canopy-detail] [data-canopy-choice]") !== null;
+              if (!lost) return;
+              if (document.getElementById(canopyCardDomId(item.runId))) {
+                focusCardNow(item.runId);
               } else {
-                focusCardNow(next.runId);
+                // Its row folded away: the pane keeps the keyboard.
+                detailRef.current?.focusComposer();
               }
             },
             (error: unknown) => failToast("Couldn't answer", error, goTo(item))
@@ -322,12 +335,14 @@ export function useCanopyInboxActions({
     selectNow,
     openPaneNow,
     nextAfter,
+    moveOnTarget,
     leavePane,
     showsHost,
     isSelected,
     captureFocusAfterClose,
     closeForTerminal,
     searchRef,
+    detailRef,
     reserveUndo,
     undoReads,
     api,

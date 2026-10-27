@@ -143,22 +143,40 @@ export function stepEntry<T extends CanopyInboxEntry>(
   return order[Math.min(order.length - 1, Math.max(0, index + direction))];
 }
 
+/** Worth moving on to: it needs you or has something unread, and wasn't put aside. */
+function entryWanted(entry: CanopyInboxEntry): boolean {
+  return !entryShelved(entry) && (entryNeedsYou(entry) || entryUnread(entry));
+}
+
 /**
- * Where the cursor goes once an entry is dealt with — archived, answered,
- * replied to: the next one after it that needs you or has something unread,
- * else the first before it that does, else simply its neighbour. Never onto a
- * run the user put aside, unless it is the only neighbour left.
+ * Where the cursor goes once an archived entry leaves: the next one after it
+ * that needs you or has something unread, else the first before it that does,
+ * else simply its neighbour. Never onto a run the user put aside, unless it is
+ * the only neighbour left.
  */
 export function nextAfterEntry<T extends CanopyInboxEntry>(
   order: readonly T[],
   key: string | null
 ): T | undefined {
   const index = key === null ? -1 : order.findIndex((entry) => entry.key === key);
-  const wanted = (entry: T) =>
-    entry.key !== key && !entryShelved(entry) && (entryNeedsYou(entry) || entryUnread(entry));
+  const wanted = (entry: T) => entry.key !== key && entryWanted(entry);
   return (
     order.slice(index + 1).find(wanted) ??
     order.slice(0, Math.max(index, 0)).find(wanted) ??
     (index === -1 ? undefined : (order[index + 1] ?? order[index - 1]))
   );
+}
+
+/**
+ * Where ⌘↩ from a reply goes on to: the first entry below it that needs you
+ * or has something unread, never one put aside. Only ever down the list as
+ * shown: past the last such entry, or from one not in it, there is none.
+ */
+export function nextBelowEntry<T extends CanopyInboxEntry>(
+  order: readonly T[],
+  key: string | null
+): T | undefined {
+  const index = key === null ? -1 : order.findIndex((entry) => entry.key === key);
+  if (index === -1) return undefined;
+  return order.slice(index + 1).find(entryWanted);
 }

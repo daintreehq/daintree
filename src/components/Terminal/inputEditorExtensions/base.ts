@@ -656,6 +656,7 @@ export function createAutoSize(config: AutoSizeConfig = {}) {
 
 interface CustomKeymapConfig {
   onEnter: () => boolean;
+  onModEnter: () => boolean;
   onEscape: () => boolean;
   onArrowUp: () => boolean;
   onArrowDown: () => boolean;
@@ -676,6 +677,12 @@ export function createCustomKeymap(config: CustomKeymapConfig): Extension {
         key: "Enter",
         run() {
           return config.onEnter();
+        },
+      },
+      {
+        key: "Mod-Enter",
+        run() {
+          return config.onModEnter();
         },
       },
       {
