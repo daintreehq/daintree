@@ -20,7 +20,9 @@ import {
   tokenizeBranchName,
   tokenizeProjectName,
   extractTerminalIdentifiers,
+  readTerminalLines,
 } from "../voiceContextKeyterms.js";
+import { SEMANTIC_BUFFER_TRUNCATION_MARKER } from "../pty/types.js";
 
 const getGitBranchMock = vi.fn().mockResolvedValue("feature/auth-login-service");
 
@@ -246,10 +248,16 @@ describe("extractTerminalIdentifiers", () => {
     ["back tab", "\u001b[Z"],
     ["cursor restore (CSI u)", "\u001b[u"],
     ["cursor restore (ESC 8)", "\u001b8"],
+    ["cursor restore (mode 1048)", "\u001b[?1048l"],
+    ["alternate screen", "\u001b[?1049h"],
+    ["origin mode", "\u001b[?6h"],
+    ["scroll region", "\u001b[1;20r"],
+    ["full reset", "\u001bc"],
     ["reverse index", "\u001bM"],
     ["C1 next line", "\u0085"],
     ["backspace", "\b"],
   ])("keeps fragments a %s reached apart", (_move, move) => {
+    expect(readTerminalLines([`get${move}UserProfile`])).toEqual(["get UserProfile"]);
     expect(extractTerminalIdentifiers([`get${move}UserProfile`])).toEqual(["UserProfile"]);
   });
 
@@ -261,11 +269,26 @@ describe("extractTerminalIdentifiers", () => {
     ["keyboard protocol pop", "\u001b[<u"],
     ["keyboard protocol query", "\u001b[?u"],
     ["cursor hide", "\u001b[?25l"],
+    ["synchronized output end", "\u001b[?2026l"],
     ["cursor style", "\u001b[2 q"],
     ["erase to end of line", "\u001b[K"],
     ["character set", "\u001b(B"],
   ])("removes a %s that moves nothing whole", (_control, control) => {
-    expect(extractTerminalIdentifiers([`getUser${control}Profile`])).toEqual(["getUserProfile"]);
+    expect(readTerminalLines([`getUser${control}Profile`])).toEqual(["getUserProfile"]);
+  });
+
+  it.each([
+    ["CSI", "\u001b[31"],
+    ["8-bit CSI", "\u009b3"],
+    ["escape", "\u001b("],
+  ])("drops an unfinished %s at the end of a line", (_form, tail) => {
+    expect(readTerminalLines([`ModelPicker${tail}`])).toEqual(["ModelPicker"]);
+  });
+
+  it("drops a sequence the semantic buffer cut, with its marker", () => {
+    expect(readTerminalLines([`ModelPicker\u001b[3${SEMANTIC_BUFFER_TRUNCATION_MARKER}`])).toEqual([
+      "ModelPicker",
+    ]);
   });
 
   it("removes a cursor save without eating the capital after it", () => {
@@ -281,6 +304,11 @@ describe("extractTerminalIdentifiers", () => {
       "useSessionRouter",
     ]);
     expect(ids).toEqual(["useSessionRouter"]);
+  });
+
+  it("drops a repaint-split ID that has an intact copy on the same line", () => {
+    const row = "AbcDef\u001b[1C12AB\u001b[1CcDef\u001b[1C34 AbcDef12ABcDef34";
+    expect(extractTerminalIdentifiers([row])).toEqual([]);
   });
 
   it("drops long branch slugs but keeps short compound identifiers", () => {

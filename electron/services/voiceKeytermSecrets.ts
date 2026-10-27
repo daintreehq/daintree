@@ -115,7 +115,9 @@ const TYPE_WORDS = new Set([
 const MEMBER_CHAIN_RE = /^[a-z_][\w$]*(?:\.[A-Za-z_$][\w$]*)+$/;
 const ENV_REFERENCE_RE = /^\$(?:\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Z_][A-Z0-9_]*)$/;
 const URL_CREDENTIALS_RE = /\b[a-z][a-z0-9+.-]{1,30}:\/\/[^\s/@:]+:[^\s/@]+@/i;
-const NETRC_RE = /^\s*(?:machine\s+\S+|default)\b.*\bpassword\s+\S/;
+// The host is a whole token, so a long one can't backtrack through its own
+// word boundaries.
+const NETRC_RE = /^\s*(?:machine\s+\S+(?=\s|$)|default\b).*\bpassword\s+\S/;
 
 function segmentsOf(run: string): string[] {
   return run.split(SEGMENT_SEPARATOR_RE).filter(Boolean);
@@ -309,11 +311,15 @@ export function redactSecretShapedLines(
 }
 
 // An ID in a run the spaced line doesn't have came from pieces it keeps
-// apart, each too short to read as one: a hex key split by a repaint.
+// apart, each too short to read as one: a hex key split by a repaint. Runs are
+// counted, so an intact copy elsewhere on the line doesn't cover a split one.
 function joinsOpaqueId(joined: string, spaced: string): boolean {
-  const runs = new Set(spaced.match(BLANKABLE_RUN_RE));
+  const runs = new Map<string, number>();
+  for (const [run] of spaced.matchAll(BLANKABLE_RUN_RE)) runs.set(run, (runs.get(run) ?? 0) + 1);
   for (const [run] of joined.matchAll(BLANKABLE_RUN_RE)) {
-    if (!runs.has(run) && isOpaqueId(run)) return true;
+    const left = runs.get(run) ?? 0;
+    if (left > 0) runs.set(run, left - 1);
+    else if (isOpaqueId(run)) return true;
   }
   return false;
 }

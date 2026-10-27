@@ -81,6 +81,11 @@ describe("boundTerminalOutput", () => {
     expect(out).toBe("kept");
   });
 
+  it("drops a split hex key that has an intact copy on the same line", () => {
+    const row = "DG=7c26\x1b[1C52f8\x1b[1C3d4d\x1b[1C0fff DG=7c2652f83d4d0fff";
+    expect(boundTerminalOutput([row, "", "kept"])).toBe("kept");
+  });
+
   it("is null when nothing readable remains", () => {
     expect(boundTerminalOutput([])).toBeNull();
     expect(boundTerminalOutput(["", "   ", ""])).toBeNull();

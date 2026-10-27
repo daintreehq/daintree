@@ -285,19 +285,25 @@ describe("redactSecretShapedLines", () => {
       expect(redactSecretShapedLines([spaced], true, [`DG=${key} useSessionRouter`])).toEqual([""]);
     });
 
+    it("empties a line whose split ID has an intact copy beside it", () => {
+      const key = fakeBody(16, 18, HEX);
+      const spaced = `DG=${key.match(/.{4}/g)!.join(" ")} DG=${key}`;
+      expect(redactSecretShapedLines([spaced], true, [`DG=${key} DG=${key}`])).toEqual([""]);
+    });
+
     it("blanks an ID the spaced line shows whole and keeps the rest", () => {
       const [out] = redactSecretShapedLines(["Commit abcdef1234 with useSessionRouter"], false, [
-        "Commitabcdef1234withuseSessionRouter",
+        "Commit abcdef1234 withuseSessionRouter",
       ]);
       expect(out).not.toContain("abcdef1234");
       expect(out).toContain("useSessionRouter");
     });
 
     it("keeps a line whose words only join into a credential name", () => {
-      const line = "Set the API key in useSessionRouter";
-      expect(redactSecretShapedLines([line], false, ["SettheAPIkeyinuseSessionRouter"])).toEqual([
-        line,
-      ]);
+      const line = "Set the API Key in useSessionRouter";
+      expect(
+        redactSecretShapedLines([line], false, ["Set the APIKey in useSessionRouter"])
+      ).toEqual([line]);
     });
   });
 });
