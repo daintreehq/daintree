@@ -170,11 +170,19 @@ export function isActiveVoiceSession(status: VoiceInputStatus): boolean {
  *
  * - transient: a recoverable transport or rate-limit fault — the main process
  *   is already reconnecting (or will, on the next close). The user sees the
- *   "reconnecting" status but the session intent is preserved.
+ *   "reconnecting" status but the session intent is preserved. Also a report
+ *   that changes nothing about the session, such as `VOICE_STOP_AUDIO_LOST_CODE`.
  * - fatal: requires user action (auth/quota/permission/config) or is
  *   unrecoverable. The session ends.
  */
 export type VoiceInputErrorSeverity = "transient" | "fatal";
+
+/**
+ * A graceful stop gave up on audio it was holding for a socket that never
+ * opened. Sent while the stop drains, which is when the renderer otherwise
+ * ignores provider errors, so it is the one it still shows.
+ */
+export const VOICE_STOP_AUDIO_LOST_CODE = "stop_audio_lost";
 
 /**
  * Structured error payload emitted by the voice input pipeline. Plain

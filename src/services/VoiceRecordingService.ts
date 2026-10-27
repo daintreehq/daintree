@@ -47,6 +47,7 @@ import { keepRecentDictation, keepRecentDictationCorrection } from "@/services/r
 import { joinCompletedSegments } from "@/lib/voiceTranscriptSegments";
 import {
   isActiveVoiceSession,
+  VOICE_STOP_AUDIO_LOST_CODE,
   type VoiceInputStatus,
   type VoiceRecordingMode,
   type VoiceSessionElsewhere,
@@ -865,8 +866,22 @@ class VoiceRecordingService {
           this.reportPassageFailed();
           return;
         }
-        // During graceful stop, the main process suppresses drain errors.
-        // If one leaks through, ignore it to avoid prematurely finalizing.
+        // Speech the stop couldn't get transcribed. Nothing else would tell the
+        // user, and it ends nothing: the drain carries on to idle.
+        if (error.code === VOICE_STOP_AUDIO_LOST_CODE) {
+          logWarn(`${LOG_PREFIX} Stop lost held audio`, { code: error.code });
+          notify({
+            type: "warning",
+            title: "Dictation incomplete",
+            // eslint-disable-next-line no-restricted-syntax -- raw error.message: VoiceInputError is constructed internally with well-formed user copy
+            message: error.message,
+            context: { eventKind: "connectivity" },
+          });
+          return;
+        }
+        // An error that lands while a stop drains belongs to a session already
+        // winding down: it mustn't set an error state or toast over a stop the
+        // user asked for.
         if (this.isStoppingSession) {
           logWarn(`${LOG_PREFIX} Ignoring error during stop`, {
             severity: error.severity,
