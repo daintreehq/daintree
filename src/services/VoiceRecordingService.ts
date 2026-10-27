@@ -3372,8 +3372,16 @@ class VoiceRecordingService {
     if (correction.kind !== "chunk" || correction.cleanup.stopped || edits.length === 0) {
       return null;
     }
-    const raw = joinPassageTexts(edits.map(({ passage }) => passage.text));
-    const corrected = joinPassageTexts(edits.map(({ text }) => text));
+    // From its first rewritten passage to its last, the ones left as they
+    // were included, so it reads as one stretch of the baseline.
+    const rewritten = new Map(edits.map(({ passage, text }) => [passage, text]));
+    const { passages } = correction;
+    const at = passages.flatMap((passage, i) => (rewritten.has(passage) ? [i] : []));
+    const stretch = passages.slice(at[0], at[at.length - 1]! + 1);
+    const raw = joinPassageTexts(stretch.map((passage) => passage.text));
+    const corrected = joinPassageTexts(
+      stretch.map((passage) => rewritten.get(passage) ?? passage.text)
+    );
     return raw && corrected ? { raw, corrected, partOf: correction.cleanup.sessionId } : null;
   }
 
@@ -3389,18 +3397,24 @@ class VoiceRecordingService {
   ): CorrectionBaseline | null {
     const baseline = cleanup.baseline;
     const store = useVoiceRecordingStore.getState();
-    if (
-      !baseline ||
-      this.baselineOwners.get(cleanup.panelId) !== cleanup ||
-      store.panelBuffers[cleanup.panelId]?.sessionCorrectedText !== baseline.text
-    ) {
-      return null;
+    const buffer = store.panelBuffers[cleanup.panelId];
+    const current = buffer?.sessionCorrectedText;
+    if (!baseline || !current || this.baselineOwners.get(cleanup.panelId) !== cleanup) return null;
+    if (current !== baseline.text) {
+      // A Restore or undo moved a chunk inside it meanwhile, so the places
+      // taken at stop no longer hold: each passage is found by its words.
+      if (buffer.dictationSessionId !== cleanup.sessionId) return null;
+      baseline.text = current;
+      baseline.spans.clear();
     }
     const pieces = [...settled]
       .flatMap(([passage, text]) => {
         const span = baseline.spans.get(passage);
         baseline.spans.delete(passage);
-        return span ? [{ ...span, text }] : [];
+        if (span) return [{ ...span, text }];
+        const at = current.indexOf(passage.text);
+        if (!passage.text || at < 0 || current.indexOf(passage.text, at + 1) >= 0) return [];
+        return [{ from: at, to: at + passage.text.length, text }];
       })
       .sort((a, b) => b.from - a.from);
     const raw = baseline.text;

@@ -431,6 +431,68 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
     expect(baseline()).toBe(`${OPENING_TEXT} ${NEXT}`);
   });
 
+  it("still folds the stop-time pass in after a Restore moved a chunk meanwhile", async () => {
+    const { service, say, pause, draft, flush, baseline } = await setup();
+    const { takeLandedCorrection, rebaseCorrectionBaseline } =
+      await import("../voiceCorrectionLanding");
+    const tail = deferred<CorrectResult>();
+    correct
+      .mockResolvedValueOnce({ action: "replace", correctedText: CLEANED_OPENING })
+      .mockReturnValueOnce(tail.promise);
+    for (const sentence of OPENING) say(sentence);
+    pause();
+    say(NEXT);
+    await flush();
+    const landed = takeLandedCorrection(PANEL, undefined, draft());
+    await service.stop();
+
+    rebaseCorrectionBaseline(PANEL, landed!, "raw");
+    expect(baseline()).toBe(`${OPENING_TEXT} ${NEXT}`);
+    tail.resolve({ action: "replace", correctedText: "The other thing is the login redirect." });
+    await flush();
+    expect(baseline()).toBe(`${OPENING_TEXT} The other thing is the login redirect.`);
+  });
+
+  it("gives a chunk of several passages one baseline stretch, unchanged ones included", async () => {
+    const { service, inputStore, say, pause, draft, record, flush, baseline } = await setup();
+    const { takeLandedCorrection, rebaseCorrectionBaseline } =
+      await import("../voiceCorrectionLanding");
+    for (const sentence of OPENING) say(sentence);
+    // Typed after the second and third sentences, so the chunk reads as three passages.
+    for (const index of [2, 1]) {
+      const at = record().utterances[index]!.range.to;
+      inputStore
+        .getState()
+        .setDraftInput(PANEL, `${draft().slice(0, at)} (typed)${draft().slice(at)}`);
+    }
+    const first = `${OPENING[0]} ${OPENING[1]}`;
+    const second = OPENING[2]!;
+    const third = `${OPENING[3]} ${OPENING[4]}`;
+    const cleaned = new Map([
+      [first, first.replace("flaky", "unreliable")],
+      [third, third.replace("whole build", "full build")],
+    ]);
+    correct.mockImplementation(async ({ rawText }) =>
+      cleaned.has(rawText)
+        ? { action: "replace", correctedText: cleaned.get(rawText)! }
+        : { action: "no_change", correctedText: rawText }
+    );
+    pause();
+    say(NEXT);
+    expect(correct.mock.calls.map(([request]) => request.rawText)).toEqual([first, second, third]);
+    await flush();
+    const landed = takeLandedCorrection(PANEL, undefined, draft());
+    expect(landed?.baseline).toMatchObject({
+      raw: [first, second, third].join(" "),
+      corrected: [cleaned.get(first), second, cleaned.get(third)].join(" "),
+    });
+
+    await service.stop();
+    await flush();
+    rebaseCorrectionBaseline(PANEL, landed!, "raw");
+    expect(baseline()).toBe([first, second, third, NEXT].join(" "));
+  });
+
   it("keeps no cleaned text in the history when a pass failed", async () => {
     const { service, say, pause, flush } = await setup();
     correct
