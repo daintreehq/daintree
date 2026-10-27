@@ -451,6 +451,19 @@ describe("summariseVariant", () => {
     expect(summary.landed.repairRate).toBe(0);
   });
 
+  it("times the first streamed text over the replies that showed some", () => {
+    const trials = [
+      trial({ caseId: "short", landed: "commit and push", firstTextMs: 400 }),
+      trial({ caseId: "long", landed: long.raw, firstTextMs: 900 }),
+      // Unstreamed, and a failure that showed text before it went wrong.
+      trial({ caseId: "short", landed: "commit and push" }),
+      trial({ caseId: "long", landed: long.raw, disposition: "failed", firstTextMs: 50 }),
+    ];
+    const summary = summariseVariant("a", trials, corpus);
+    expect(summary.firstText).toMatchObject({ count: 2, p50: 400, max: 900 });
+    expect(summary.promptLengthFirstText).toMatchObject({ count: 1, p50: 900 });
+  });
+
   it("leaves the cost unknown when any request's is", () => {
     const trials = [
       trial({ caseId: "short", landed: "commit and push" }),

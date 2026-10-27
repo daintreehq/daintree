@@ -416,6 +416,8 @@ export interface Trial {
   proposalScore: TextScore;
   /** The service's own round trip, request out to reply read. */
   roundTripMs: number | null;
+  /** Request out to the first corrected text a streamed reply showed; absent when it didn't stream or showed none. */
+  firstTextMs?: number | null;
   /** All of `correct()`, the wait for a preconnect and the checks included. */
   totalMs: number;
   usage?: TokenUsage & { cacheWriteTokens: number; reasoningTokens: number };
@@ -462,6 +464,9 @@ export interface VariantSummary {
   /** Requests that came back with a reply the service could read; failures are left out. */
   roundTrip: LatencySummary;
   promptLengthRoundTrip: LatencySummary;
+  /** Request out to the first corrected text, for a streamed run: when the composer starts to change. */
+  firstText: LatencySummary;
+  promptLengthFirstText: LatencySummary;
   /** Every trial's whole `correct()`, failures and the wait for a preconnect included. */
   total: LatencySummary;
   tokens: {
@@ -547,6 +552,12 @@ function summariseLatency(values: readonly number[]): LatencySummary {
   };
 }
 
+function firstTexts(rows: ReadonlyArray<{ trial: Trial }>): number[] {
+  return rows.flatMap(({ trial }) =>
+    typeof trial.firstTextMs === "number" ? [trial.firstTextMs] : []
+  );
+}
+
 export function summariseVariant(
   variant: string,
   trials: readonly Trial[],
@@ -599,6 +610,10 @@ export function summariseVariant(
       timed
         .filter(({ entry }) => entry.raw.length >= PROMPT_LENGTH_MIN_CHARS)
         .map(({ trial }) => trial.roundTripMs!)
+    ),
+    firstText: summariseLatency(firstTexts(timed)),
+    promptLengthFirstText: summariseLatency(
+      firstTexts(timed.filter(({ entry }) => entry.raw.length >= PROMPT_LENGTH_MIN_CHARS))
     ),
     total: summariseLatency(rows.map(({ trial }) => trial.totalMs)),
     tokens: {

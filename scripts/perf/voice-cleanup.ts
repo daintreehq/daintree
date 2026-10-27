@@ -56,6 +56,7 @@ model and effort, against the live OpenAI API (needs OPENAI_API_KEY; costs money
   --dictionary <list>   custom dictionary terms, the same for every variant (default none)
   --seed <n>            request order seed (default 14793)
   --label <name>        result file prefix (default run)
+  --no-stream           ask for the whole reply at once, as cleanup did before it streamed
   --probe-prediction    also ask each model for Predicted Outputs and record the answer
   --rescore <run.json>  score a saved run again with today's corpus and scoring, sending nothing`;
 
@@ -74,6 +75,7 @@ interface Options {
   seed: number;
   label: string;
   probePrediction: boolean;
+  stream: boolean;
   rescore: string | null;
 }
 
@@ -97,6 +99,7 @@ function parseArgs(argv: readonly string[]): Options | null {
     seed: 14793,
     label: "run",
     probePrediction: false,
+    stream: true,
     rescore: null,
   };
   for (let i = 0; i < argv.length; i++) {
@@ -144,6 +147,9 @@ function parseArgs(argv: readonly string[]): Options | null {
         break;
       case "--label":
         options.label = value().replace(/[^\w.-]+/g, "-");
+        break;
+      case "--no-stream":
+        options.stream = false;
         break;
       case "--probe-prediction":
         options.probePrediction = true;
@@ -213,7 +219,8 @@ function toTrial(
   variant: Variant,
   repeat: number,
   result: VoiceCorrectionResult,
-  totalMs: number
+  totalMs: number,
+  firstTextAt: number | null
 ): Trial {
   const landed = result.confirmedText;
   const proposal = result.rejected?.candidate ?? landed;
@@ -229,6 +236,9 @@ function toTrial(
     landedScore: scoreText(entry, landed),
     proposalScore: scoreText(entry, proposal),
     roundTripMs: result.roundTrip ? Math.round(result.roundTrip.ms) : null,
+    ...(firstTextAt !== null && result.roundTrip
+      ? { firstTextMs: Math.round(firstTextAt - result.roundTrip.sentAt) }
+      : {}),
     totalMs: Math.round(totalMs),
     ...(usage ? { usage } : {}),
     costUsd: requestCost(variant.model, usage),
@@ -361,6 +371,8 @@ interface RunRecord {
   platform: string;
   seed: number;
   repeats: number;
+  /** Whether replies streamed, as production's do; absent in runs from before cleanup streamed. */
+  stream?: boolean;
   variants: Variant[];
   profile: Profile;
   promptHash: string;
@@ -439,6 +451,19 @@ function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): string {
         `| ${summary.variant} | ${latencyCells(summary.roundTrip)} | ${latencyCells(summary.promptLengthRoundTrip)} | ${latencyCells(summary.total)} |`
     ),
     "",
+    ...(run.stream
+      ? [
+          "First text: request out to the first corrected text the stream showed, when the composer starts to change.",
+          "",
+          "| Variant | n | p50 | p95 | max | over target | prompt-length n | p50 | p95 | max | over target |",
+          "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+          ...run.summaries.map(
+            (summary) =>
+              `| ${summary.variant} | ${latencyCells(summary.firstText)} | ${latencyCells(summary.promptLengthFirstText)} |`
+          ),
+          "",
+        ]
+      : []),
     "## Tokens and cost",
     "",
     "| Variant | Mean input | Cached | Mean output | Mean reasoning | Cache writes | Per cleanup | Run total |",
@@ -665,6 +690,7 @@ async function main(): Promise<number> {
     node: process.version,
     platform: `${process.platform}-${process.arch}`,
     seed: options.seed,
+    stream: options.stream,
     repeats: options.repeats,
     variants: options.variants,
     profile,
@@ -738,11 +764,21 @@ async function main(): Promise<number> {
         // As a stop drains, so a reply never waits on a fresh handshake.
         service.preconnect();
         const started = performance.now();
+        let firstTextAt: number | null = null;
+        // Production always streams; the first text is when the composer starts to change.
+        const onText = options.stream
+          ? () => {
+              firstTextAt ??= performance.now();
+            }
+          : undefined;
         const result = await service.correct(
           requestFor(entry),
-          settingsFor(variant, profile, apiKey)
+          settingsFor(variant, profile, apiKey),
+          undefined,
+          onText
         );
-        run.trials.push(toTrial(entry, variant, repeat, result, performance.now() - started));
+        const totalMs = performance.now() - started;
+        run.trials.push(toTrial(entry, variant, repeat, result, totalMs, firstTextAt));
         done++;
         save();
         if (interrupted) stopEarly();
