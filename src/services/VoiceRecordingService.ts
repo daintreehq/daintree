@@ -40,6 +40,7 @@ import {
 import {
   isVoiceMicPending,
   useVoiceRecordingStore,
+  type VoiceCorrectionRange,
   type VoiceMicNotice,
   type VoiceRecordingTarget,
   type VoiceRewriteRequest,
@@ -87,6 +88,7 @@ import {
   type PcmChunkStats,
 } from "@/services/voiceStartDiagnostics";
 import { recordCorrectionLanded, type LandedCorrection } from "@/services/voiceCorrectionLanding";
+import { CorrectionStreamAligner, type StreamedRewrite } from "@/services/voiceCorrectionStream";
 import {
   isHeldBackSession,
   planVoiceDraftSend,
@@ -339,6 +341,8 @@ interface PendingCorrection {
   passages: CorrectionPassage[];
   /** Passages no edit has reached; one that's touched is dropped for good. */
   live: Set<CorrectionPassage>;
+  /** What each passage's cleanup has streamed over it so far; drawn, never written. */
+  rewrites: Map<CorrectionPassage, StreamedRewrite>;
   /** The learning baseline this pass seeded. */
   seed: string | null;
   /** Applied or dropped; either way it will never touch the draft again. */
@@ -666,6 +670,13 @@ class VoiceRecordingService {
   // them to land. Only the draft being sent, cleared or edited over drops one.
   private pendingCorrections = new Set<PendingCorrection>();
   private unwatchCorrectionDrafts: (() => void) | null = null;
+  // Each passage's cleanup request still out, by the id its progress comes
+  // back under.
+  private correctionStreams = new Map<
+    string,
+    { correction: PendingCorrection; passage: CorrectionPassage; aligner: CorrectionStreamAligner }
+  >();
+  private correctionStreamSeq = 0;
   // The correction whose seed each panel's learning baseline holds. Text alone
   // can't tell two passages dictated with the same words apart.
   private baselineOwners = new Map<string, PendingCorrection>();
@@ -891,6 +902,12 @@ class VoiceRecordingService {
         );
         inputStore.bumpExternalDraftRevision({ keepsSelection: true });
       })
+    );
+
+    this.unsubscribers.push(
+      voiceInput.onCorrectionProgress(({ streamId, text }) =>
+        this.noteCorrectionProgress(streamId, text)
+      )
     );
 
     this.unsubscribers.push(
@@ -2934,6 +2951,7 @@ class VoiceRecordingService {
       sessionId,
       passages,
       live: new Set(passages),
+      rewrites: new Map(),
       seed,
       done: false,
       settled: new Promise<void>((resolve) => {
@@ -3089,6 +3107,13 @@ class VoiceRecordingService {
     passage: CorrectionPassage,
     correction: PendingCorrection
   ): Promise<{ text: string | null; failed: boolean; timing: unknown }> {
+    const streamId = `correction-${++this.correctionStreamSeq}`;
+    this.correctionStreams.set(streamId, {
+      correction,
+      passage,
+      aligner: new CorrectionStreamAligner(passage.text),
+    });
+    let text: string | null = null;
     try {
       const result = await window.electron.voiceInput.correct({
         rawText: passage.text,
@@ -3097,10 +3122,11 @@ class VoiceRecordingService {
         startsPrompt: passage.startsPrompt,
         ...(correction.sessionId ? { sessionId: correction.sessionId } : {}),
         ...(passage.uncertain ? { uncertain: passage.uncertain } : {}),
+        streamId,
       });
       // The passage runs from its first word to its last; its separators and
       // paragraph breaks either side stay the session's, not the model's.
-      const text = result.action === "replace" ? result.correctedText.trim() || null : null;
+      text = result.action === "replace" ? result.correctedText.trim() || null : null;
       return { text, failed: result.failed === true, timing: result.timing ?? null };
     } catch (error) {
       logWarn(
@@ -3108,7 +3134,39 @@ class VoiceRecordingService {
         voiceErrorLogFields(error)
       );
       return { text: null, failed: true, timing: null };
+    } finally {
+      this.correctionStreams.delete(streamId);
+      // A passage whose cleanup came back shows all of it until every passage
+      // lands together; one that was rejected or failed goes back to what was
+      // dictated.
+      this.showStreamedRewrite(
+        correction,
+        passage,
+        text === null ? null : { rawTo: passage.text.length, text }
+      );
     }
+  }
+
+  /** Moves a passage's rewrite on as its cleanup streams back. */
+  private noteCorrectionProgress(streamId: string, text: string): void {
+    const stream = this.correctionStreams.get(streamId);
+    if (!stream || stream.correction.done || !stream.correction.live.has(stream.passage)) return;
+    const rewrite = stream.aligner.advance(text);
+    if (rewrite) this.showStreamedRewrite(stream.correction, stream.passage, rewrite);
+  }
+
+  private showStreamedRewrite(
+    correction: PendingCorrection,
+    passage: CorrectionPassage,
+    rewrite: StreamedRewrite | null
+  ): void {
+    // A dropped passage stays as dictated, whatever its cleanup goes on to say.
+    if (correction.done || !correction.live.has(passage)) return;
+    const shown = correction.rewrites.get(passage);
+    if (shown?.rawTo === rewrite?.rawTo && shown?.text === rewrite?.text) return;
+    if (rewrite) correction.rewrites.set(passage, rewrite);
+    else correction.rewrites.delete(passage);
+    this.syncCorrectionRange(correction.panelId);
   }
 
   /**
@@ -3597,12 +3655,22 @@ class VoiceRecordingService {
     this.unfollowBaselines = null;
   }
 
-  /** Points the panel's "correcting" decoration at its pending passages. */
+  /**
+   * Points the panel's "correcting" decoration at its pending passages, each
+   * with what its cleanup has streamed over it so far.
+   */
   private syncCorrectionRange(panelId: string): void {
-    const ranges: Array<{ from: number; to: number }> = [];
+    const ranges: VoiceCorrectionRange[] = [];
     for (const correction of this.pendingCorrections) {
       if (correction.panelId !== panelId) continue;
-      ranges.push(...this.locateLivePassages(correction).values());
+      for (const [passage, span] of this.locateLivePassages(correction)) {
+        const rewrite = correction.rewrites.get(passage);
+        ranges.push(
+          rewrite
+            ? { ...span, rewrite: { to: span.from + rewrite.rawTo, text: rewrite.text } }
+            : span
+        );
+      }
     }
     for (const rewrite of this.pendingRewrites) {
       if (rewrite.panelId !== panelId) continue;
@@ -4521,6 +4589,7 @@ class VoiceRecordingService {
       rewrite.selection.release();
     }
     for (const panelId of correctedPanels) this.syncCorrectionRange(panelId);
+    this.correctionStreams.clear();
     this.baselineOwners.clear();
     this.unfollowLearningBaselines();
     this.spokenSendHandlers.clear();

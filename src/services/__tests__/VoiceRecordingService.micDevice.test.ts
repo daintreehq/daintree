@@ -175,6 +175,7 @@ function setupGlobals(options: {
     }),
     onTranscriptionComplete: vi.fn(() => () => {}),
     onParagraphBoundary: vi.fn(() => () => {}),
+    onCorrectionProgress: vi.fn(() => () => {}),
     onFileTokenResolved: vi.fn(() => () => {}),
     onError: vi.fn(() => () => {}),
     onSessionEnded: vi.fn(() => () => {}),

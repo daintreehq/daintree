@@ -95,6 +95,7 @@ function stubElectron() {
         callbacks.boundary = cb;
         return () => {};
       }),
+      onCorrectionProgress: vi.fn(() => () => {}),
       onFileTokenResolved: vi.fn(() => () => {}),
       onError: vi.fn(() => () => {}),
       onStatus: vi.fn(() => () => {}),

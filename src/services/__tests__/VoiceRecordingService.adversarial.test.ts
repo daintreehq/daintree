@@ -442,6 +442,7 @@ function setupGlobals(): void {
           addListener(runtime.completeListeners, callback)
         ),
         onParagraphBoundary: vi.fn(() => () => {}),
+        onCorrectionProgress: vi.fn(() => () => {}),
         onFileTokenResolved: vi.fn(() => () => {}),
         onError: vi.fn((callback: VoiceErrorCallback) =>
           addListener(runtime.errorListeners, callback)

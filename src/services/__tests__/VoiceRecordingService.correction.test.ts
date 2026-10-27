@@ -77,7 +77,8 @@ const callbacks: {
   complete: ((payload: CompletePayload) => void) | null;
   boundary: ((payload: { rawText: string | null }) => void) | null;
   fileToken: ((payload: FileTokenPayload) => void) | null;
-} = { delta: null, complete: null, boundary: null, fileToken: null };
+  progress: ((payload: { streamId: string; text: string }) => void) | null;
+} = { delta: null, complete: null, boundary: null, fileToken: null, progress: null };
 
 const correct =
   vi.fn<
@@ -87,6 +88,7 @@ const correct =
       terminalId?: string;
       sessionId?: string;
       uncertain?: Span[];
+      streamId?: string;
     }) => Promise<CorrectResult>
   >();
 
@@ -107,6 +109,12 @@ function stubElectron() {
         callbacks.boundary = cb;
         return () => {};
       }),
+      onCorrectionProgress: vi.fn(
+        (cb: (payload: { streamId: string; text: string }) => void) => {
+          callbacks.progress = cb;
+          return () => {};
+        }
+      ),
       onFileTokenResolved: vi.fn((cb: (payload: FileTokenPayload) => void) => {
         callbacks.fileToken = cb;
         return () => {};
@@ -222,6 +230,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     callbacks.delta = null;
     callbacks.complete = null;
     callbacks.boundary = null;
+    callbacks.progress = null;
     correct.mockReset();
     dictionary = [];
   });
@@ -246,6 +255,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
       rawText: "fix the bug in the parsr",
       startsPrompt: true,
       terminalId: "panel-1",
+      streamId: expect.any(String),
     });
 
     dictate("panel-2", "second thought");
@@ -255,6 +265,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
       rawText: "second thought",
       startsPrompt: true,
       terminalId: "panel-2",
+      streamId: expect.any(String),
     });
 
     // Each passage names the dictation it came from, for the context main read during it.
@@ -294,6 +305,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
       recentContext: ["So the parser is broken."],
       startsPrompt: false,
       terminalId: "panel-1",
+      streamId: expect.any(String),
     });
     await flush();
     expect(baseline("panel-1")).toBe("and the lexer");
@@ -316,6 +328,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
       recentContext: ["um so the parser is brken"],
       startsPrompt: false,
       terminalId: "panel-1",
+      streamId: expect.any(String),
     });
 
     first.resolve({ action: "replace", correctedText: "So the parser is broken." });
@@ -391,6 +404,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
       recentContext: ["The parser."],
       startsPrompt: false,
       terminalId: "panel-1",
+      streamId: expect.any(String),
     });
   });
 
@@ -407,6 +421,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
       rawText: "the parsr",
       startsPrompt: true,
       terminalId: "panel-1",
+      streamId: expect.any(String),
     });
 
     voiceStore.getState().beginSession({ panelId: "panel-1" });
@@ -424,6 +439,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
       recentContext: ["The parser.\n"],
       startsPrompt: false,
       terminalId: "panel-1",
+      streamId: expect.any(String),
     });
   });
 
@@ -499,6 +515,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
       recentContext: ["look at the parsr in /src/parser.ts\n"],
       startsPrompt: false,
       terminalId: "panel-1",
+      streamId: expect.any(String),
     });
     await flush();
 
@@ -862,6 +879,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
           { from: 9, to: 13 },
           { from: 19, to: 25 },
         ],
+        streamId: expect.any(String),
       });
     });
 
@@ -939,6 +957,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
         rawText: "add Zustand to the store",
         terminalId: "panel-1",
         startsPrompt: true,
+        streamId: expect.any(String),
       });
       result.resolve({ action: "replace", correctedText: "Add Zustand to the store." });
       await flush();
@@ -1221,6 +1240,7 @@ describe("VoiceRecordingService — learning baseline follows its draft (#14645)
     callbacks.delta = null;
     callbacks.complete = null;
     callbacks.boundary = null;
+    callbacks.progress = null;
     correct.mockReset();
   });
 
@@ -1345,5 +1365,163 @@ describe("VoiceRecordingService — learning baseline follows its draft (#14645)
     inputStore.getState().clearDraftInput("panel-1");
 
     expect(baseline("panel-1")).toBeNull();
+  });
+});
+
+describe("VoiceRecordingService — streamed cleanup (#14779)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    callbacks.delta = null;
+    callbacks.complete = null;
+    callbacks.boundary = null;
+    callbacks.progress = null;
+    correct.mockReset();
+    dictionary = [];
+  });
+
+  afterEach(() => {
+    unsubscribeRanges?.();
+    unsubscribeRanges = null;
+    vi.unstubAllGlobals();
+  });
+
+  async function streamingSetup() {
+    const harness = await setup();
+    const pending = new Map<string, ReturnType<typeof deferred<CorrectResult>>>();
+    correct.mockImplementation(({ rawText }) => {
+      const result = deferred<CorrectResult>();
+      pending.set(rawText, result);
+      return result.promise;
+    });
+    // The text so far, as main reports it for the passage sent as `rawText`.
+    const progress = (rawText: string, text: string) => {
+      const request = correct.mock.calls.find(([r]) => r.rawText === rawText)?.[0];
+      callbacks.progress!({ streamId: request!.streamId!, text });
+    };
+    const ranges = (panelId: string) =>
+      harness.voiceStore.getState().panelBuffers[panelId]?.correctionRanges ?? [];
+    return { ...harness, pending, progress, ranges };
+  }
+
+  const DICTATED = "um so fix the bug in the parser";
+  const CORRECTED = "So fix the bug in the parser.";
+
+  it("draws the cleanup over its passage as it streams, and lands it whole", async () => {
+    const { service, dictate, draft, flush, pending, progress, ranges } = await streamingSetup();
+    dictate("panel-1", DICTATED);
+    await service.stop();
+    expect(ranges("panel-1")).toEqual([{ from: 0, to: DICTATED.length }]);
+
+    progress(DICTATED, "So fix the bug in");
+    // The newest word waits for the next; the draft keeps what was dictated.
+    expect(ranges("panel-1")).toEqual([
+      {
+        from: 0,
+        to: DICTATED.length,
+        rewrite: { to: "um so fix the bug".length, text: "So fix the bug" },
+      },
+    ]);
+    expect(draft("panel-1")).toBe(DICTATED);
+
+    progress(DICTATED, "So fix the bug in the");
+    expect(ranges("panel-1")[0]!.rewrite).toEqual({
+      to: "um so fix the bug in".length,
+      text: "So fix the bug in",
+    });
+
+    pending.get(DICTATED)!.resolve({ action: "replace", correctedText: CORRECTED });
+    await flush();
+    expect(draft("panel-1")).toBe(CORRECTED);
+    expect(ranges("panel-1")).toEqual([]);
+  });
+
+  it("puts a rejected cleanup's passage back exactly as dictated", async () => {
+    const { service, dictate, draft, flush, pending, progress, ranges } = await streamingSetup();
+    dictate("panel-1", DICTATED);
+    await service.stop();
+    progress(DICTATED, "So fix the bug in the");
+    expect(ranges("panel-1")[0]!.rewrite).toBeDefined();
+
+    // A low-confidence or over-budget reply comes back as no change.
+    pending.get(DICTATED)!.resolve({ action: "no_change", correctedText: DICTATED });
+    await flush();
+    expect(draft("panel-1")).toBe(DICTATED);
+    expect(ranges("panel-1")).toEqual([]);
+  });
+
+  it("stops the rewrite at an edit mid-stream and leaves the passage as dictated", async () => {
+    const { service, dictate, draft, flush, inputStore, pending, progress, ranges } =
+      await streamingSetup();
+    dictate("panel-1", DICTATED);
+    await service.stop();
+    progress(DICTATED, "So fix the bug in");
+    expect(ranges("panel-1")[0]!.rewrite).toBeDefined();
+
+    inputStore.getState().setDraftInput("panel-1", DICTATED.replace("bug", "bugs"));
+    expect(ranges("panel-1")).toEqual([]);
+    expect(service.hasPendingCorrection("panel-1")).toBe(false);
+
+    progress(DICTATED, "So fix the bug in the");
+    expect(ranges("panel-1")).toEqual([]);
+    pending.get(DICTATED)!.resolve({ action: "replace", correctedText: CORRECTED });
+    await flush();
+    expect(draft("panel-1")).toBe("um so fix the bugs in the parser");
+  });
+
+  it("leaves a passage as dictated for a send that stops waiting mid-stream", async () => {
+    const { service, dictate, draft, flush, pending, progress, ranges } = await streamingSetup();
+    dictate("panel-1", DICTATED);
+    await service.stop();
+    progress(DICTATED, "So fix the bug in");
+
+    service.discardPendingCorrections("panel-1");
+    expect(ranges("panel-1")).toEqual([]);
+    expect(draft("panel-1")).toBe(DICTATED);
+
+    progress(DICTATED, "So fix the bug in the");
+    pending.get(DICTATED)!.resolve({ action: "replace", correctedText: CORRECTED });
+    await flush();
+    expect(ranges("panel-1")).toEqual([]);
+    expect(draft("panel-1")).toBe(DICTATED);
+  });
+
+  it("shows a passage's whole cleanup once it's back, while another still streams", async () => {
+    const { service, dictate, say, draft, flush, inputStore, pending, progress, ranges } =
+      await streamingSetup();
+    dictate("panel-1", "the parsr is brokn");
+    inputStore.getState().setDraftInput("panel-1", draft("panel-1") + "\n");
+    say("um and the lexr too");
+    await service.stop();
+
+    pending.get("the parsr is brokn")!.resolve({
+      action: "replace",
+      correctedText: "The parser is broken.",
+    });
+    await flush();
+    progress("um and the lexr too", "And the lexer");
+    expect(ranges("panel-1")).toEqual([
+      { from: 0, to: 18, rewrite: { to: 18, text: "The parser is broken." } },
+      { from: 19, to: 38, rewrite: { to: 19 + "um and the".length, text: "And the" } },
+    ]);
+    expect(draft("panel-1")).toBe("the parsr is brokn\num and the lexr too");
+
+    pending.get("um and the lexr too")!.resolve({
+      action: "replace",
+      correctedText: "And the lexer too.",
+    });
+    await flush();
+    expect(draft("panel-1")).toBe("The parser is broken.\nAnd the lexer too.");
+    expect(ranges("panel-1")).toEqual([]);
+  });
+
+  it("ignores progress for a stream that has already replied", async () => {
+    const { service, dictate, flush, pending, progress, ranges } = await streamingSetup();
+    dictate("panel-1", DICTATED);
+    await service.stop();
+    pending.get(DICTATED)!.resolve({ action: "no_change", correctedText: DICTATED });
+    await flush();
+
+    progress(DICTATED, "So fix the bug in the");
+    expect(ranges("panel-1")).toEqual([]);
   });
 });

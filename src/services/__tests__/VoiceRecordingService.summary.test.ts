@@ -135,6 +135,7 @@ function setupGlobals(
     onTranscriptionDelta: on("delta"),
     onTranscriptionComplete: on("complete"),
     onParagraphBoundary: on("paragraph"),
+    onCorrectionProgress: on("correctionProgress"),
     onFileTokenResolved: on("fileToken"),
     onError: on("error"),
     onStatus: on("status"),

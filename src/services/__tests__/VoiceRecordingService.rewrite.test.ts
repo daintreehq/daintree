@@ -102,6 +102,7 @@ function stubElectron(openaiApiKey = "sk-key", recordingMode?: string) {
         callbacks.boundary = cb;
         return () => {};
       }),
+      onCorrectionProgress: vi.fn(() => () => {}),
       onFileTokenResolved: vi.fn(() => () => {}),
       onError: vi.fn(() => () => {}),
       onStatus: vi.fn(() => () => {}),
