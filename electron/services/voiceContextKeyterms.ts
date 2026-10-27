@@ -325,13 +325,6 @@ function isValidTerm(term: string): boolean {
   return true;
 }
 
-function isCutLine(text: string): boolean {
-  return (
-    text.length === SEMANTIC_BUFFER_MAX_LINE_LENGTH + SEMANTIC_BUFFER_TRUNCATION_MARKER.length &&
-    text.endsWith(SEMANTIC_BUFFER_TRUNCATION_MARKER)
-  );
-}
-
 function csiMovesCursor(params: string, intermediates: string, final: string): boolean {
   if (intermediates !== "") return false;
   if (params.startsWith("?") && (final === "h" || final === "l")) {
@@ -348,8 +341,12 @@ function csiMovesCursor(params: string, intermediates: string, final: string): b
 // The text with its escapes removed and each cursor move marked as a gap.
 function terminalText(text: string): string {
   // The marker the semantic buffer puts on a line it cut opens with bytes a
-  // sequence the cut left unfinished would take for its own.
-  const body = isCutLine(text) ? text.slice(0, SEMANTIC_BUFFER_MAX_LINE_LENGTH) : text;
+  // sequence the cut left unfinished would take for its own. A cut line is the
+  // buffer's line length plus the marker, so cutting back to that length drops
+  // only the marker, and a shorter line that ends in the same text keeps it.
+  const body = text.endsWith(SEMANTIC_BUFFER_TRUNCATION_MARKER)
+    ? text.slice(0, SEMANTIC_BUFFER_MAX_LINE_LENGTH)
+    : text;
   return body
     .replace(OSC_RE, "")
     .replace(CSI_RE, (_sequence, params: string, intermediates: string, final: string) =>
