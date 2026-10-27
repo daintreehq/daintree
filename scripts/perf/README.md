@@ -448,7 +448,7 @@ An arm runs production's code with one thing changed, tokens joined with `+`: `p
 | Cleanup applied, turned down | The share of cleanups by verdict; turned down is a reply the agent-command check or the model's own low confidence kept from landing |
 | First preview | Start to the first preview text |
 | Shown at stop | Share of the final transcript's words on screen, completed or previewed, when stop was pressed, p50 and the laggiest twentieth |
-| Stop → raw final, first clean, settled | Stop to the drain ending, to the first cleaned words production would show (the renderer's own stream aligner, or the reply landing), and to the draft holding its final text |
+| Stop → raw final, first clean, settled | Stop to the drain ending, to the first cleaned words production would show that stay (the renderer's own stream aligner, or the reply landing; a reply a check turns down streams in only as a tentative rewrite that goes, so it has none), and to the draft holding its final text |
 | $/session | Cleanup's billed tokens; `≥` when a cancelled request reported none. Warm-ups, Grok and synthesis aren't in it |
 
 A session is scored against whichever accepted reference its text is closest to: the clip's own, or one of `ACCEPTED_REFERENCES`, kept to spellings the audio can't tell apart and the numbered list cleanup's prompt asks a counted list to become. `--repo` dictates as into a pane on this repository: its names read as production reads a pane's (`deriveRepoNames`, `assembleKeyterms`), sent to Grok as keyterms and to cleanup as repository names, and the code names each passage spells out matched against the repository's listing as main matches them (`FileSearchService.listFiles`, `matchCodeNames`). `--terms` adds each clip's terms as keyterms.

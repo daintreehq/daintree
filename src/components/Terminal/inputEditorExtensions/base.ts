@@ -236,8 +236,12 @@ export function buildInputBarTheme(theme: ITheme): Extension {
       },
       // Italic is what sets words not yet written apart from the draft, so it
       // can't rest on colour alone. The mono face ships no italic and the app
-      // turns synthesis off, so the ghost asks for a slanted regular.
-      ".cm-voice-interim": {
+      // turns synthesis off, so the ghost asks for a slanted regular. A
+      // streamed cleanup is the same until it lands: its reply is judged only
+      // once whole and lands with every passage of its pass, so what streams
+      // in may yet be turned down. A slant keeps a mono face's advances, so
+      // nothing moves as it lands.
+      ".cm-voice-interim, .cm-voice-rewrite": {
         color: c.interim,
         fontStyle: "italic",
         fontSynthesis: "style",

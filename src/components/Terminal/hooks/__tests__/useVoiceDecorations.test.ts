@@ -58,6 +58,23 @@ describe("useVoiceDecorations", () => {
     view.destroy();
   });
 
+  it("puts the passage back as dictated when its reply is turned down", () => {
+    useTerminalInputStore.getState().setDraftInput(PANEL, DICTATED);
+    const view = mount(DICTATED);
+    streamRewrite();
+    expect(view.contentDOM.querySelector(".cm-voice-rewrite")?.textContent).toBe("So fix");
+
+    act(() => {
+      useVoiceRecordingStore
+        .getState()
+        .setCorrectionRanges(PANEL, [{ from: 0, to: DICTATED.length }]);
+    });
+
+    expect(view.contentDOM.querySelector(".cm-voice-rewrite")).toBeNull();
+    expect(view.contentDOM.textContent).toBe(DICTATED);
+    view.destroy();
+  });
+
   it("shows the passage as dictated while the editor is ahead of the draft", () => {
     useTerminalInputStore.getState().setDraftInput(PANEL, DICTATED);
     const view = mount(`${DICTATED}!`);

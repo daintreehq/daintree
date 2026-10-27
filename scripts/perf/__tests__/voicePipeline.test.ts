@@ -324,6 +324,34 @@ describe("scorePipelineSession", () => {
     expect(scored.brokenWords).toBe(0);
     expect(scored.finalForm.exact).toBe(true);
   });
+
+  // #14901: a turned-down reply streamed in only as a tentative rewrite, then went.
+  it("times the first clean only for a cleanup that landed", () => {
+    const firstClean = (verdict: string, text: string) =>
+      scorePipelineSession(
+        session({
+          raw: "fix the bug",
+          stopMs: 3_000,
+          cleanup: {
+            sentAt: 3_400,
+            firstTextAt: 4_000,
+            doneAt: 4_600,
+            verdict,
+            text,
+            failed: false,
+            speculation: "none",
+            requests: 1,
+            usage: [],
+          },
+        }),
+        "Fix the bug.",
+        [],
+        "gpt-6.1-terra"
+      ).stopToFirstCleanMs;
+    expect(firstClean("replaced", "Fix the bug.")).toBe(1_000);
+    expect(firstClean("rejected_low_confidence", "fix the bug")).toBeNull();
+    expect(firstClean("rejected_command", "fix the bug")).toBeNull();
+  });
 });
 
 describe("summarisePipeline", () => {

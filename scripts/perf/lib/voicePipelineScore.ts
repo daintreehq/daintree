@@ -16,7 +16,7 @@ import { percentile, requestCost, type TokenUsage } from "./voiceCleanupScore";
 
 export const VOICE_PIPELINE_SCHEMA_VERSION = 1;
 // Bumped whenever a score below changes meaning, so a rescore says so.
-export const VOICE_PIPELINE_SCORING_VERSION = 2;
+export const VOICE_PIPELINE_SCORING_VERSION = 3;
 
 /**
  * One way of running the pipeline. Tokens joined with `+`: `prod` (as
@@ -143,7 +143,11 @@ export interface ScoredPipelineSession {
   firstFinalMs: number | null;
   stopToLastFinalMs: number | null;
   stopToDrainMs: number;
-  /** Stop to the first cleaned words shown; null without any. */
+  /**
+   * Stop to the first cleaned words shown that stay; null without any. A reply
+   * a check turns down streamed only as a tentative rewrite that went, so it
+   * has none.
+   */
   stopToFirstCleanMs: number | null;
   /** Stop to the draft holding its final text: the speaker's wait. */
   stopToSettledMs: number;
@@ -318,7 +322,9 @@ export function scorePipelineSession(
     stopToLastFinalMs: lastFinal === null ? null : lastFinal - session.stopMs,
     stopToDrainMs: session.drainEndMs - session.stopMs,
     stopToFirstCleanMs:
-      cleanup?.firstTextAt == null ? null : Math.max(0, cleanup.firstTextAt - session.stopMs),
+      cleanup?.firstTextAt == null || cleanup.verdict !== "replaced"
+        ? null
+        : Math.max(0, cleanup.firstTextAt - session.stopMs),
     stopToSettledMs: Math.max(0, (cleanup?.doneAt ?? session.drainEndMs) - session.stopMs),
     cost: costs.length > 0 && costs.every((cost) => cost !== null) ? sum(costs as number[]) : null,
   };
