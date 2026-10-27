@@ -14,8 +14,11 @@ import type {
   CanopyTerminalView,
   AssistantOpenDestination,
   CanopyRenameRequest,
+  CanopyRemoveRequest,
   CanopyRestoreRequest,
+  CanopyTrashEntry,
   CanopyTrashRequest,
+  CanopyTrashTarget,
 } from "../../../shared/types/ipc/canopy.js";
 import { getAgentNotificationServiceRef, getPtyClient } from "../../window/serviceRefs.js";
 import type { TerminalInputNotice } from "../../services/PtyClient.js";
@@ -27,6 +30,8 @@ import {
 import { getFleetSnapshotService, getRunHandBackService } from "./projectCrud/index.js";
 import { readPluginTerminalScreen } from "../../services/plugin/pluginTerminalScreenRead.js";
 import { CANOPY_HISTORY_ROWS, CanopyService } from "../../services/canopy/CanopyService.js";
+import { CanopyTrashLedger } from "../../services/canopy/canopyTrashLedger.js";
+import { getAgentAvailabilityStore } from "../../services/AgentAvailabilityStore.js";
 import { searchScreens } from "../../services/canopy/canopyScreenSearch.js";
 import { isCanopyMode, readCanopyMode } from "../../services/canopy/canopyMode.js";
 import { CanopyLocalReader } from "../../services/canopy/canopyLocalReader.js";
@@ -203,7 +208,15 @@ function hiddenOrIdleSnapshot(): CanopySnapshot {
     glances: [],
     lastError: null,
     failedRuns: [],
+    trash: trashList(),
   };
+}
+
+/** Every agent run in this host's trash, any project's: made at registration, read by every snapshot. */
+let trashLedger: CanopyTrashLedger | null = null;
+
+function trashList(): CanopyTrashEntry[] {
+  return trashLedger?.list() ?? [];
 }
 
 let service: CanopyService | null = null;
@@ -382,6 +395,7 @@ function getService(): CanopyService {
   service = new CanopyService({
     plan: currentPlan(),
     ...(backgroundPollMs !== undefined ? { backgroundPollMs } : {}),
+    getTrash: trashList,
     getRuns: () => {
       subscribeFleet();
       const snapshot = getFleetSnapshotService()?.getLastBroadcast();
@@ -822,6 +836,126 @@ async function restoreThroughOwningViews(
     }
   }
 }
+
+/** Canopy's own receipt for this trash of the run, when Canopy made it: it knows what an Undo needs. */
+function receiptFor(trashed: CanopyTrashEntry): number | undefined {
+  let found: number | undefined;
+  for (const [receipt, held] of recentlyTrashed) {
+    if (held.runId === trashed.run.runId && held.spawnedAt === trashed.run.spawnedAt) {
+      found = receipt;
+    }
+  }
+  return found;
+}
+
+function assertTrashTarget(target: unknown): asserts target is CanopyTrashTarget {
+  assertTarget(target);
+  const expiresAt = (target as { expiresAt?: unknown }).expiresAt;
+  if (typeof expiresAt !== "number" || !Number.isSafeInteger(expiresAt) || expiresAt <= 0) {
+    throw new Error("Invalid trash target");
+  }
+}
+
+/** The trash Canopy's Trash showed, while the trash still holds it: that trash of that incarnation. */
+function heldTrash(runId: string, target: CanopyTrashTarget): CanopyTrashEntry {
+  const held = trashLedger?.get(runId);
+  if (
+    !held ||
+    held.run.spawnedAt !== target.spawnedAt ||
+    held.expiresAt !== target.expiresAt ||
+    Date.now() >= held.expiresAt
+  ) {
+    throw leftTheTrash();
+  }
+  return held;
+}
+
+/** The host's own word that the terminal is still in that trash, read just before acting on it. */
+async function assertHostHolds(runId: string, target: CanopyTrashTarget): Promise<void> {
+  const record = await requirePtyClient()
+    .getTerminalAsync(runId)
+    .catch(() => null);
+  if (
+    !record ||
+    record.spawnedAt !== target.spawnedAt ||
+    record.isTrashed !== true ||
+    record.trashExpiresAt !== target.expiresAt
+  ) {
+    throw leftTheTrash();
+  }
+  // Restored, removed or expired elsewhere while the host answered.
+  heldTrash(runId, target);
+}
+
+/**
+ * Puts back a run from Canopy's Trash, whoever trashed it. A trash Canopy
+ * made goes back as its Undo would; any other was a view's own close, so the
+ * view holding the pane puts it back from its trash, as its own Restore would.
+ * With no view of the project open, nothing holds the pane: the terminal
+ * would come back with nowhere to show, so nothing is restored.
+ */
+async function restoreTrashedRun(
+  runId: string,
+  target: CanopyTrashTarget,
+  mayRestore: (workspaceId: string) => boolean
+): Promise<void> {
+  const held = heldTrash(runId, target);
+  const receipt = receiptFor(held);
+  if (receipt !== undefined) {
+    await restoreThroughOwningViews(receipt, (trashed) => mayRestore(trashed.workspaceId));
+    return;
+  }
+  await assertHostHolds(runId, target);
+  const workspaceId = held.run.workspaceId;
+  const views = getProjectPushTargets(workspaceId, CHANNELS.CANOPY_RESTORE_REQUESTED);
+  if (views.length === 0) {
+    throw new AppError({
+      code: "NOT_FOUND",
+      message: "Trashed terminal's project has no open view",
+      userMessage: "That terminal's project has closed since. Nothing was restored.",
+    });
+  }
+  if (!mayRestore(workspaceId)) throw drivenElsewhere(workspaceId);
+  requirePtyClient().restore(runId);
+  for (const view of views) {
+    try {
+      view.send(CHANNELS.CANOPY_RESTORE_REQUESTED, { runId } satisfies CanopyRestoreRequest);
+    } catch {
+      // A view torn down mid-send has no pane left to restore.
+    }
+  }
+}
+
+/**
+ * Removes a run in Canopy's Trash for good, ending its process. The view
+ * holding the pane removes it as its own Remove would, so its session is
+ * kept for resuming as any close keeps it. A pane no view holds — trashed
+ * from Canopy with its project closed — is ended on the host directly.
+ */
+async function removeTrashedRun(runId: string, target: CanopyTrashTarget): Promise<void> {
+  const held = heldTrash(runId, target);
+  await assertHostHolds(runId, target);
+  const receipt = receiptFor(held);
+  // Trashed into the saved layout, so no open view holds the pane, even one
+  // of the project opened since.
+  const savedOnly = receipt !== undefined && recentlyTrashed.get(receipt)?.layoutSaved === true;
+  // The trash is over: an Undo of it must find nothing to put back.
+  forgetReceiptsFor(runId, target.spawnedAt);
+  const views = getProjectPushTargets(held.run.workspaceId, CHANNELS.CANOPY_REMOVE_REQUESTED);
+  if (views.length === 0 || savedOnly) {
+    requirePtyClient().kill(runId, "canopy-trash-removed");
+    return;
+  }
+  for (const view of views) {
+    try {
+      view.send(CHANNELS.CANOPY_REMOVE_REQUESTED, { runId } satisfies CanopyRemoveRequest);
+    } catch {
+      // A view torn down mid-send has no pane left to remove.
+    }
+  }
+}
+
+const MAX_EMPTY_TRASH = 200;
 
 function requirePtyClient() {
   const ptyClient = getPtyClient();
@@ -1540,6 +1674,87 @@ export const canopyNamespace = defineIpcNamespace({
     ),
 
     /**
+     * Put back a run from Canopy's Trash, whoever trashed it, while the trash
+     * still holds that trash of it. Not gated on Canopy being on, as Undo isn't.
+     */
+    restoreTrashed: op(
+      CANOPY_METHOD_CHANNELS.restoreTrashed,
+      async (ctx, runId: string, target: CanopyTrashTarget): Promise<void> => {
+        checkRateLimit(CANOPY_METHOD_CHANNELS.restoreTrashed, 20, 10_000);
+        assertRunId(runId);
+        assertTrashTarget(target);
+        const workspaceId = heldTrash(runId, target).run.workspaceId;
+        if (!drivesProject(ctx, workspaceId)) throw drivenElsewhere(workspaceId);
+        await restoreTrashedRun(runId, target, (project) => drivesProject(ctx, project));
+      },
+      { withContext: true }
+    ),
+
+    /**
+     * Remove a run in Canopy's Trash for good, ending its process: D1, so the
+     * panel confirms before it asks.
+     */
+    removeTrashed: op(
+      CANOPY_METHOD_CHANNELS.removeTrashed,
+      async (ctx, runId: string, target: CanopyTrashTarget): Promise<void> => {
+        checkRateLimit(CANOPY_METHOD_CHANNELS.removeTrashed, 20, 10_000);
+        assertRunId(runId);
+        assertTrashTarget(target);
+        const workspaceId = heldTrash(runId, target).run.workspaceId;
+        if (!drivesProject(ctx, workspaceId)) throw drivenElsewhere(workspaceId);
+        await removeTrashedRun(runId, target);
+      },
+      { withContext: true }
+    ),
+
+    /**
+     * Empty Canopy's Trash: exactly the runs the panel confirmed, never
+     * whatever the trash holds by the time this lands. A run that has left
+     * since is skipped; one whose project is driven elsewhere refuses the
+     * whole batch before anything is removed. Answers how many it removed.
+     */
+    emptyTrash: op(
+      CANOPY_METHOD_CHANNELS.emptyTrash,
+      async (
+        ctx,
+        targets: Array<CanopyTrashTarget & { runId: string }>
+      ): Promise<number> => {
+        checkRateLimit(CANOPY_METHOD_CHANNELS.emptyTrash, 10, 10_000);
+        if (!Array.isArray(targets) || targets.length > MAX_EMPTY_TRASH) {
+          throw new Error("Invalid trash targets");
+        }
+        for (const target of targets) {
+          assertRunId(target?.runId);
+          assertTrashTarget(target);
+        }
+        const held = targets.filter((target) => {
+          try {
+            heldTrash(target.runId, target);
+            return true;
+          } catch {
+            return false;
+          }
+        });
+        for (const target of held) {
+          const workspaceId = trashLedger!.get(target.runId)!.run.workspaceId;
+          if (!drivesProject(ctx, workspaceId)) throw drivenElsewhere(workspaceId);
+        }
+        let removed = 0;
+        for (const target of held) {
+          try {
+            await removeTrashedRun(target.runId, target);
+            removed += 1;
+          } catch (error) {
+            // Left the trash while the others were removed: nothing to do for it.
+            if (!(error instanceof AppError) || error.code !== "NOT_FOUND") throw error;
+          }
+        }
+        return removed;
+      },
+      { withContext: true }
+    ),
+
+    /**
      * The user renamed a run from Canopy: any project's, as a rename of its
      * pane would. An empty title puts back the one Daintree gives it.
      */
@@ -1816,9 +2031,26 @@ export const canopyNamespace = defineIpcNamespace({
 
 export function registerCanopyHandlers(): () => void {
   const unregister = canopyNamespace.register();
+  const ledger = new CanopyTrashLedger({
+    readTerminal: (id) => getPtyClient()?.getTerminalAsync(id) ?? Promise.resolve(null),
+    isHelpTerminal: (id) => getAgentAvailabilityStore().isHelpTerminal(id),
+    // Only a service tells views: with none made, no panel is open, and the
+    // next one to open reads the trash with the rest of the snapshot.
+    onChange: () => service?.trashChanged(),
+  });
+  trashLedger = ledger;
+  const offTrashed = events.on("terminal:trashed", ({ id, expiresAt }) =>
+    ledger.onTrashed(id, expiresAt)
+  );
+  const offTrashCleared = events.on("terminal:trash-cleared", ({ id, expiresAt }) =>
+    ledger.onCleared(id, expiresAt)
+  );
   // Restored anywhere — the grid's Undo, the trash, another toast — a trash
   // Canopy made is over, and its receipt must not restore a later one.
-  const offRestored = events.on("terminal:restored", ({ id }) => onHostRestored(id));
+  const offRestored = events.on("terminal:restored", ({ id }) => {
+    onHostRestored(id);
+    ledger.onRestored(id);
+  });
   const offHandBack = events.on("terminal:hand-back-changed", onHandBackChanged);
   const offSizeHolds = onSizeHoldsChange((terminalIds) =>
     broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
@@ -1828,7 +2060,11 @@ export function registerCanopyHandlers(): () => void {
   );
   return () => {
     unregister();
+    offTrashed();
+    offTrashCleared();
     offRestored();
+    ledger.dispose();
+    if (trashLedger === ledger) trashLedger = null;
     offHandBack();
     offDriveLease?.();
     offDriveLease = null;

@@ -259,6 +259,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: Uint8Array<ArrayBufferLike> | null;
   };
+  "canopy:empty-trash": {
+    args: [targets: (import("./canopy.js").CanopyTrashTarget & { runId: string })[]];
+    result: number;
+  };
   "canopy:get-model": {
     args: [];
     result: import("./canopy.js").CanopyModelInfo;
@@ -352,6 +356,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./canopy.js").CanopySnapshot;
   };
+  "canopy:remove-trashed": {
+    args: [runId: string, target: import("./canopy.js").CanopyTrashTarget];
+    result: void;
+  };
   "canopy:rename": {
     args: [runId: string, target: import("./canopy.js").CanopyTarget, title: string];
     result: void;
@@ -374,6 +382,10 @@ export interface GeneratedIpcInvokeMap {
   };
   "canopy:restore-reads": {
     args: [restores: import("./canopy.js").CanopyReadRestore[]];
+    result: void;
+  };
+  "canopy:restore-trashed": {
+    args: [runId: string, target: import("./canopy.js").CanopyTrashTarget];
     result: void;
   };
   "canopy:retry-model": {

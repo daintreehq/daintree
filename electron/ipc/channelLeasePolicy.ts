@@ -82,6 +82,7 @@ export const CHANNEL_LEASE_POLICY = {
   // resizes or restores a run's terminal is checked per run in the handler.
   "canopy:answer": "handler",
   "canopy:archive": "free",
+  "canopy:empty-trash": "handler",
   "canopy:get-snapshot": "free",
   "canopy:mark-all-read": "free",
   "canopy:mark-seen": "free",
@@ -92,7 +93,10 @@ export const CHANNEL_LEASE_POLICY = {
   "canopy:reread": "free",
   "canopy:resolve-assistant": "free",
   "canopy:restore-reads": "free",
+  "canopy:remove-requested": "free",
+  "canopy:remove-trashed": "handler",
   "canopy:restore-requested": "free",
+  "canopy:restore-trashed": "handler",
   "canopy:run-branch": "free",
   "canopy:search-screens": "free",
   "canopy:set-active": "free",

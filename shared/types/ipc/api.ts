@@ -988,6 +988,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onRestoreRequested(
       callback: (request: import("./canopy.js").CanopyRestoreRequest) => void
     ): () => void;
+    /** Canopy removed a trashed terminal this view owns for good: remove its pane from the trash. */
+    onRemoveRequested(
+      callback: (request: import("./canopy.js").CanopyRemoveRequest) => void
+    ): () => void;
     /** Canopy renamed a terminal this view owns: rename its pane as the user's own rename would. */
     onRenameRequested(
       callback: (request: import("./canopy.js").CanopyRenameRequest) => void

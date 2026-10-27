@@ -245,6 +245,10 @@ export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConf
       events.emit("terminal:restored", { id: event.id });
       return true;
 
+    case "terminal-trash-cleared":
+      events.emit("terminal:trash-cleared", { id: event.id, expiresAt: event.expiresAt });
+      return true;
+
     case "agent-session-captured":
       events.emit("agent-session:captured", {
         terminalId: event.terminalId,

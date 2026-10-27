@@ -1761,6 +1761,10 @@ function buildElectronApi(): ElectronAPI {
         callback: (request: import("../shared/types/ipc/canopy.js").CanopyRestoreRequest) => void
       ) => _typedOn(CHANNELS.CANOPY_RESTORE_REQUESTED, callback),
 
+      onRemoveRequested: (
+        callback: (request: import("../shared/types/ipc/canopy.js").CanopyRemoveRequest) => void
+      ) => _typedOn(CHANNELS.CANOPY_REMOVE_REQUESTED, callback),
+
       onRenameRequested: (
         callback: (request: import("../shared/types/ipc/canopy.js").CanopyRenameRequest) => void
       ) => _typedOn(CHANNELS.CANOPY_RENAME_REQUESTED, callback),
