@@ -8,7 +8,6 @@ import { voiceErrorLogFields, voicePayloadShape } from "../../../shared/utils/vo
 import {
   AUDIO_BUFFER_MAX_BYTES,
   AUDIO_BUFFER_MAX_CHUNKS,
-  STUB_CONFIDENCE,
   createAudioBufferOverflowError,
   type ProviderSessionStats,
   type TranscriptionProvider,
@@ -1382,7 +1381,6 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       this.emit({
         type: "complete",
         text: transcript,
-        confidence: { ...STUB_CONFIDENCE },
         ...(itemId ? { itemId } : {}),
         ...(endOfSpeech ? { endOfSpeech: true } : {}),
       });
@@ -1390,7 +1388,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       // An identified empty completion still reaches the renderer so it can
       // drop that item's interim preview.
       logDebug(`${P} Completion had an empty transcript — retiring item`, { itemId });
-      this.emit({ type: "complete", text: "", confidence: { ...STUB_CONFIDENCE }, itemId });
+      this.emit({ type: "complete", text: "", itemId });
     } else {
       logDebug(`${P} Completion had an empty transcript — nothing emitted`);
     }

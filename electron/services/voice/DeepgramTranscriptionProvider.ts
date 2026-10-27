@@ -9,9 +9,12 @@ import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { logDebug, logInfo, logWarn, logError } from "../../utils/logger.js";
 import { voiceErrorLogFields, voicePayloadShape } from "../../../shared/utils/voiceLogFields.js";
 import {
+  flagUncertainWords,
+  type RecognisedWord,
+} from "../../../shared/utils/voiceUncertainWords.js";
+import {
   AUDIO_BUFFER_MAX_BYTES,
   AUDIO_BUFFER_MAX_CHUNKS,
-  STUB_CONFIDENCE,
   createAudioBufferOverflowError,
   type ProviderSessionStats,
   type TranscriptionProvider,
@@ -24,6 +27,10 @@ const P = "[VoiceTranscription:deepgram]";
 const DEEPGRAM_BASE_URL =
   process.env.DAINTREE_DEEPGRAM_WS_URL ?? "wss://api.deepgram.com/v1/listen";
 const DEEPGRAM_MODEL = "nova-3";
+// Words scored below this reach cleanup as unsure. Deepgram's own guidance for
+// its calibrated scores: most words land above 0.90, and around 0.65 picks out
+// likely errors with high precision (developers.deepgram.com/docs/confidence).
+const UNCERTAIN_BELOW = 0.65;
 const CONNECT_TIMEOUT_MS = 10_000;
 // Backstop for the graceful drain: after `CloseStream` the server flushes its
 // remaining transcripts and closes. If it never closes (network hiccup), force
@@ -103,6 +110,29 @@ type KeytermAttempt = "full" | "trimmed" | "none";
 // Process-wide: the orchestrator builds a fresh provider per session, so a
 // per-instance counter would hand the renderer the same id twice.
 let spanSeq = 0;
+/**
+ * A result's words as its transcript writes them. With punctuation on,
+ * `punctuated_word` is the form in the transcript; a malformed entry stays in
+ * place as an empty word, so it can't shift the ones after it.
+ */
+function recognisedWords(words: unknown): RecognisedWord[] {
+  if (!Array.isArray(words)) return [];
+  return words.map((entry: unknown) => {
+    const word = (entry ?? {}) as {
+      word?: unknown;
+      punctuated_word?: unknown;
+      confidence?: unknown;
+    };
+    const text =
+      typeof word.punctuated_word === "string"
+        ? word.punctuated_word
+        : typeof word.word === "string"
+          ? word.word
+          : "";
+    return { text, confidence: typeof word.confidence === "number" ? word.confidence : NaN };
+  });
+}
+
 function nextSpanItemId(): string {
   return `deepgram-${++spanSeq}`;
 }
@@ -788,8 +818,9 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     switch (type) {
       case "Results": {
         const channel = payload.channel as
-          { alternatives?: Array<{ transcript?: unknown }> } | undefined;
-        const transcript = channel?.alternatives?.[0]?.transcript;
+          { alternatives?: Array<{ transcript?: unknown; words?: unknown }> } | undefined;
+        const alternative = channel?.alternatives?.[0];
+        const transcript = alternative?.transcript;
         // A malformed result must neither show text nor retire the live span.
         if (typeof transcript !== "string" || typeof payload.is_final !== "boolean") {
           logDebug(`${P} ← malformed Results`, voicePayloadShape(payload));
@@ -815,10 +846,15 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
         const previewId = this.spanItemId;
         this.spanItemId = null;
         if (previewId || trimmed) {
+          const uncertain = flagUncertainWords(
+            trimmed,
+            recognisedWords(alternative?.words),
+            UNCERTAIN_BELOW
+          );
           this.emit({
             type: "complete",
             text: trimmed,
-            confidence: { ...STUB_CONFIDENCE },
+            ...(uncertain.length > 0 ? { uncertain } : {}),
             itemId: previewId ?? nextSpanItemId(),
             ...(speechFinal ? { endOfSpeech: true } : {}),
           });

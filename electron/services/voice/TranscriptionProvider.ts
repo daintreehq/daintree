@@ -4,20 +4,7 @@ import type {
   VoiceInputStatus,
 } from "../../../shared/types/ipc/api.js";
 import type { VoiceSessionReport } from "../../../shared/types/voiceSessionSummary.js";
-
-export interface CorrectionWord {
-  word: string;
-  confidence: number;
-  start?: number;
-  end?: number;
-}
-
-export interface SegmentConfidence {
-  minConfidence: number;
-  wordCount: number;
-  uncertainWords: string[];
-  words: CorrectionWord[];
-}
+import type { VoiceTextSpan } from "../../../shared/utils/voiceUncertainWords.js";
 
 export type VoiceTranscriptionEvent =
   // `itemId` identifies the audio segment a delta/completion belongs to. A
@@ -27,10 +14,12 @@ export type VoiceTranscriptionEvent =
   | { type: "delta"; text: string; itemId?: string; replace?: boolean }
   // `endOfSpeech` marks a completion the speaker paused after, rather than one
   // the provider cut mid-speech; only those may carry a spoken "send it".
+  // `uncertain` spans the words in `text` the provider scored below its own
+  // cut-off; absent from a provider that reports no word confidence.
   | {
       type: "complete";
       text: string;
-      confidence?: SegmentConfidence;
+      uncertain?: VoiceTextSpan[];
       itemId?: string;
       endOfSpeech?: boolean;
     }
@@ -91,17 +80,6 @@ export function createAudioBufferOverflowError(): VoiceInputError {
     message: "Connecting took too long, so some audio from the start of dictation was lost.",
   };
 }
-
-// Providers emit a neutral, fully-confident stub: the real word-level
-// confidence/correction pass lives in VoiceCorrectionService, not the
-// transcription stream. Both providers reuse this so the renderer's confidence
-// shape stays consistent regardless of backend.
-export const STUB_CONFIDENCE: SegmentConfidence = {
-  minConfidence: 1.0,
-  wordCount: 0,
-  uncertainWords: [],
-  words: [],
-};
 
 /**
  * One concrete transcription backend (OpenAI Realtime, Deepgram, …). The

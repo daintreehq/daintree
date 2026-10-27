@@ -1,4 +1,8 @@
-import type { DictationRecord, DictationUtterance } from "@/store/dictationRangeStore";
+import type {
+  DictationRecord,
+  DictationTextSpan,
+  DictationUtterance,
+} from "@/store/dictationRangeStore";
 
 // Draft text before a passage sent as correction context, so a dictation that
 // continues a typed sentence isn't recased as if it stood alone.
@@ -18,6 +22,8 @@ export interface CorrectionPassage {
   context: string;
   /** Nothing but whitespace comes before the passage, so it may open with a command. */
   startsPrompt: boolean;
+  /** The words in `text` the recogniser was unsure of, when there are any. */
+  uncertain?: DictationTextSpan[];
 }
 
 function leftContext(draft: string, from: number): string {
@@ -73,6 +79,13 @@ export function collectCorrectionPassages(
   return runs.map((utterances) => {
     const from = utterances[0]!.range.from;
     const to = utterances[utterances.length - 1]!.range.to;
+    // Every utterance here is unedited, so each still holds the words its
+    // spans were measured against.
+    const uncertain = utterances.flatMap(({ range, uncertain: spans = [] }) =>
+      spans
+        .filter((span) => span.from < span.to && span.to <= range.to - range.from)
+        .map((span) => ({ from: range.from - from + span.from, to: range.from - from + span.to }))
+    );
     return {
       utteranceIds: utterances.map((utterance) => utterance.id),
       from,
@@ -80,6 +93,7 @@ export function collectCorrectionPassages(
       text: draft.slice(from, to),
       context: leftContext(draft, from),
       startsPrompt: draft.slice(0, from).trim() === "",
+      ...(uncertain.length > 0 ? { uncertain } : {}),
     };
   });
 }
@@ -112,24 +126,34 @@ export function locatePassage(
 /**
  * A passage as the transcriber produced it, before any heard-as rule: each
  * utterance's heard words in place of what the rules wrote, with the
- * session's own separators between them. Read from the same draft the
- * passage was collected from.
+ * session's own separators between them, and the words in it the recogniser
+ * was unsure of. Read from the same draft the passage was collected from.
  */
-export function transcribedPassageText(
+export function transcribedPassage(
   record: DictationRecord,
   passage: CorrectionPassage,
   draft: string
-): string {
+): { text: string; uncertain: DictationTextSpan[] } {
   let text = "";
+  const uncertain: DictationTextSpan[] = [];
   let at = passage.from;
   for (const id of passage.utteranceIds) {
     const utterance = record.utterances.find((u) => u.id === id);
     if (!utterance) continue;
     const { from, to } = utterance.range;
-    text += draft.slice(at, from) + (utterance.heard ?? draft.slice(from, to));
+    text += draft.slice(at, from);
+    const words = utterance.heard ?? draft.slice(from, to);
+    const spans =
+      (utterance.heard === undefined ? utterance.uncertain : utterance.heardUncertain) ?? [];
+    for (const span of spans) {
+      if (span.from < span.to && span.to <= words.length) {
+        uncertain.push({ from: text.length + span.from, to: text.length + span.to });
+      }
+    }
+    text += words;
     at = to;
   }
-  return text;
+  return { text, uncertain };
 }
 
 /** One learning baseline for the session, from each passage's settled text. */

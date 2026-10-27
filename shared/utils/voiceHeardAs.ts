@@ -1,6 +1,7 @@
 import type { VoiceDictionaryEntry } from "../types/ipc/api.js";
 import { MAX_DICTIONARY_TERM_LENGTH } from "./voiceDictionary.js";
 import { findProtectedRanges } from "./voiceProtectedSpans.js";
+import type { VoiceTextEdit } from "./voiceUncertainWords.js";
 
 /** One "when you hear this, write that" pair from the dictionary. */
 export interface HeardAsRule {
@@ -12,9 +13,14 @@ export interface HeardAsRule {
  * Rewrites dictated text with the dictionary's heard-as rules. With `within`,
  * only phrases inside that span are rewritten and the text around it is
  * context, so a phrase that runs on into a word or a path beside the span is
- * left alone.
+ * left alone. With `edits`, each replacement is pushed onto it in order, in
+ * the coordinates of `text`.
  */
-export type HeardAsRewriter = (text: string, within?: { from: number; to: number }) => string;
+export type HeardAsRewriter = (
+  text: string,
+  within?: { from: number; to: number },
+  edits?: VoiceTextEdit[]
+) => string;
 
 /**
  * Each rule is scanned for at every character, so past this many only the
@@ -106,7 +112,7 @@ export function createHeardAsRewriter(rules: readonly HeardAsRule[]): HeardAsRew
       ordered.find((rule) => (rule.exact ??= new RegExp(`^(?:${rule.source})$`, "iu")).test(match))
     )?.term;
 
-  return (text, within) => {
+  return (text, within, edits) => {
     const limit = within?.to ?? text.length;
     let ranges: ReturnType<typeof findProtectedRanges> | null = null;
     let nextRange = 0;
@@ -128,6 +134,7 @@ export function createHeardAsRewriter(rules: readonly HeardAsRule[]): HeardAsRew
         continue;
       }
       out += text.slice(copied, start) + term;
+      edits?.push({ from: start, to: end, insert: term });
       copied = end;
     }
     return copied === 0 ? text : out + text.slice(copied);

@@ -1,12 +1,6 @@
 import { VOICE_LANGUAGE_AUTO, voiceLanguageName } from "./voiceLanguages.js";
 import type { HeardAsRule } from "../utils/voiceHeardAs.js";
 
-/** Skip LLM correction entirely when every word exceeds this confidence. */
-export const CONFIDENCE_SKIP_THRESHOLD = 0.85;
-
-/** Tag words below this confidence with <uncertain> in the LLM prompt. */
-export const CONFIDENCE_TAG_THRESHOLD = 0.8;
-
 /**
  * The single OpenAI model backing every voice-dictation AI call: whole-passage
  * correction, file-command detection, and ambiguous-file reranking. It replaces

@@ -6,6 +6,12 @@ import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
 import { hasCleanupKey, hasTranscriptionKey } from "@shared/config/voiceProviders";
 import { introducesVoiceCommand } from "@shared/utils/voiceAgentCommands";
+import {
+  carrySpansThroughEdits,
+  shiftSpans,
+  sliceSpans,
+  type VoiceTextEdit,
+} from "@shared/utils/voiceUncertainWords";
 import { shouldShowHybridInputBar } from "@/components/Terminal/terminalFocus";
 import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
 import { isAssistantFocused } from "@/store/macroFocusStore";
@@ -75,7 +81,7 @@ import {
   joinPassageTexts,
   locatePassage,
   settlePassageReplies,
-  transcribedPassageText,
+  transcribedPassage,
   type CorrectionPassage,
 } from "@/services/voiceCorrectionPassages";
 import {
@@ -220,7 +226,8 @@ function writeVoiceWords(
   sessionId: string | null | undefined,
   text: string,
   transcriptId?: string,
-  heard?: string
+  heard?: string,
+  uncertain?: { text: DictationTextSpan[]; heard?: DictationTextSpan[] }
 ): VoiceInsertPlan {
   const draft = useTerminalInputStore.getState().getDraftInput(panelId, projectId);
   const plan = planVoiceWords(
@@ -234,9 +241,15 @@ function writeVoiceWords(
     sessionId,
     plan,
     (target, { insertion, words, separatorAfter }) =>
-      useDictationRangeStore
-        .getState()
-        .recordUtterance(target, { insertion, words, separatorAfter, transcriptId, heard })
+      useDictationRangeStore.getState().recordUtterance(target, {
+        insertion,
+        words,
+        separatorAfter,
+        transcriptId,
+        heard,
+        uncertain: uncertain?.text,
+        heardUncertain: uncertain?.heard,
+      })
   );
   return plan;
 }
@@ -649,7 +662,18 @@ class VoiceRecordingService {
 
     this.unsubscribers.push(
       voiceInput.onTranscriptionComplete(
-        ({ sessionId, text, itemId, transcriptId, heard, send, commandText }) => {
+        ({
+          sessionId,
+          text,
+          itemId,
+          transcriptId,
+          heard,
+          send,
+          commandText,
+          uncertain,
+          heardUncertain,
+          commandUncertain,
+        }) => {
           if (this.discardedSessionIds.has(sessionId)) return;
           logDebug(`${LOG_PREFIX} Received transcription complete`, {
             itemId,
@@ -668,6 +692,8 @@ class VoiceRecordingService {
           const projectId = voiceState.activeTarget?.projectId;
           let completedText = text;
           let completedHeard = heard?.trim();
+          let completedUncertain = uncertain;
+          let completedHeardUncertain = heardUncertain;
           if (panelId) {
             const buffer = voiceState.panelBuffers[panelId];
             const spoken = text.trim();
@@ -693,16 +719,29 @@ class VoiceRecordingService {
             ) {
               completedText = commandText;
               completedHeard = undefined;
+              completedUncertain = commandUncertain;
+              completedHeardUncertain = undefined;
             }
             const finalText = completedText.trim();
             if (finalText) {
+              // Unsure words are measured against the strings main sent, untrimmed.
+              const lead = completedText.length - completedText.trimStart().length;
+              const heardLead = (heard?.length ?? 0) - (heard?.trimStart().length ?? 0);
               const { words } = writeVoiceWords(
                 panelId,
                 projectId,
                 buffer?.dictationSessionId,
                 finalText,
                 transcriptId,
-                completedHeard
+                completedHeard,
+                {
+                  text: sliceSpans(completedUncertain ?? [], lead, lead + finalText.length),
+                  heard: sliceSpans(
+                    completedHeardUncertain ?? [],
+                    heardLead,
+                    heardLead + (completedHeard?.length ?? 0)
+                  ),
+                }
               );
               // A Deepgram span can finalise without any interim, so the session's
               // first text may arrive here rather than in a delta.
@@ -2652,23 +2691,36 @@ class VoiceRecordingService {
     const draftKey = makeDraftKey(panelId, projectId);
     const rewrites: PassageRewrite[] = [];
     for (const passage of collectCorrectionPassages(record, draft)) {
-      const heard = transcribedPassageText(record, passage, draft);
+      const transcribed = transcribedPassage(record, passage, draft);
+      const heard = transcribed.text;
       // The draft either side is context, so a phrase that runs on into text
       // typed against the passage is still judged as one word.
       const before = draft.slice(0, passage.from);
       const after = draft.slice(passage.to);
-      const rewritten = rewrite(before + heard + after, {
-        from: before.length,
-        to: before.length + heard.length,
-      });
+      const edits: VoiceTextEdit[] = [];
+      const rewritten = rewrite(
+        before + heard + after,
+        { from: before.length, to: before.length + heard.length },
+        edits
+      );
       const text = rewritten.slice(before.length, rewritten.length - after.length);
       if (text === passage.text) continue;
+      // The unsure words follow the rules' own replacements, from the words as
+      // heard; one a rule replaced is dropped.
+      const uncertain = sliceSpans(
+        carrySpansThroughEdits(shiftSpans(transcribed.uncertain, before.length), edits),
+        before.length,
+        before.length + text.length
+      );
       const current = useTerminalInputStore.getState().getDraftInput(panelId, projectId);
       const pending = peekPendingComposerSelection(draftKey, current);
       const caret = pending ?? readComposerSelection(draftKey, current);
       const span = useDictationRangeStore
         .getState()
-        .rewritePassage(record.id, passage, text, heard);
+        .rewritePassage(record.id, passage, text, heard, {
+          text: uncertain,
+          heard: transcribed.uncertain,
+        });
       if (!span) continue;
       const delta = text.length - (span.to - span.from);
       // A caret that followed the words, or sits in them, stays with them, and
@@ -2889,6 +2941,7 @@ class VoiceRecordingService {
         ...(passage.context ? { recentContext: [passage.context] } : {}),
         startsPrompt: passage.startsPrompt,
         ...(correction.sessionId ? { sessionId: correction.sessionId } : {}),
+        ...(passage.uncertain ? { uncertain: passage.uncertain } : {}),
       });
       // The passage runs from its first word to its last; its separators and
       // paragraph breaks either side stay the session's, not the model's.

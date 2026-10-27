@@ -1305,6 +1305,8 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
         startsPrompt?: boolean;
         /** The dictation the passage came from: its context was read while it ran. */
         sessionId?: string;
+        /** Spans of `rawText` the recogniser was unsure of. */
+        uncertain?: Array<{ from: number; to: number }>;
       },
     ];
     // `failed`: the request failed or was cancelled, leaving the raw text.
@@ -2076,6 +2078,12 @@ export interface IpcEventMap {
     send?: boolean;
     /** The text with its spoken opening command written as typed, to use when it starts the prompt. */
     commandText?: string;
+    /** Spans of `text` the recogniser was unsure of. */
+    uncertain?: Array<{ from: number; to: number }>;
+    /** Spans of `heard` the recogniser was unsure of. */
+    heardUncertain?: Array<{ from: number; to: number }>;
+    /** Spans of `commandText` the recogniser was unsure of. */
+    commandUncertain?: Array<{ from: number; to: number }>;
   };
   "voice-input:paragraph-boundary": { sessionId: string; rawText: string | null };
   "voice-input:file-token-resolved": {

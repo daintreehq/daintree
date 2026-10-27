@@ -790,6 +790,16 @@ export const VoiceInputCorrectPayloadSchema = z.object({
   startsPrompt: z.boolean().optional(),
   /** The dictation the passage came from: its context was read while it ran. */
   sessionId: VoiceSessionIdSchema.optional(),
+  /**
+   * Spans of `rawText` the recogniser was unsure of. Each holds a character and
+   * cleanup takes at most 12,000, so more belong to a passage it leaves raw.
+   * Spans that don't validate are dropped rather than failing the cleanup.
+   */
+  uncertain: z
+    .array(z.object({ from: z.number().int().nonnegative(), to: z.number().int().nonnegative() }))
+    .max(12_000)
+    .optional()
+    .catch(undefined),
 });
 
 export const VoiceInputRewritePayloadSchema = z.object({

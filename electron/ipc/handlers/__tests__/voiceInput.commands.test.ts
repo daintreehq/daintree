@@ -31,6 +31,7 @@ type MockTranscriptionEvent = {
   endOfSpeech?: boolean;
   status?: string;
   message?: string;
+  uncertain?: Array<{ from: number; to: number }>;
 };
 
 const shared = vi.hoisted(() => ({
@@ -299,7 +300,35 @@ type StartHandler = (e: unknown, sessionId: string, options?: unknown) => Promis
 function completions() {
   return activeSent
     .filter((m) => m.channel === "voice-input:transcription-complete")
-    .map((m) => m.payload as { text: string; commandText?: string; send?: boolean });
+    .map(
+      (m) =>
+        m.payload as {
+          text: string;
+          heard?: string;
+          commandText?: string;
+          send?: boolean;
+          uncertain?: Span[];
+          heardUncertain?: Span[];
+          commandUncertain?: Span[];
+        }
+    );
+}
+
+type Span = { from: number; to: number };
+
+/** The words each span covers, so a flag on the wrong copy of a word shows. */
+function flagged(text: string | undefined, spans: Span[] | undefined): string[] {
+  return (spans ?? []).map(({ from, to }) => `${from}:${(text ?? "").slice(from, to)}`);
+}
+
+/** Spans of the given words in `text`, each found after the last. */
+function spansOf(text: string, ...words: string[]): Span[] {
+  let at = 0;
+  return words.map((word) => {
+    const from = text.indexOf(word, at);
+    at = from + word.length;
+    return { from, to: at };
+  });
 }
 
 describe("voiceInput — the target agent's commands", () => {
@@ -484,6 +513,107 @@ describe("voiceInput — the target agent's commands", () => {
     expect(shared.correctionCalls[0]?.settings).toMatchObject({
       commandTarget: { agentId: "claude", isAssistant: false },
     });
+  });
+
+  it("carries the unsure words by position through a stripped send, heard-as rules and pieces", async () => {
+    shared.dictionary = [{ term: "Zustand", heardAs: ["zoo stand"], source: "manual", addedAt: 1 }];
+    await start();
+    const text = "use zoo stand for the store\nthen test the test, send it.";
+    emitTranscriptionEvent({
+      type: "complete",
+      text,
+      endOfSpeech: true,
+      // "stand" sits in a phrase a rule rewrites, "it" in the send, and only
+      // the second "test" is unsure.
+      uncertain: [
+        { from: 8, to: 13 },
+        { from: 22, to: 27 },
+        { from: 42, to: 46 },
+        { from: 53, to: 55 },
+      ],
+    });
+    const [first, second] = completions();
+    expect(first?.text).toBe("use Zustand for the store");
+    expect(flagged(first?.text, first?.uncertain)).toEqual(["20:store"]);
+    expect(flagged(first?.heard, first?.heardUncertain)).toEqual(["8:stand", "22:store"]);
+    expect(second).toMatchObject({ text: "then test the test", send: true });
+    expect(flagged(second?.text, second?.uncertain)).toEqual(["14:test"]);
+    expect(second).not.toHaveProperty("heardUncertain");
+  });
+
+  it("moves an opening command's unsure arguments into the command as typed, and drops its name's", async () => {
+    await start();
+    const text = "Slash review the last commit.";
+    emitTranscriptionEvent({
+      type: "complete",
+      text,
+      uncertain: spansOf(text, "review", "the", "last"),
+    });
+    const [sent] = completions();
+    expect(sent?.commandText).toBe("/review the last commit.");
+    expect(flagged(sent?.text, sent?.uncertain)).toEqual(["6:review", "13:the", "17:last"]);
+    expect(flagged(sent?.commandText, sent?.commandUncertain)).toEqual(["8:the", "12:last"]);
+  });
+
+  it("restores the flags a held send stripped when the speaker goes on", async () => {
+    shared.provider = "deepgram";
+    await start();
+    const text = "fix the test send it";
+    emitTranscriptionEvent({
+      type: "complete",
+      text,
+      endOfSpeech: true,
+      itemId: "item-A",
+      uncertain: spansOf(text, "test", "it"),
+    });
+    expect(completions()).toEqual([]);
+    emitTranscriptionEvent({ type: "delta", text: "and", itemId: "item-B" });
+    const [sent] = completions();
+    expect(sent?.text).toBe(text);
+    expect(flagged(sent?.text, sent?.uncertain)).toEqual(["8:test", "18:it"]);
+  });
+
+  it("sends no unsure words for an utterance with none", async () => {
+    await start();
+    emitTranscriptionEvent({ type: "complete", text: "Slash review the last commit." });
+    const [sent] = completions();
+    expect(sent).not.toHaveProperty("uncertain");
+    expect(sent).not.toHaveProperty("commandUncertain");
+  });
+
+  it("hands correction the unsure words the renderer sent", async () => {
+    const handleCorrect = getHandler("voice-input:correct") as (
+      e: unknown,
+      request: unknown
+    ) => Promise<unknown>;
+    await handleCorrect(fakeEvent, {
+      rawText: "racked native",
+      terminalId: TERMINAL,
+      uncertain: [{ from: 0, to: 6 }],
+    });
+    await handleCorrect(fakeEvent, { rawText: "react native", terminalId: TERMINAL });
+    expect(shared.correctionCalls[0]?.request).toMatchObject({ uncertain: [{ from: 0, to: 6 }] });
+    expect(shared.correctionCalls[1]?.request).not.toHaveProperty("uncertain");
+  });
+
+  // A passage past cleanup's length cap is left raw by the service; its
+  // spans must not turn that into a failed request.
+  it.each([
+    [
+      "more spans than any passage cleanup takes",
+      "a ".repeat(12_001).trim(),
+      Array.from({ length: 12_001 }, (_, i) => ({ from: 2 * i, to: 2 * i + 1 })),
+    ],
+    ["a span that doesn't validate", "racked native", [{ from: -1, to: 6 }]],
+  ])("still runs correction, without the spans, for %s", async (_name, rawText, uncertain) => {
+    const handleCorrect = getHandler("voice-input:correct") as (
+      e: unknown,
+      request: unknown
+    ) => Promise<unknown>;
+    await handleCorrect(fakeEvent, { rawText, terminalId: TERMINAL, uncertain });
+    expect(shared.correctionCalls).toHaveLength(1);
+    expect(shared.correctionCalls[0]?.request).toMatchObject({ rawText });
+    expect(shared.correctionCalls[0]?.request).not.toHaveProperty("uncertain");
   });
 
   it("corrects as prose when the passage names no terminal", async () => {

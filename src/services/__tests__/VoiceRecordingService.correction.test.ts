@@ -58,7 +58,11 @@ type CompletePayload = {
   itemId?: string;
   heard?: string;
   commandText?: string;
+  uncertain?: Span[];
+  heardUncertain?: Span[];
+  commandUncertain?: Span[];
 };
+type Span = { from: number; to: number };
 type CorrectResult = { action: "no_change" | "replace"; correctedText: string };
 
 const callbacks: {
@@ -74,6 +78,7 @@ const correct =
       recentContext?: string[];
       terminalId?: string;
       sessionId?: string;
+      uncertain?: Span[];
     }) => Promise<CorrectResult>
   >();
 
@@ -620,6 +625,83 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     first.resolve({ action: "replace", correctedText: "Hello world." });
     await flush();
     expect(draft("panel-1")).toBe("hello wrld");
+  });
+
+  describe("the recogniser's unsure words", () => {
+    const complete = (payload: Omit<CompletePayload, "willCorrect">) => {
+      callbacks.delta!({ text: payload.text, itemId: payload.itemId });
+      callbacks.complete!({ willCorrect: false, ...payload });
+    };
+
+    it("sends correction each utterance's unsure words at their place in the passage", async () => {
+      const { service, voiceStore } = await setup();
+      correct.mockResolvedValue({ action: "no_change", correctedText: "" });
+
+      voiceStore.getState().beginSession({ panelId: "panel-1" });
+      complete({ text: "test foo test", itemId: "a", uncertain: [{ from: 9, to: 13 }] });
+      complete({ text: "then racked native", itemId: "b", uncertain: [{ from: 5, to: 11 }] });
+      await service.stop();
+
+      expect(correct).toHaveBeenLastCalledWith({
+        rawText: "test foo test then racked native",
+        terminalId: "panel-1",
+        startsPrompt: true,
+        sessionId: expect.any(String),
+        uncertain: [
+          { from: 9, to: 13 },
+          { from: 19, to: 25 },
+        ],
+      });
+    });
+
+    it("takes the command's own unsure words when the command opens the prompt", async () => {
+      const { service, voiceStore, draft } = await setup();
+      correct.mockResolvedValue({ action: "no_change", correctedText: "" });
+
+      voiceStore.getState().beginSession({ panelId: "panel-1" });
+      complete({
+        text: "Slash review the last commit.",
+        itemId: "cmd",
+        commandText: "/review the last commit.",
+        uncertain: [
+          { from: 6, to: 12 },
+          { from: 17, to: 21 },
+        ],
+        commandUncertain: [{ from: 12, to: 16 }],
+      });
+      expect(draft("panel-1")).toBe("/review the last commit.");
+      await service.stop();
+
+      expect(correct.mock.lastCall?.[0]).toMatchObject({
+        rawText: "/review the last commit.",
+        uncertain: [{ from: 12, to: 16 }],
+      });
+    });
+
+    it("follows the stop-time heard-as rules through the words as heard", async () => {
+      dictionary = [{ term: "Zustand", heardAs: ["zoo stand"], source: "manual", addedAt: 0 }];
+      const { service, voiceStore, draft } = await setup();
+      correct.mockResolvedValue({ action: "no_change", correctedText: "" });
+
+      voiceStore.getState().beginSession({ panelId: "panel-1" });
+      // Main already rewrote the first "zoo stand"; "stor" sits at a different
+      // place in the words as heard than in the words written.
+      complete({
+        text: "add Zustand stor zoo",
+        heard: "add zoo stand stor zoo",
+        itemId: "a",
+        uncertain: [{ from: 12, to: 16 }],
+        heardUncertain: [{ from: 14, to: 18 }],
+      });
+      complete({ text: "stand", itemId: "b" });
+      await service.stop();
+
+      expect(draft("panel-1")).toBe("add Zustand stor Zustand");
+      expect(correct.mock.lastCall?.[0]).toMatchObject({
+        rawText: "add Zustand stor Zustand",
+        uncertain: [{ from: 12, to: 16 }],
+      });
+    });
   });
 
   describe("heard-as rules at stop", () => {
