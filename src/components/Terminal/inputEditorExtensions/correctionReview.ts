@@ -23,6 +23,7 @@ import {
   VOICE_CORRECTION_MARK_DWELL_MS,
   VOICE_CORRECTION_MARK_FADE_MS,
 } from "@/lib/animationUtils";
+import { alignWords, tokenizeWords } from "@/lib/wordAlignment";
 import { chipCardText, chipHoverTooltip, chipTooltip } from "./chipCard";
 
 /** A correction swapped into a dictated passage of the draft. */
@@ -47,72 +48,20 @@ export interface CorrectionChanges {
   removed: { at: number; afterWord: boolean; heard: string }[];
 }
 
-interface Token {
-  text: string;
-  from: number;
-  to: number;
-}
-
-function tokenize(text: string): Token[] {
-  const tokens: Token[] = [];
-  for (const match of text.matchAll(/\S+/g)) {
-    tokens.push({ text: match[0], from: match.index, to: match.index + match[0].length });
-  }
-  return tokens;
-}
-
-// A passage past this many word pairs is marked as one span between its common
-// head and tail rather than aligned word by word.
-const MAX_ALIGNMENT_CELLS = 250_000;
-
 /**
  * The words a correction changed. Words are whitespace-separated and compared
  * exactly, so a capital or a punctuation mark the correction added counts; a
  * change to the spacing alone does not.
  */
 export function diffCorrection(rawText: string, correctedText: string): CorrectionChanges {
-  const a = tokenize(rawText);
-  const b = tokenize(correctedText);
-
-  let head = 0;
-  while (head < a.length && head < b.length && a[head]!.text === b[head]!.text) head++;
-  let endA = a.length;
-  let endB = b.length;
-  while (endA > head && endB > head && a[endA - 1]!.text === b[endB - 1]!.text) {
-    endA--;
-    endB--;
-  }
-
-  // Index pairs of the words both sides keep, framed by the common head and tail.
-  const kept: [number, number][] = [[head - 1, head - 1]];
-  const m = endA - head;
-  const n = endB - head;
-  if (m > 0 && n > 0 && m * n <= MAX_ALIGNMENT_CELLS) {
-    const width = n + 1;
-    const lcs = new Uint32Array((m + 1) * width);
-    for (let i = m - 1; i >= 0; i--) {
-      for (let j = n - 1; j >= 0; j--) {
-        lcs[i * width + j] =
-          a[head + i]!.text === b[head + j]!.text
-            ? lcs[(i + 1) * width + j + 1]! + 1
-            : Math.max(lcs[(i + 1) * width + j]!, lcs[i * width + j + 1]!);
-      }
-    }
-    let i = 0;
-    let j = 0;
-    while (i < m && j < n) {
-      if (a[head + i]!.text === b[head + j]!.text) {
-        kept.push([head + i, head + j]);
-        i++;
-        j++;
-      } else if (lcs[(i + 1) * width + j]! >= lcs[i * width + j + 1]!) {
-        i++;
-      } else {
-        j++;
-      }
-    }
-  }
-  kept.push([endA, endB]);
+  const a = tokenizeWords(rawText);
+  const b = tokenizeWords(correctedText);
+  // Framed by the positions just outside either end, so every gap is between two pairs.
+  const kept: [number, number][] = [
+    [-1, -1],
+    ...alignWords(a, b, (x, y) => x.text === y.text),
+    [a.length, b.length],
+  ];
 
   const changes: CorrectionChanges = { changed: [], removed: [] };
   for (let k = 0; k < kept.length - 1; k++) {

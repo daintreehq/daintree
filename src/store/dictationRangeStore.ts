@@ -7,6 +7,7 @@ import {
   type TrackedTextRange,
 } from "@/lib/textRangeMapping";
 import { makeDraftKey } from "@/lib/draftKey";
+import { mapWordCuts } from "@/lib/wordAlignment";
 import { carrySpansThroughEdits } from "@shared/utils/voiceUncertainWords";
 import { useTerminalInputStore } from "./terminalInputStore";
 
@@ -49,6 +50,11 @@ export interface DictationUtterance {
    * cancel has to put it back where they stood.
    */
   replaced?: string;
+  /**
+   * How many of the transcriber's segments these words stand for, when a
+   * rewrite ran several into one; one when absent.
+   */
+  sources?: number;
 }
 
 /**
@@ -96,6 +102,17 @@ export interface DictationDraftTarget {
 /** A swap of `from`..`to` for `text` that the session makes in its own words. */
 export interface DictationWordEdit extends DictationTextSpan {
   text: string;
+}
+
+/** New text for one passage of a session's words. */
+export interface UtteranceRewrite {
+  passage: { utteranceIds: readonly string[]; text: string };
+  text: string;
+  /**
+   * Keep the words as transcribed, for rules that rewrite from them, and the
+   * unsure words in `text`, relative to its start.
+   */
+  heard?: { uncertain: readonly DictationTextSpan[] };
 }
 
 /**
@@ -151,14 +168,16 @@ interface DictationRangeState {
    * actually changed. A diff of the two strings can't say which of two
    * identical runs was written, or that a write touching two places left the
    * text between them alone, so a writer that knows passes it here. Several
-   * changes are each placed in `before` and must not overlap.
+   * changes are each placed in `before` and must not overlap. `records` are
+   * records the writer rebuilt itself, taken as they are in place of mapping.
    */
   expectDraftChange: (
     panelId: string,
     projectId: string | undefined,
     before: string,
     after: string,
-    change: TextChange | readonly TextChange[]
+    change: TextChange | readonly TextChange[],
+    records?: readonly DictationRecord[]
   ) => void;
   /**
    * Writes `text` over a passage of the session's own words, as the session:
@@ -199,6 +218,24 @@ interface DictationRangeState {
    * were rather than edited.
    */
   yieldLeadingSpace: (id: string, span: DictationTextSpan) => void;
+  /**
+   * Writes new text over passages of the session's own words, as the session,
+   * in one draft write. Each utterance whose edges the rewrite left in place
+   * keeps its own words, still unedited, so a scratch or a cancel takes just
+   * those; utterances a rewritten word runs across become one. A rewrite with
+   * `heard` keeps the words as transcribed, for the heard-as rules to rerun
+   * from; one without drops them with the unsure words (a cleanup, which
+   * nothing reruns). `rewrites` are in draft order and must not overlap;
+   * `write` receives the new draft and puts it there, and the record moves in
+   * the same update as the draft. Returns the span each passage covered
+   * before the write, or null, writing nothing, once one of them no longer
+   * holds its text or one of its words was edited.
+   */
+  rewriteUtterances: (
+    id: string,
+    rewrites: readonly UtteranceRewrite[],
+    write: (next: string) => void
+  ) => DictationTextSpan[] | null;
   getDictation: (id: string) => DictationRecord | null;
   listDictations: (panelId: string, projectId?: string) => DictationRecord[];
   /** Every live record the voice session wrote, in any draft. */
@@ -474,6 +511,102 @@ function withInsertion(
   return { ...drafts, [key]: records.map((r, i) => (i === index ? record : r)) };
 }
 
+/** A passage of a record, located for `rewriteUtterances`. */
+interface LocatedRewrite {
+  first: number;
+  run: DictationUtterance[];
+  from: number;
+  to: number;
+  rewrite: UtteranceRewrite;
+}
+
+/**
+ * The utterances `located` becomes once its new text is written at `at`. Each
+ * cut between two of them that the rewrite kept stays, so each keeps its own
+ * words; any other joins them. `mapped` is the record carried through the
+ * write, for the space kept after the words.
+ */
+function rewrittenUtterances(
+  located: LocatedRewrite,
+  at: number,
+  mapped: DictationRecord,
+  draft: string
+): DictationUtterance[] {
+  const { first, run, from, rewrite } = located;
+  const { text } = rewrite;
+  const cuts = mapWordCuts(
+    rewrite.passage.text,
+    text,
+    run.slice(1).map((next, i) => ({ end: run[i]!.range.to - from, start: next.range.from - from }))
+  );
+  const groups: Array<{ members: DictationUtterance[]; start: number; end: number }> = [];
+  let members = [run[0]!];
+  let start = 0;
+  cuts.forEach((cut, i) => {
+    // A cut that would leave either side without words of its own joins them.
+    if (!cut || cut.end <= start || cut.start < cut.end || cut.start >= text.length) {
+      members.push(run[i + 1]!);
+      return;
+    }
+    groups.push({ members, start, end: cut.end });
+    members = [run[i + 1]!];
+    start = cut.start;
+  });
+  groups.push({ members, start, end: text.length });
+
+  const end = at + text.length;
+  const separators = mapped.utterances
+    .slice(first, first + run.length)
+    .flatMap((u) => (u.separatorAfter ? [u.separatorAfter] : []));
+  const separatorAfter =
+    separators.find((s) => s.from === end) ?? separators[separators.length - 1];
+  return groups.map((group, g) => {
+    const lead = group.members[0]!;
+    const words = { from: at + group.start, to: at + group.end };
+    const insertion =
+      g === 0
+        ? { ...lead.insertion, from: lead.insertion.from - from + at, to: words.to }
+        : unedited({ from: at + groups[g - 1]!.end, to: words.to });
+    const transcriptId = group.members.find((u) => u.transcriptId)?.transcriptId;
+    const replaced = group.members.find((u) => u.replaced)?.replaced;
+    const sources = group.members.reduce((sum, u) => sum + (u.sources ?? 1), 0);
+    const utterance: DictationUtterance = {
+      id: lead.id,
+      range: unedited(words),
+      insertion,
+      ...(g === groups.length - 1 && separatorAfter ? { separatorAfter } : {}),
+      ...(transcriptId ? { transcriptId } : {}),
+      ...(replaced ? { replaced } : {}),
+      ...(sources > 1 ? { sources } : {}),
+    };
+    if (!rewrite.heard) return utterance;
+    // The words as transcribed, each member's own with the space the session
+    // put between them, so the heard-as rules can rerun from them.
+    let heard = "";
+    const heardUncertain: DictationTextSpan[] = [];
+    group.members.forEach((member, i) => {
+      if (i > 0) heard += draft.slice(group.members[i - 1]!.range.to, member.range.from);
+      const said = member.heard ?? draft.slice(member.range.from, member.range.to);
+      const spans = (member.heard === undefined ? member.uncertain : member.heardUncertain) ?? [];
+      for (const span of spans) {
+        heardUncertain.push({ from: heard.length + span.from, to: heard.length + span.to });
+      }
+      heard += said;
+    });
+    const uncertain = rewrite.heard.uncertain
+      .filter((span) => span.from >= group.start && span.to <= group.end && span.from < span.to)
+      .map((span) => ({ from: span.from - group.start, to: span.to - group.start }));
+    const written = text.slice(group.start, group.end);
+    return {
+      ...utterance,
+      ...(uncertain.length > 0 ? { uncertain } : {}),
+      ...(heard !== written
+        ? { heard, ...(heardUncertain.length > 0 ? { heardUncertain } : {}) }
+        : {}),
+    };
+  });
+}
+
 /** `record` in place of the one with its id, unless its draft released it meanwhile. */
 function replaceRecord(
   state: DictationRangeState,
@@ -491,24 +624,33 @@ function replaceRecord(
 // write got there first) is simply diffed, as every other write is.
 const expectedChanges = new Map<
   string,
-  { before: string; after: string; changes: readonly TextChange[] }
+  {
+    before: string;
+    after: string;
+    changes: readonly TextChange[];
+    records: ReadonlyMap<string, DictationRecord> | null;
+  }
 >();
 
 /**
  * The write's changes, last in the draft first, so each still lands where it
- * was placed, and whether its writer said where they were rather than them
- * being inferred.
+ * was placed, whether its writer said where they were rather than them being
+ * inferred, and the records it rebuilt itself.
  */
 function changesFor(
   key: string,
   before: string,
   after: string
-): { changes: readonly TextChange[]; known: boolean } {
+): {
+  changes: readonly TextChange[];
+  known: boolean;
+  records: ReadonlyMap<string, DictationRecord> | null;
+} {
   const expected = expectedChanges.get(key);
   if (expected?.before === before && expected.after === after) {
-    return { changes: expected.changes, known: true };
+    return { changes: expected.changes, known: true, records: expected.records };
   }
-  return { changes: [minimalDocChange(before, after)!], known: false };
+  return { changes: [minimalDocChange(before, after)!], known: false, records: null };
 }
 
 function mapAnchors(
@@ -625,9 +767,11 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
         delete nextDrafts[key];
         continue;
       }
-      const { changes, known } = changesFor(key, before, after);
-      nextDrafts[key] = records.map((record) =>
-        changes.reduce(mapRecord, known ? record : forgetUncertain(record))
+      const { changes, known, records: rebuilt } = changesFor(key, before, after);
+      nextDrafts[key] = records.map(
+        (record) =>
+          rebuilt?.get(record.id) ??
+          changes.reduce(mapRecord, known ? record : forgetUncertain(record))
       );
     }
     expectedChanges.clear();
@@ -641,12 +785,17 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
     }
   },
 
-  expectDraftChange: (panelId, projectId, before, after, change) => {
+  expectDraftChange: (panelId, projectId, before, after, change, records) => {
     // A replacement goes ahead of an insertion at its start: the insertion is
     // the earlier of the two in the draft.
     const changes =
       "insert" in change ? [change] : [...change].sort((a, b) => b.from - a.from || b.to - a.to);
-    expectedChanges.set(makeDraftKey(panelId, projectId), { before, after, changes });
+    expectedChanges.set(makeDraftKey(panelId, projectId), {
+      before,
+      after,
+      changes,
+      records: records?.length ? new Map(records.map((record) => [record.id, record])) : null,
+    });
   },
 
   rewritePassage: (id, passage, text, heard, uncertain) => {
@@ -777,6 +926,87 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
       ...(record.learningSpan ? { learningSpan: startAfter(record.learningSpan, span) } : {}),
     };
     set((state) => replaceRecord(state, moved));
+  },
+
+  rewriteUtterances: (id, rewrites, write) => {
+    const record = get().getDictation(id);
+    if (!record || rewrites.length === 0) return null;
+    const draft = useTerminalInputStore.getState().getDraftInput(record.panelId, record.projectId);
+    const located: LocatedRewrite[] = [];
+    for (const rewrite of rewrites) {
+      const { utteranceIds, text } = rewrite.passage;
+      const first = record.utterances.findIndex((u) => u.id === utteranceIds[0]);
+      const run = record.utterances.slice(first, first + utteranceIds.length);
+      if (
+        first < 0 ||
+        !rewrite.text ||
+        run.length !== utteranceIds.length ||
+        run.some((u, i) => u.id !== utteranceIds[i] || u.range.edited)
+      ) {
+        return null;
+      }
+      const from = run[0]!.range.from;
+      const to = run[run.length - 1]!.range.to;
+      const prev = located[located.length - 1];
+      if ((prev && from < prev.to) || draft.slice(from, to) !== text) return null;
+      located.push({ first, run, from, to, rewrite });
+    }
+    const spans = located.map(({ from, to }) => ({ from, to }));
+
+    // Each change trimmed to what it alters, so the anchor and every other
+    // range follow exactly what was rewritten.
+    const changes = located.flatMap(({ from, rewrite }) => {
+      const change = minimalDocChange(rewrite.passage.text, rewrite.text);
+      return change
+        ? [{ from: from + change.from, to: from + change.to, insert: change.insert }]
+        : [];
+    });
+    if (changes.length === 0) return spans;
+    let next = draft;
+    for (let i = located.length - 1; i >= 0; i--) {
+      const { from, to, rewrite } = located[i]!;
+      next = next.slice(0, from) + rewrite.text + next.slice(to);
+    }
+
+    // Carried through the write like anyone's, which flags what it rewrote;
+    // the session wrote it, so each passage's utterances are then rebuilt
+    // from what it knows.
+    const mapped = [...changes].sort((a, b) => b.from - a.from).reduce(mapRecord, record);
+    const utterances = [...mapped.utterances];
+    let rangeShift = 0;
+    for (let i = located.length - 1; i >= 0; i--) {
+      const piece = located[i]!;
+      const at =
+        piece.from +
+        located
+          .slice(0, i)
+          .reduce((sum, { from, to, rewrite }) => sum + rewrite.text.length - (to - from), 0);
+      utterances.splice(
+        piece.first,
+        piece.run.length,
+        ...rewrittenUtterances(piece, at, mapped, draft)
+      );
+      const delta = piece.rewrite.text.length - (piece.to - piece.from);
+      if (record.range.to >= piece.to) rangeShift += delta;
+    }
+    const rebuilt: DictationRecord = {
+      ...mapped,
+      range: { ...record.range, to: record.range.to + rangeShift },
+      utterances,
+      // A paragraph break inside a passage is now part of its words. Kept, it
+      // would map to an empty edited range and stop a cancel.
+      breaks: mapped.breaks.filter((_, i) => {
+        const paragraphBreak = record.breaks[i]!;
+        return located.every(
+          ({ from, to }) => paragraphBreak.to <= from || paragraphBreak.from >= to
+        );
+      }),
+    };
+    get().expectDraftChange(record.panelId, record.projectId, draft, next, changes, [rebuilt]);
+    write(next);
+    // A write that didn't land as the one expected was mapped like any other.
+    if (get().getDictation(id) !== rebuilt) set((state) => replaceRecord(state, rebuilt));
+    return spans;
   },
 
   getDictation: (id) => {

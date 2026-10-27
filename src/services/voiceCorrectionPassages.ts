@@ -58,16 +58,22 @@ function continuesPassage(
 /**
  * Splits a dictation into the passages correction may rewrite. An utterance
  * whose own words were edited is left out and ends the passage before it, so
- * nothing the user changed is ever sent back to be rewritten.
+ * nothing the user changed is ever sent back to be rewritten. So is one
+ * `include` turns down: a chunk's cleanup has it already.
  */
 export function collectCorrectionPassages(
   record: DictationRecord,
-  draft: string
+  draft: string,
+  include: (utterance: DictationUtterance) => boolean = () => true
 ): CorrectionPassage[] {
   const runs: DictationUtterance[][] = [];
   let run: DictationUtterance[] | null = null;
   for (const utterance of record.utterances) {
-    if (utterance.range.edited || utterance.range.from >= utterance.range.to) {
+    if (
+      utterance.range.edited ||
+      utterance.range.from >= utterance.range.to ||
+      !include(utterance)
+    ) {
       run = null;
       continue;
     }
