@@ -32,6 +32,12 @@ interface PaneFocusIntent {
   explicit: boolean;
   /** Asked by dictation, which is about to write at the composer's caret (#14770). */
   forDictation: boolean;
+  /**
+   * Where the composer's caret goes when it takes the keyboard, read then: the
+   * dictation key stopping a dictation takes the person back to it with the
+   * caret after its words (#14791). Used once.
+   */
+  caret: (() => number | null) | null;
 }
 
 let epoch = 0;
@@ -99,11 +105,17 @@ function watchIntent(): void {
 export function requestPaneFocus(
   paneId: string,
   surface: TerminalFocusTarget,
-  options: { forDictation?: boolean } = {}
+  options: { forDictation?: boolean; caret?: () => number | null } = {}
 ): boolean {
   watchPresses();
   epoch += 1;
-  current = { paneId, surface, explicit: true, forDictation: options.forDictation === true };
+  current = {
+    paneId,
+    surface,
+    explicit: true,
+    forDictation: options.forDictation === true,
+    caret: options.caret ?? null,
+  };
   watchIntent();
   return focusPanelInput(paneId, surface);
 }
@@ -116,7 +128,7 @@ export function requestPaneFocus(
 export function holdPaneFocus(paneId: string, surface: TerminalFocusTarget): void {
   if (current?.explicit && current.paneId === paneId) return;
   watchPresses();
-  current = { paneId, surface, explicit: false, forDictation: false };
+  current = { paneId, surface, explicit: false, forDictation: false, caret: null };
   watchIntent();
 }
 
@@ -140,6 +152,17 @@ export function requestedPaneSurface(paneId: string): TerminalFocusTarget | null
  */
 export function requestedForDictation(paneId: string): boolean {
   return current?.explicit === true && current.paneId === paneId && current.forDictation;
+}
+
+/**
+ * The caret the still-current dictation request for `paneId` asked for, taken:
+ * a later grab of the same request leaves the caret where the user put it.
+ */
+export function takeRequestedDictationCaret(paneId: string): number | null {
+  if (!current?.explicit || current.paneId !== paneId || !current.forDictation) return null;
+  const caret = current.caret;
+  current.caret = null;
+  return caret?.() ?? null;
 }
 
 /** The surface `paneId` should still end up on, requested or settled on arrival, or null. */

@@ -568,6 +568,7 @@ export type {
   VoiceLiveSessionUpdate,
   VoiceRevealRequest,
   VoiceSessionElsewhere,
+  VoiceStopRequest,
   VoiceKeytermSource,
   VoiceSentTerm,
   LastDictationTerms,

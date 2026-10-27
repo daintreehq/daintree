@@ -25,6 +25,7 @@ import type {
   VoiceLiveSessionUpdate,
   VoiceRevealRequest,
   VoiceSessionEndReason,
+  VoiceStopRequest,
 } from "../voice.js";
 import type {
   VoiceCorrectionTiming,
@@ -2234,8 +2235,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * same snapshot; the larger `revision` wins.
      */
     onLiveSession(callback: (update: VoiceLiveSessionUpdate) => void): () => void;
-    /** To the owner, when another view's dictation key asked it to stop. */
-    onStopRequested(callback: (payload: { sessionId: string }) => void): () => void;
+    /**
+     * To the owner, when another view's dictation key, or a page's, asked it to
+     * stop; `returnToTarget` when its target pane should take the keyboard back.
+     */
+    onStopRequested(callback: (payload: VoiceStopRequest) => void): () => void;
     /**
      * When another view's indicator asked to be taken to the live session: the
      * owner focuses its target, and the view on screen in the owner's window

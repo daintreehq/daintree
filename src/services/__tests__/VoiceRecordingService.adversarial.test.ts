@@ -11,6 +11,7 @@ import { TRANSCRIPTION_ITEM_FAILED_CODE } from "@shared/types/voice";
 // suite that runs it for real is voiceComposerFocus.test.tsx.
 const revealDictationComposer = vi.hoisted(() => vi.fn());
 vi.mock("@/services/voiceComposerFocus", () => ({
+  beginDictationReturn: vi.fn(() => null),
   focusDictationComposer: vi.fn(),
   revealDictationComposer,
 }));

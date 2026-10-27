@@ -25,6 +25,7 @@ const runtime = vi.hoisted(() => ({
 const focusDictationComposer = vi.hoisted(() => vi.fn());
 const revealDictationComposer = vi.hoisted(() => vi.fn());
 vi.mock("@/services/voiceComposerFocus", () => ({
+  beginDictationReturn: vi.fn(() => null),
   focusDictationComposer,
   revealDictationComposer,
 }));

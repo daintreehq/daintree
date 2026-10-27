@@ -218,6 +218,7 @@ function makeSender() {
       destroyedListeners.delete(fn);
     }),
     isDestroyed: () => sender.destroyed,
+    focus: vi.fn(),
     send: vi.fn((channel: string, payload: unknown) => {
       sender.sent.push({ channel, payload });
     }),
@@ -1457,22 +1458,75 @@ describe("voiceInput — a session live in another view (#14601)", () => {
   it("asks the owner to stop when another view's dictation key names its session", async () => {
     await start(ownerA, "a");
 
-    expect(await invoke(CHANNELS.VOICE_INPUT_STOP_LIVE, viewB, "a")).toBe(true);
+    expect(await invoke(CHANNELS.VOICE_INPUT_STOP_LIVE, viewB, { sessionId: "a" })).toBe(true);
 
     expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_STOP_REQUESTED)).toEqual([{ sessionId: "a" }]);
     // The owner runs the stop, so its drain keeps the text; main stops nothing itself.
     expect(shared.calls).not.toContain("drain");
     expect(shared.calls).not.toContain("hard-stop");
+    // Not the key's own stop, so nothing is brought forward.
+    expect(winA.focus).not.toHaveBeenCalled();
+    expect(ownerA.focus).not.toHaveBeenCalled();
   });
 
   it("ignores a stop for a session that isn't the live one", async () => {
     await start(ownerA, "a");
 
-    expect(await invoke(CHANNELS.VOICE_INPUT_STOP_LIVE, viewB, "old")).toBe(false);
+    expect(await invoke(CHANNELS.VOICE_INPUT_STOP_LIVE, viewB, { sessionId: "old" })).toBe(false);
     await stop(ownerA, "a");
-    expect(await invoke(CHANNELS.VOICE_INPUT_STOP_LIVE, viewB, "a")).toBe(false);
+    expect(
+      await invoke(CHANNELS.VOICE_INPUT_STOP_LIVE, viewB, { sessionId: "a", returnToTarget: true })
+    ).toBe(false);
 
     expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_STOP_REQUESTED)).toEqual([]);
+    expect(winA.focus).not.toHaveBeenCalled();
+  });
+
+  describe("taking the person back to the dictation (#14791)", () => {
+    const back = { sessionId: "a", returnToTarget: true };
+
+    it("brings the owner's window forward and gives the owner the keyboard when it's on screen", async () => {
+      winA.isMinimized.mockReturnValue(true);
+      await start(ownerA, "a");
+
+      expect(await invoke(CHANNELS.VOICE_INPUT_STOP_LIVE, viewB, back)).toBe(true);
+
+      expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_STOP_REQUESTED)).toEqual([back]);
+      expect(winA.restore).toHaveBeenCalled();
+      expect(winA.show).toHaveBeenCalled();
+      expect(winA.focus).toHaveBeenCalled();
+      expect(winB.focus).not.toHaveBeenCalled();
+      // A browser panel or portal tab there may hold the keyboard: a view's own
+      // focus moves can't take it from another view.
+      expect(ownerA.focus).toHaveBeenCalled();
+      // The owner's stop request carries the return; a reveal on top would
+      // bring its pane forward twice.
+      expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_REVEAL_REQUESTED)).toEqual([]);
+      expect(sentOn(viewB, CHANNELS.VOICE_INPUT_REVEAL_REQUESTED)).toEqual([]);
+    });
+
+    it("has the view on screen in the owner's window switch to the owner's workspace", async () => {
+      shared.shownIn.set(winA, viewC);
+      await start(ownerA, "a");
+
+      await invoke(CHANNELS.VOICE_INPUT_STOP_LIVE, viewB, back);
+
+      expect(sentOn(viewC, CHANNELS.VOICE_INPUT_REVEAL_REQUESTED)).toEqual([
+        { sessionId: "a", hostId: "local", workspaceId: "project-a" },
+      ]);
+      expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_STOP_REQUESTED)).toEqual([back]);
+      // The switch focuses the view it brings in.
+      expect(ownerA.focus).not.toHaveBeenCalled();
+      expect(winA.focus).toHaveBeenCalled();
+    });
+  });
+
+  it("gives the owner on screen the keyboard when another window's indicator asks for it", async () => {
+    await start(ownerA, "a");
+
+    await invoke(CHANNELS.VOICE_INPUT_REVEAL_LIVE, viewB, "a");
+
+    expect(ownerA.focus).toHaveBeenCalled();
   });
 
   const reveal = { sessionId: "a", hostId: "local", workspaceId: "project-a" };
@@ -1519,11 +1573,16 @@ describe("voiceInput — a session live in another view (#14601)", () => {
     const press = (overrides: Partial<Electron.Input> = {}) =>
       ({ type: "keyDown", key: ".", isAutoRepeat: false, ...overrides }) as Electron.Input;
 
-    it("asks the owner to stop and takes the key from the page", async () => {
+    it("asks the owner to stop, takes the key from the page and goes back to the dictation", async () => {
       await start(ownerA, "a");
 
       expect(claimDictationKey(press())).toBe(true);
-      expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_STOP_REQUESTED)).toEqual([{ sessionId: "a" }]);
+      expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_STOP_REQUESTED)).toEqual([
+        { sessionId: "a", returnToTarget: true },
+      ]);
+      // The page may be a browser panel in the owner's own window.
+      expect(winA.focus).toHaveBeenCalled();
+      expect(ownerA.focus).toHaveBeenCalled();
     });
 
     it("takes a held key's repeats without asking again", async () => {
@@ -1554,7 +1613,9 @@ describe("voiceInput — a session live in another view (#14601)", () => {
       await start(ownerA, "a");
 
       expect(claimPageDictationKey(press())).toBe(true);
-      expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_STOP_REQUESTED)).toEqual([{ sessionId: "a" }]);
+      expect(sentOn(ownerA, CHANNELS.VOICE_INPUT_STOP_REQUESTED)).toEqual([
+        { sessionId: "a", returnToTarget: true },
+      ]);
 
       cleanup();
       cleanup = () => {};
@@ -1687,9 +1748,14 @@ describe("voiceInput — one dictation across hosts (#14773)", () => {
     it("is stopped by the dictation key in a host's view", async () => {
       await startIn(local, "a", "Alpha");
 
-      expect(await invoke(CHANNELS.VOICE_INPUT_STOP_LIVE, studio2, "a")).toBe(true);
+      const back = { sessionId: "a", returnToTarget: true };
+      expect(await invoke(CHANNELS.VOICE_INPUT_STOP_LIVE, studio2, back)).toBe(true);
 
-      expect(sentOn(local, CHANNELS.VOICE_INPUT_STOP_REQUESTED)).toEqual([{ sessionId: "a" }]);
+      expect(sentOn(local, CHANNELS.VOICE_INPUT_STOP_REQUESTED)).toEqual([back]);
+      // This Mac's view goes back on screen in the owner's window.
+      expect(sentOn(studio1, CHANNELS.VOICE_INPUT_REVEAL_REQUESTED)).toEqual([
+        { sessionId: "a", hostId: "local", workspaceId: "project-a" },
+      ]);
     });
 
     it("is drained, its text kept on this Mac, when a host's view starts one", async () => {

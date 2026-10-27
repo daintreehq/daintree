@@ -124,6 +124,20 @@ export interface VoiceRevealRequest {
 }
 
 /**
+ * The dictation key stopping the live session from outside its view: another
+ * view's key, or a page (a browser panel, a portal tab) handing it over. Sent
+ * by the other view to main, and by main on to the owner. `returnToTarget`
+ * takes the person back to the dictation's pane once it stops (#14791): main
+ * brings the owner's window and workspace forward, and the owner puts the
+ * keyboard in its composer. A stop nobody pressed the key for, such as an
+ * agent's, leaves focus where it is.
+ */
+export interface VoiceStopRequest {
+  sessionId: string;
+  returnToTarget?: boolean;
+}
+
+/**
  * The live session as one view sees it: `session` is null when none is live or
  * that view owns it. `revision` grows with every change, so a pulled snapshot
  * can't overwrite a newer push.

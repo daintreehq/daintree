@@ -11,7 +11,7 @@ import { EditorView } from "@codemirror/view";
 import type { PtyPanelData } from "@shared/types/panel";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
-import { registerPanelFocusHandler } from "@/components/Panel/panelFocusRegistry";
+import { focusPanelInput, registerPanelFocusHandler } from "@/components/Panel/panelFocusRegistry";
 import { HybridInputBar, type HybridInputBarHandle } from "@/components/Terminal/HybridInputBar";
 import {
   _resetPaneFocusRequestsForTesting,
@@ -21,8 +21,13 @@ import {
 import { createWorktreeStore, setCurrentViewStore } from "@/store/createWorktreeStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
+import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { initBuiltInPanelKinds } from "@/panels/registry";
-import { focusDictationComposer, revealDictationComposer } from "../voiceComposerFocus";
+import {
+  beginDictationReturn,
+  focusDictationComposer,
+  revealDictationComposer,
+} from "../voiceComposerFocus";
 
 const WT_ID = "/repo/wt";
 
@@ -351,5 +356,169 @@ describe("revealDictationComposer (#14773)", () => {
 
     expect(document.activeElement).toBe(terminal);
     expect(requestedPaneSurface("term-2")).toBeNull();
+  });
+});
+
+describe("beginDictationReturn (#14791)", () => {
+  const HERE = { pressedHere: true };
+  it("takes the keyboard back from another pane's field, caret after the dictated words", async () => {
+    const { view, editor } = await mountPane();
+    await write("fix the login bug please");
+    // Left at the start of the draft before the person went elsewhere.
+    await showCaret(view, 0);
+    const other = elsewhere('<div data-panel-id="term-2"><textarea></textarea></div>');
+    const field = other.querySelector("textarea")!;
+    field.value = "half typed";
+    field.focus();
+
+    beginDictationReturn("term-1", HERE)!.focus(() => 17);
+    flushFrames();
+
+    expect(document.activeElement).toBe(editor);
+    expect(selection(view)).toEqual({ anchor: 17, head: 17 });
+    expect(field.value).toBe("half typed");
+  });
+
+  it("puts the caret after the words in a composer that never showed one, not at the end", async () => {
+    const { view, editor, terminal } = await mountPane();
+    await write("fix the login bug please");
+    terminal.focus();
+
+    beginDictationReturn("term-1", HERE)!.focus(() => 17);
+    flushFrames();
+
+    expect(document.activeElement).toBe(editor);
+    expect(selection(view)).toEqual({ anchor: 17, head: 17 });
+  });
+
+  it("keeps the composer's own caret when there are no words to go after", async () => {
+    const { view, editor, terminal } = await mountPane();
+    await write("hello world");
+    await showCaret(view, 5);
+    terminal.focus();
+
+    beginDictationReturn("term-1", HERE)!.focus(() => null);
+    flushFrames();
+
+    expect(document.activeElement).toBe(editor);
+    expect(selection(view)).toEqual({ anchor: 5, head: 5 });
+  });
+
+  it("places the caret once: a later grab for the same return leaves it where the person put it", async () => {
+    const { view, editor, terminal } = await mountPane();
+    await write("fix the login bug please");
+    terminal.focus();
+    beginDictationReturn("term-1", HERE)!.focus(() => 17);
+    flushFrames();
+    await showCaret(view, 3);
+    // A control takes the keyboard without ending the return, then the pane asks again.
+    elsewhere("<button>Copy</button>").focus();
+
+    focusPanelInput("term-1", "hybridInput");
+    flushFrames();
+
+    expect(document.activeElement).toBe(editor);
+    expect(selection(view)).toEqual({ anchor: 3, head: 3 });
+  });
+
+  it("does nothing, caret included, when the keyboard is in the composer already", async () => {
+    const { view, editor } = await mountPane();
+    await write("hello world");
+    view.focus();
+    const dispatch = vi.spyOn(view, "dispatch");
+
+    expect(beginDictationReturn("term-1", HERE)).toBeNull();
+    flushFrames();
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(editor);
+    expect(requestedPaneSurface("term-1")).toBeNull();
+  });
+
+  it("leaves an open modal alone", async () => {
+    await mountPane();
+    const dialog = elsewhere('<div role="dialog" aria-modal="true"><button>OK</button></div>');
+    dialog.querySelector("button")!.focus();
+
+    expect(beginDictationReturn("term-1", HERE)).toBeNull();
+  });
+
+  it("is called off by a press before the pane is ready", async () => {
+    const { terminal } = await mountPane();
+    terminal.focus();
+    const back = beginDictationReturn("term-1", HERE)!;
+    const field = elsewhere("<input />");
+
+    clickInto(field);
+    expect(back.isCurrent()).toBe(false);
+    back.focus(() => 3);
+    flushFrames();
+
+    expect(document.activeElement).toBe(field);
+    expect(requestedPaneSurface("term-1")).toBeNull();
+  });
+
+  it("has nothing to go back to for the assistant, whose input isn't a pane", async () => {
+    await mountPane();
+    const { activeSlot, sessions } = useHelpPanelStore.getState();
+    const before = sessions;
+    useHelpPanelStore.setState({
+      sessions: { ...sessions, [activeSlot]: { ...sessions[activeSlot]!, terminalId: "term-1" } },
+    });
+    try {
+      expect(beginDictationReturn("term-1", HERE)).toBeNull();
+    } finally {
+      useHelpPanelStore.setState({ sessions: before });
+    }
+  });
+
+  it("goes back from another view's key even though this view left the composer focused", async () => {
+    const { view, editor } = await mountPane();
+    await write("fix the login bug please");
+    view.focus();
+    await showCaret(view, 3);
+
+    const back = beginDictationReturn("term-1", { pressedHere: false });
+    back!.focus(() => 17);
+    flushFrames();
+
+    expect(document.activeElement).toBe(editor);
+    expect(selection(view)).toEqual({ anchor: 17, head: 17 });
+  });
+
+  it("puts the caret after the words once an editor still catching up shows them", async () => {
+    const { view, editor, terminal } = await mountPane();
+    await write("fix the bug");
+    terminal.focus();
+    // The last words are in the draft; the editor hasn't synced them yet.
+    useTerminalInputStore.getState().setDraftInput("term-1", "fix the login bug please");
+
+    beginDictationReturn("term-1", HERE)!.focus(() => 17);
+    flushFrames();
+    expect(document.activeElement).toBe(editor);
+    // Until then it keeps the composer's own rules: the end of what it shows.
+    expect(selection(view)).toEqual({ anchor: 11, head: 11 });
+    await act(async () => {
+      useTerminalInputStore.getState().bumpExternalDraftRevision({ keepsSelection: true });
+    });
+
+    expect(view.state.doc.toString()).toBe("fix the login bug please");
+    expect(selection(view)).toEqual({ anchor: 17, head: 17 });
+  });
+
+  it("leaves the keyboard to a dictated send that's already under way", async () => {
+    const { terminal } = await mountPane();
+    terminal.focus();
+    const back = beginDictationReturn("term-1", HERE)!;
+    useTerminalInputStore.getState().setVoiceSubmitting("term-1", true);
+    try {
+      back.focus(() => 3);
+      flushFrames();
+    } finally {
+      useTerminalInputStore.getState().setVoiceSubmitting("term-1", false);
+    }
+
+    expect(document.activeElement).toBe(terminal);
+    expect(requestedPaneSurface("term-1")).toBeNull();
   });
 });

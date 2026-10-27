@@ -26,6 +26,7 @@ import type {
   VoiceSentTerm,
   VoiceSessionEndReason,
   VoiceStartOutcome,
+  VoiceStopRequest,
 } from "../../../shared/types/voice.js";
 import type {
   VoiceCorrectionTiming,
@@ -120,6 +121,7 @@ import {
   VoiceInputRewritePayloadSchema,
   VoiceInputStartOptionsSchema,
   VoiceSessionIdSchema,
+  VoiceStopLiveRequestSchema,
   type VoiceInputCorrectPayload,
   type VoiceInputRewritePayload,
   type VoiceInputStartOptions,
@@ -323,15 +325,48 @@ export function getLiveVoiceSession(): {
 }
 
 /**
+ * Brings the session's window forward with its workspace on screen. Only the
+ * owner's own window does this: a switch asked from any other window would
+ * release the owner's cached view to open its workspace there, ending the
+ * session it was meant to show. The view on screen there may be on another
+ * host than the owner's, so it is told the host as well as the workspace
+ * (#14773). An owner already on screen takes the keyboard from any other view
+ * in its window, a browser panel or a portal tab, which its own focus moves
+ * can't reach; a switch focuses the view it brings in.
+ */
+function showSessionWindow(session: VoiceSession): void {
+  const win = getWindowForWebContents(session.sender);
+  if (!win || win.isDestroyed()) return;
+  const shown = getAppWebContents(win);
+  const ownerShown = shown.id === session.webContentsId;
+  if (!ownerShown && !shown.isDestroyed()) {
+    shown.send(CHANNELS.VOICE_INPUT_REVEAL_REQUESTED, {
+      sessionId: session.id,
+      ...workspaceOf(session),
+    });
+  }
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+  if (ownerShown) session.sender.focus();
+}
+
+/**
  * Ask the live session's owner to stop it, as the owner's own dictation key
  * would: the owner drains it, so the text lands in its draft and its microphone
- * is released. False when nothing is live, or when `sessionId` names another.
+ * is released. With `returnToTarget`, the key takes the person back to the
+ * dictation's pane (#14791): its window and workspace come forward here, and
+ * the owner puts the keyboard in its composer. False when nothing is live, or
+ * when `sessionId` names another.
  */
-export function requestLiveSessionStop(sessionId?: string): boolean {
+export function requestLiveSessionStop(sessionId?: string, returnToTarget = false): boolean {
   const session = liveSession;
   if (!session || session.ended || session.sender.isDestroyed()) return false;
   if (sessionId !== undefined && session.id !== sessionId) return false;
-  session.sender.send(CHANNELS.VOICE_INPUT_STOP_REQUESTED, { sessionId: session.id });
+  const request: VoiceStopRequest = { sessionId: session.id };
+  if (returnToTarget) request.returnToTarget = true;
+  session.sender.send(CHANNELS.VOICE_INPUT_STOP_REQUESTED, request);
+  if (returnToTarget) showSessionWindow(session);
   return true;
 }
 
@@ -346,7 +381,7 @@ export function claimDictationKey(input: Electron.Input): boolean {
   if (!liveSession || liveSession.ended) return false;
   if (!isDictationKey(input)) return false;
   if (input.isAutoRepeat) return true;
-  return requestLiveSessionStop();
+  return requestLiveSessionStop(undefined, true);
 }
 
 /**
@@ -1990,31 +2025,20 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     liveSessionUpdateFor(ctx.webContentsId);
 
   // Another view's dictation key.
-  const handleStopLive = (sessionId: string): boolean => requestLiveSessionStop(sessionId);
+  const handleStopLive = (request: VoiceStopRequest): boolean =>
+    requestLiveSessionStop(request.sessionId, request.returnToTarget === true);
 
-  // Another view's indicator. The owner's own window brings it forward: a
-  // switch asked from any other window would release the owner's cached view
-  // to open its workspace there, ending the session it was meant to show. The
-  // view on screen there may be on another host than the owner's, so it is
-  // told the host as well as the workspace (#14773).
+  // Another view's indicator.
   const handleRevealLive = (sessionId: string): boolean => {
     const session = liveSession;
     if (!session || session.id !== sessionId || session.ended) return false;
     if (session.sender.isDestroyed()) return false;
-    const reveal = { sessionId, ...workspaceOf(session) };
-    const win = getWindowForWebContents(session.sender);
-    if (win && !win.isDestroyed()) {
-      // The view on screen there switches to the owner's workspace.
-      const shown = getAppWebContents(win);
-      if (shown.id !== session.webContentsId && !shown.isDestroyed()) {
-        shown.send(CHANNELS.VOICE_INPUT_REVEAL_REQUESTED, reveal);
-      }
-      if (win.isMinimized()) win.restore();
-      win.show();
-      win.focus();
-    }
+    showSessionWindow(session);
     // The owner focuses the panel it is dictating into.
-    session.sender.send(CHANNELS.VOICE_INPUT_REVEAL_REQUESTED, reveal);
+    session.sender.send(CHANNELS.VOICE_INPUT_REVEAL_REQUESTED, {
+      sessionId,
+      ...workspaceOf(session),
+    });
     return true;
   };
 
@@ -2344,7 +2368,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       }),
       stopLive: opValidated(
         VOICE_INPUT_METHOD_CHANNELS.stopLive,
-        VoiceSessionIdSchema,
+        VoiceStopLiveRequestSchema,
         handleStopLive
       ),
       revealLive: opValidated(

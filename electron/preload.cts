@@ -193,6 +193,7 @@ import type {
   VoiceLiveSessionUpdate,
   VoiceRevealRequest,
   VoiceSessionEndReason,
+  VoiceStopRequest,
 } from "../shared/types/index.js";
 import type { ColorVisionMode, AppColorScheme } from "../shared/types/appTheme.js";
 import type { VoiceSessionReport } from "../shared/types/voiceSessionSummary.js";
@@ -3020,7 +3021,7 @@ function buildElectronApi(): ElectronAPI {
       ) => _typedOn(CHANNELS.VOICE_INPUT_SESSION_ENDED, callback),
       onLiveSession: (callback: (update: VoiceLiveSessionUpdate) => void) =>
         _typedOn(CHANNELS.VOICE_INPUT_LIVE_SESSION, callback),
-      onStopRequested: (callback: (payload: { sessionId: string }) => void) =>
+      onStopRequested: (callback: (payload: VoiceStopRequest) => void) =>
         _typedOn(CHANNELS.VOICE_INPUT_STOP_REQUESTED, callback),
       onRevealRequested: (callback: (payload: VoiceRevealRequest) => void) =>
         _typedOn(CHANNELS.VOICE_INPUT_REVEAL_REQUESTED, callback),

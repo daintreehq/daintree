@@ -1,6 +1,13 @@
-import { requestPaneFocus } from "@/components/Terminal/paneFocusRequest";
+import {
+  captureFocusEpoch,
+  isFocusEpochCurrent,
+  paneSurfaceHoldingFocus,
+  requestPaneFocus,
+} from "@/components/Terminal/paneFocusRequest";
 import { findPanelIdForElement, hasBlockingOverlay, hasUsefulFocus } from "@/lib/typeAnywhere";
 import { usePanelStore } from "@/store/panelStore";
+import { selectSlotForTerminal, useHelpPanelStore } from "@/store/helpPanelStore";
+import { useTerminalInputStore } from "@/store/terminalInputStore";
 
 /**
  * Dictation writes into a pane's composer, so starting it takes the keyboard
@@ -30,10 +37,49 @@ export function focusDictationComposer(panelId: string): void {
  * The indicator's "go there" (#14773): the person asked for this pane, so the
  * keyboard moves to its composer from wherever this view last left it, which
  * may be another pane from before they went elsewhere. An open modal still
- * keeps it, and only the selected pane's composer is taken.
+ * keeps it, and only the selected pane's composer is taken. `caret`, read when
+ * the composer takes the keyboard, places its caret instead of the rules
+ * dictation starts with.
  */
-export function revealDictationComposer(panelId: string): void {
+export function revealDictationComposer(panelId: string, caret?: () => number | null): void {
   if (usePanelStore.getState().focusedId !== panelId) return;
   if (hasBlockingOverlay()) return;
-  requestPaneFocus(panelId, "hybridInput", { forDictation: true });
+  requestPaneFocus(panelId, "hybridInput", { forDictation: true, ...(caret ? { caret } : {}) });
+}
+
+/** The dictation key's way back to its pane (#14791), from {@link beginDictationReturn}. */
+export interface DictationReturn {
+  /** False once a press, or a newer request for a pane's keyboard, has called it off. */
+  isCurrent: () => boolean;
+  /** Puts the keyboard in the pane's composer, its caret where `caret` says when it lands. */
+  focus: (caret: () => number | null) => void;
+}
+
+/**
+ * The dictation key is stopping this pane's dictation and taking the person
+ * back to it (#14791). Called as the key stops it, before the pane comes
+ * forward. Null when there is nothing to do: the key was pressed with the
+ * keyboard in that composer already, or a modal holds it. Pressed in another
+ * view, the composer this view last focused kept only the DOM's focus, so it
+ * goes back all the same. The assistant's input isn't a pane, so a dictation
+ * there has none to go back to.
+ */
+export function beginDictationReturn(
+  panelId: string,
+  { pressedHere }: { pressedHere: boolean }
+): DictationReturn | null {
+  if (selectSlotForTerminal(useHelpPanelStore.getState(), panelId) !== null) return null;
+  if (hasBlockingOverlay()) return null;
+  if (pressedHere && paneSurfaceHoldingFocus(panelId) === "hybridInput") return null;
+  const epoch = captureFocusEpoch();
+  const isCurrent = () => isFocusEpochCurrent(epoch);
+  return {
+    isCurrent,
+    focus: (caret) => {
+      if (!isCurrent()) return;
+      // A dictated send already under way owns the keyboard, its hand-back included.
+      if (useTerminalInputStore.getState().voiceSubmittingPanels.has(panelId)) return;
+      revealDictationComposer(panelId, caret);
+    },
+  };
 }
