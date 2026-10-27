@@ -74,13 +74,23 @@ describe("cleanup corpus", () => {
 describe("corpusProblems", () => {
   it("flags fixes the raw transcript already has, drops with nothing to drop and keeps that go missing", () => {
     const problems = corpusProblems([
-      makeCase({ id: "a", raw: "invalidate the cache", fixes: { "the cache": "misread" }, drops: [] }),
+      makeCase({
+        id: "a",
+        raw: "invalidate the cache",
+        fixes: { "the cache": "misread" },
+        drops: [],
+      }),
       makeCase({ id: "b", raw: "invalidate the cash", drops: ["um"] }),
       makeCase({ id: "c", keep: ["branch changes now"] }),
       makeCase({ id: "d", uncertain: ["cash"] }),
       makeCase({ id: "d", style: "deepgram", uncertain: ["cache"] }),
       makeCase({ id: "e", keep: ["the branch"], reference: "Invalidate the cache on change." }),
-      makeCase({ id: "f", fixes: { "the cache": "misread", rebuild: "form" }, raw: "um rerun --watch", drops: [] }),
+      makeCase({
+        id: "f",
+        fixes: { "the cache": "misread", rebuild: "form" },
+        raw: "um rerun --watch",
+        drops: [],
+      }),
     ]);
     expect(problems).toEqual([
       'a: fix "the cache" is already in the raw transcript',
@@ -686,7 +696,14 @@ describe("rescore", () => {
           inputHash: inputHash(entry),
           sent: {},
         })),
-        { id: "gone:openai", style: "openai", source: "context", chars: 5, inputHash: "x", sent: {} },
+        {
+          id: "gone:openai",
+          style: "openai",
+          source: "context",
+          chars: 5,
+          inputHash: "x",
+          sent: {},
+        },
       ],
       prices: {},
       predictionProbes: [],

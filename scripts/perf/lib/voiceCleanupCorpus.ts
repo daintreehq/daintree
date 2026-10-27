@@ -180,12 +180,20 @@ export const REPLAY_TRANSCRIPTS: Readonly<Record<string, ReplayTranscripts>> = {
     reference: "1. Read the failing test.\n2. Find the race.\n3. Fix it without adding a timeout.",
     openai: {
       raw: "First, read the failing test. Second, find the race. Third, fix it without adding a timeout.",
-      fixes: { "1. Read the failing test": "form", "2. Find the race": "form", "3. Fix it without adding a timeout": "form" },
+      fixes: {
+        "1. Read the failing test": "form",
+        "2. Find the race": "form",
+        "3. Fix it without adding a timeout": "form",
+      },
       keep: ["without adding a timeout"],
     },
     deepgram: {
       raw: "First, read the failing test. Second, find the race. Third, fix it without adding a time out.",
-      fixes: { "1. Read the failing test": "form", "2. Find the race": "form", "3. Fix it without adding a timeout": "form" },
+      fixes: {
+        "1. Read the failing test": "form",
+        "2. Find the race": "form",
+        "3. Fix it without adding a timeout": "form",
+      },
     },
   },
   "react-compiler": {
