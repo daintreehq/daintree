@@ -2,12 +2,14 @@ import { useEffect, useId, useRef, useState } from "react";
 import type { PendingHostSwitch } from "@shared/types/ipc/remoteHosts";
 import { Button } from "@/components/ui/button";
 import { SkeletonBone } from "@/components/ui/Skeleton";
-import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import { Spinner } from "@/components/ui/Spinner";
+import { UI_DOHERTY_THRESHOLD, UI_STILL_WORKING_MS } from "@/lib/animationUtils";
 import { cn } from "@/lib/utils";
 import { registerEscape } from "@/lib/escapeStack";
 import { ClientAppError } from "@/utils/clientAppError";
 import { hostSwitchRecovery, switchToHost } from "@/components/Hosts/hostSwitching";
-import { STILL_WORKING_MS, pendingHostSwitchTitle } from "./pendingHostSwitchFeedback";
+import { DaintreeMarkDraw } from "./DaintreeMarkDraw";
+import { pendingHostSwitchHeading, pendingHostSwitchStatus } from "./pendingHostSwitchFeedback";
 
 const SIDEBAR_CARDS = 4;
 
@@ -49,7 +51,7 @@ export function HostSwitchScreen({ pending }: { pending: PendingHostSwitch }) {
   // Measured per switch, across its phases: a Retry starts the count again.
   useEffect(() => {
     setStillWorking(false);
-    const timer = setTimeout(() => setStillWorking(true), STILL_WORKING_MS);
+    const timer = setTimeout(() => setStillWorking(true), UI_STILL_WORKING_MS);
     return () => clearTimeout(timer);
   }, [pending.switchId]);
 
@@ -115,11 +117,8 @@ export function HostSwitchScreen({ pending }: { pending: PendingHostSwitch }) {
     if (recovery.label !== "Retry") cancel(pending);
     recovery.run();
   };
-  const message = failed
-    ? (pending.failure?.message ?? "Couldn't reach this host. Check that it is on and try again.")
-    : stillWorking
-      ? "Still working…"
-      : null;
+  const failureMessage =
+    pending.failure?.message ?? "Couldn't reach this host. Check that it is on and try again.";
 
   return (
     <div
@@ -130,7 +129,9 @@ export function HostSwitchScreen({ pending }: { pending: PendingHostSwitch }) {
       data-phase={pending.phase}
       className={cn(
         "fixed inset-0 z-[calc(var(--z-toolbar)+1)] flex flex-col bg-surface-canvas",
-        !shown && "opacity-0"
+        !shown && "opacity-0",
+        // Nothing is loading any more, so the placeholders hold still.
+        failed && "[&_[data-skeleton-bone]]:animate-none"
       )}
       ref={screenRef}
       tabIndex={-1}
@@ -169,34 +170,61 @@ export function HostSwitchScreen({ pending }: { pending: PendingHostSwitch }) {
             </div>
           ))}
         </div>
-        <div className="flex min-w-0 flex-1 flex-col items-center justify-center gap-5 p-8">
+        {/* Every zone has a fixed height, so the mark, the status and the
+            buttons stay where they are as the phase, "Still working…" and the
+            failure come and go. */}
+        <div className="flex min-w-0 flex-1 flex-col items-center justify-center p-8">
+          <div className="h-24 w-[134px] shrink-0 text-text-secondary">
+            {/* Mounted when the screen is first shown and kept for the whole
+                switch, a retry included, so the draw plays once. */}
+            {shown && <DaintreeMarkDraw className="size-full" />}
+          </div>
           <div
             role={failed ? "alert" : "status"}
-            className="flex max-w-md flex-col items-center gap-2 text-center"
+            className="mt-6 flex h-28 w-full max-w-md flex-col items-center gap-2 text-center"
           >
-            <h2 id={titleId} className="text-lg font-semibold text-text-primary">
-              {pendingHostSwitchTitle(pending)}
+            <h2
+              id={titleId}
+              className="w-full shrink-0 truncate text-lg font-semibold text-text-primary"
+            >
+              {pendingHostSwitchHeading(pending)}
             </h2>
-            {message !== null && <p className="text-sm text-text-secondary">{message}</p>}
+            {failed ? (
+              <p className="min-h-0 w-full overflow-y-auto break-words text-sm text-text-secondary">
+                {failureMessage}
+              </p>
+            ) : (
+              <>
+                <div className="flex h-6 shrink-0 items-center gap-2 text-sm text-text-secondary">
+                  <Spinner size="sm" />
+                  <p>{pendingHostSwitchStatus(pending.phase)}</p>
+                </div>
+                <p className="h-5 shrink-0 text-sm text-text-secondary">
+                  {stillWorking ? "Still working…" : null}
+                </p>
+              </>
+            )}
           </div>
-          {(recovery || cancellable) && (
-            <div className="flex items-center gap-2">
-              {recovery && (
-                <Button ref={primaryRef} variant="contrast" onClick={runRecovery}>
-                  {recovery.label}
-                </Button>
-              )}
-              {cancellable && (
-                <Button
-                  ref={recovery ? undefined : primaryRef}
-                  variant="secondary"
-                  onClick={() => cancel(pending)}
-                >
-                  Cancel
-                </Button>
-              )}
-            </div>
-          )}
+          <div className="mt-5 h-8 shrink-0">
+            {(recovery || cancellable) && (
+              <div className="flex items-center gap-2">
+                {recovery && (
+                  <Button ref={primaryRef} variant="contrast" onClick={runRecovery}>
+                    {recovery.label}
+                  </Button>
+                )}
+                {cancellable && (
+                  <Button
+                    ref={recovery ? undefined : primaryRef}
+                    variant="secondary"
+                    onClick={() => cancel(pending)}
+                  >
+                    Cancel
+                  </Button>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>

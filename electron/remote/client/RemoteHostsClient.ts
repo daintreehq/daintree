@@ -995,8 +995,8 @@ export class RemoteHostsClient {
       if (current?.switchId === ticket.id && current.committed) return;
       if (
         current?.switchId === ticket.id &&
-        current.phase === phase &&
-        current.projectName === pendingProjectName
+        (pendingPhaseRank(phase) < pendingPhaseRank(current.phase) ||
+          (current.phase === phase && current.projectName === pendingProjectName))
       ) {
         return;
       }
@@ -1601,7 +1601,8 @@ export class RemoteHostsClient {
 
   /**
    * Daintree started or stopped being started on a host: a switch still
-   * waiting for that host's link says which, as soon as it changes.
+   * waiting for that host's link says it is starting as soon as it is. It
+   * never steps back to connecting when the start attempt ends.
    */
   refreshPendingSwitches(hostId: HostId): void {
     const phase = this.options.isStarting?.(hostId) ? "starting" : "connecting";
@@ -1609,9 +1610,7 @@ export class RemoteHostsClient {
       if (
         pending.hostId !== hostId ||
         pending.committed ||
-        pending.phase === "opening" ||
-        pending.phase === "failed" ||
-        pending.phase === phase
+        pendingPhaseRank(phase) <= pendingPhaseRank(pending.phase)
       ) {
         continue;
       }
@@ -1849,6 +1848,24 @@ export class RemoteHostsClient {
     if (key !== null) return parseHostScopedKey(key).hostId;
     const windowId = this.windowOf(ctx);
     return windowId === null ? LOCAL_HOST_ID : this.options.bindings.get(windowId);
+  }
+}
+
+/**
+ * How far a switch has got. A switch's phase only moves forward: a host that
+ * is being started comes and goes with each attempt, and showing every
+ * turn of that would have the screen change its words back and forth.
+ */
+function pendingPhaseRank(phase: PendingHostSwitch["phase"]): number {
+  switch (phase) {
+    case "connecting":
+      return 0;
+    case "starting":
+      return 1;
+    case "opening":
+      return 2;
+    case "failed":
+      return 3;
   }
 }
 

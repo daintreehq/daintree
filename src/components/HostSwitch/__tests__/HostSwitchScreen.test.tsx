@@ -58,7 +58,8 @@ describe("HostSwitchScreen", () => {
   it("shows where the window is going at once while the link comes up, and Cancel goes back", () => {
     render(<HostSwitchScreen pending={pending()} />);
     expect(screen().className).not.toContain("opacity-0");
-    expect(screen().textContent).toContain("Connecting to studio-02…");
+    expect(screen().textContent).toContain("Switching to studio-02");
+    expect(screen().textContent).toContain("Connecting…");
     expect(document.activeElement).toBe(button("Cancel"));
 
     fireEvent.click(button("Cancel")!);
@@ -151,6 +152,49 @@ describe("HostSwitchScreen", () => {
 
     rerender(<HostSwitchScreen pending={pending({ switchId: "sw-2" })} />);
     expect(screen().textContent).not.toContain("Still working…");
+  });
+
+  it("keeps one screen, one logo and one heading through every phase, a failure and a Retry", () => {
+    const failure = { code: "HOST_DISCONNECTED" as const, message: "ssh: connect timed out" };
+    const { rerender } = render(<HostSwitchScreen pending={pending()} />);
+    const root = screen();
+    const mark = document.querySelector('[data-testid="daintree-mark"]');
+    expect(mark).not.toBeNull();
+    expect(root.querySelector('[role="status"] .animate-spin')).not.toBeNull();
+    expect(root.textContent).toContain("Connecting…");
+    const heading = root.querySelector("h2")!;
+    expect(heading.textContent).toBe("Switching to studio-02");
+
+    rerender(<HostSwitchScreen pending={pending({ phase: "starting" })} />);
+    expect(root.textContent).toContain("Starting Daintree on the host…");
+    expect(root.textContent).not.toContain("Connecting…");
+    rerender(<HostSwitchScreen pending={pending({ phase: "opening", projectName: "api" })} />);
+    expect(root.textContent).toContain("Opening the project…");
+    act(() => void vi.advanceTimersByTime(5_000));
+    expect(root.textContent).toContain("Still working…");
+    expect(heading.textContent).toBe("Switching to studio-02");
+
+    rerender(<HostSwitchScreen pending={pending({ phase: "failed", failure })} />);
+    expect(heading.textContent).toBe("Couldn't switch to studio-02");
+    expect(root.textContent).toContain("ssh: connect timed out");
+    expect(root.textContent).not.toContain("Still working…");
+    expect(root.querySelector(".animate-spin")).toBeNull();
+    expect(button("Retry")).not.toBeNull();
+
+    rerender(<HostSwitchScreen pending={pending({ switchId: "sw-2" })} />);
+    expect(heading.textContent).toBe("Switching to studio-02");
+    expect(root.querySelector(".animate-spin")).not.toBeNull();
+
+    expect(screen()).toBe(root);
+    expect(document.querySelector('[data-testid="daintree-mark"]')).toBe(mark);
+    expect(document.querySelectorAll('[data-testid="daintree-mark"]')).toHaveLength(1);
+  });
+
+  it("draws the logo in only once the screen is shown, not while it is held back", () => {
+    render(<HostSwitchScreen pending={pending({ phase: "opening" })} />);
+    expect(document.querySelector('[data-testid="daintree-mark"]')).toBeNull();
+    act(() => void vi.advanceTimersByTime(400));
+    expect(document.querySelector('[data-testid="daintree-mark"]')).not.toBeNull();
   });
 
   it("can't be cancelled once the window is moving", () => {

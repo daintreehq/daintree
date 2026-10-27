@@ -1,22 +1,30 @@
 import type { PendingHostSwitch, RemoteHostsEvent } from "@shared/types/ipc/remoteHosts";
 import { usePendingHostSwitchStore } from "@/store/pendingHostSwitchStore";
 
-/** Past this, a wait that is still going says so (the loading-gate family's "Still working…"). */
-export const STILL_WORKING_MS = 5_000;
+/**
+ * What the switch screen's heading says. It holds across the waiting phases,
+ * so the only change is the one from waiting to given up.
+ */
+export function pendingHostSwitchHeading(pending: PendingHostSwitch): string {
+  return pending.phase === "failed"
+    ? `Couldn't switch to ${pending.hostName}`
+    : `Switching to ${pending.hostName}`;
+}
 
-/** What the window's switch screen says the switch is doing, or that it gave up. */
-export function pendingHostSwitchTitle(pending: PendingHostSwitch): string {
-  switch (pending.phase) {
-    case "failed":
-      return `Couldn't switch to ${pending.hostName}`;
+/**
+ * What a waiting switch is doing, in words that change only with the phase:
+ * learning the project's name mid-phase does not reword it.
+ */
+export function pendingHostSwitchStatus(
+  phase: Exclude<PendingHostSwitch["phase"], "failed">
+): string {
+  switch (phase) {
     case "connecting":
-      return `Connecting to ${pending.hostName}…`;
+      return "Connecting…";
     case "starting":
-      return `Starting Daintree on ${pending.hostName}…`;
+      return "Starting Daintree on the host…";
     case "opening":
-      return pending.projectName
-        ? `Opening ${pending.projectName} on ${pending.hostName}…`
-        : `Opening ${pending.hostName}…`;
+      return "Opening the project…";
   }
 }
 
