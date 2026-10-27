@@ -218,7 +218,7 @@ describe("checkVoiceCommandEdit", () => {
         true
       )
     ).toBeNull();
-    expect(checkVoiceCommandEdit("compact the conversation", "/compact", claude, true)).toBeNull();
+    expect(checkVoiceCommandEdit("run the compact command", "/compact", claude, true)).toBeNull();
     expect(
       checkVoiceCommandEdit(
         "use the plugin creator for a linter",
@@ -237,7 +237,7 @@ describe("checkVoiceCommandEdit", () => {
   });
 
   it("rejects a command introduced anywhere but the start of the prompt", () => {
-    expect(checkVoiceCommandEdit("compact the conversation", "/compact", claude, false)).toBe(
+    expect(checkVoiceCommandEdit("run the compact command", "/compact", claude, false)).toBe(
       "unprompted_command"
     );
   });
@@ -270,7 +270,7 @@ describe("checkVoiceCommandEdit", () => {
     expect(checkVoiceCommandEdit("run the deploy skill", "/deploy!", claude, true)).toBe(
       "unknown_command"
     );
-    expect(checkVoiceCommandEdit("compact the conversation", "/compact!", claude, true)).toBe(
+    expect(checkVoiceCommandEdit("run the compact command", "/compact!", claude, true)).toBe(
       "unknown_command"
     );
   });
@@ -348,20 +348,165 @@ describe("checkVoiceCommandEdit", () => {
   });
 
   // Ordinary sentences that mention command words, at the start of a prompt:
-  // a cleanup that turned any of them into a command is thrown out. A sentence
-  // that opens with a bare command name ("compact cars use less space") reads
-  // like an invocation, so telling those apart is the model's job.
+  // a cleanup that turned any of them into a command is thrown out, including
+  // a sentence that opens with a bare command name ("compact cars use less
+  // space"), which only a spoken trigger or a verb like "run" turns into one.
   it.each([
     ["the review skill is broken", "/review is broken"],
     ["we should review the last commit later", "/review the last commit later"],
     ["explain the compact command", "/compact"],
     ["don't compact the conversation", "/compact the conversation"],
+    ["compact cars use less space", "/compact cars use less space"],
+    ["compact the conversation", "/compact"],
     ["the compact layout looks off", "/compact layout looks off"],
     ["i like that plugin creator idea", "$plugin-creator idea"],
     ["can you review how the github plugin works", "$github plugin works"],
   ])("leaves %j as prose", (raw, corrected) => {
     const vocabulary = corrected.startsWith("$") ? codex : claude;
     expect(checkVoiceCommandEdit(raw, corrected, vocabulary, true)).not.toBeNull();
+  });
+});
+
+describe("a bare imperative that shares a command's name", () => {
+  const catalogAgents = ["claude", "codex", "gemini"] as const;
+  const vocabularyOf = (agentId: (typeof catalogAgents)[number]) =>
+    buildVoiceCommandVocabulary(
+      getBuiltinSlashCommands(agentId),
+      getAgentConfig(agentId)!.completionSources!
+    );
+
+  // The rule only fires for a command the target has; one it lacks is turned away
+  // as unknown, so each pair names the reason it's rejected for.
+  it.each([
+    [
+      "Delete the unused imports in the auth module",
+      "/delete",
+      "unknown_command",
+      "unprompted_command",
+    ],
+    ["Archive the old release branches", "/archive", "unknown_command", "unprompted_command"],
+    ["Clear the build cache and rebuild", "/clear", "unprompted_command", "unprompted_command"],
+    [
+      "Rewind the migration before you change it",
+      "/rewind",
+      "unprompted_command",
+      "unknown_command",
+    ],
+  ])("stays prose in Claude and Codex: %j", (raw, command, inClaude, inCodex) => {
+    const rest = raw.split(" ").slice(1).join(" ").trim();
+    const corrected = `${command} ${rest}`;
+    expect(checkVoiceCommandEdit(raw, corrected, claude, true)).toBe(inClaude);
+    expect(checkVoiceCommandEdit(raw, corrected, codex, true)).toBe(inCodex);
+  });
+
+  it("stays prose whatever shape the model returns", () => {
+    const raw = "Clear the build cache and rebuild";
+    expect(checkVoiceCommandEdit(raw, "/clear", claude, true)).toBe("unprompted_command");
+    expect(checkVoiceCommandEdit(raw, "/compact the build cache", claude, true)).toBe(
+      "unprompted_command"
+    );
+    expect(checkVoiceCommandEdit(raw, "/clear the build cache and rebuild.", claude, true)).toBe(
+      "unprompted_command"
+    );
+  });
+
+  it("never becomes any built-in command of an agent that has a catalog", () => {
+    const collisions: string[] = [];
+    for (const agentId of catalogAgents) {
+      const vocabulary = vocabularyOf(agentId);
+      expect(vocabulary.entries.length).toBeGreaterThan(20);
+      for (const entry of vocabulary.entries) {
+        const tail = "the build cache and rebuild";
+        const corrected = `${entry.token} ${tail}`;
+        // The positive control: the same name, said after a verb that runs it, is accepted.
+        const asked = checkVoiceCommandEdit(
+          `Run ${entry.spokenName} ${tail}`,
+          corrected,
+          vocabulary,
+          true
+        );
+        const bare = checkVoiceCommandEdit(
+          `${entry.spokenName} ${tail}`,
+          corrected,
+          vocabulary,
+          true
+        );
+        if (asked !== null || bare !== "unprompted_command") {
+          collisions.push(`${agentId} ${entry.token}: asked=${asked} bare=${bare}`);
+        }
+      }
+    }
+    expect(collisions).toEqual([]);
+  });
+
+  it.each([
+    ["Please clear the build cache", "/clear the build cache"],
+    ["Can you clear the build cache", "/clear the build cache"],
+    ["Go clear the build cache", "/clear the build cache"],
+    ["Now rewind the migration", "/rewind the migration"],
+    ["Um, clear the build cache", "/clear the build cache"],
+    ["Clear command history", "/clear history"],
+    ["Clear", "/clear"],
+    ["Review the last commit", "/review the last commit"],
+    ["Ship it", "/ship-it"],
+    ["Frontend component for the header", "/frontend:component for the header"],
+  ])("stays prose with nothing that runs a command before it: %j", (raw, corrected) => {
+    expect(checkVoiceCommandEdit(raw, corrected, claude, true)).toBe("unprompted_command");
+    expect(voiceCommandBaseline(raw, corrected, claude)).toBeNull();
+  });
+
+  it.each([
+    ["Plugin creator for a linter", "$plugin-creator for a linter"],
+    ["GitHub open the PR", "$github open the PR"],
+  ])("stays prose for a Codex skill or plugin: %j", (raw, corrected) => {
+    expect(checkVoiceCommandEdit(raw, corrected, codex, true)).toBe("unprompted_command");
+  });
+
+  it("holds a skill named in capitals to the same rule as a shell variable it resembles", () => {
+    const shouting = buildVoiceCommandVocabulary(
+      [custom("codex", "$README", { kind: "skill" })],
+      sourcesOf("codex")
+    );
+    expect(checkVoiceCommandEdit("Readme the repo", "$README the repo", shouting, true)).toBe(
+      "unprompted_command"
+    );
+    expect(
+      checkVoiceCommandEdit(
+        "Run the readme skill on the repo",
+        "$README on the repo",
+        shouting,
+        true
+      )
+    ).toBeNull();
+    expect(
+      checkVoiceCommandEdit("dollar PATH is empty", "$PATH is empty.", shouting, true)
+    ).toBeNull();
+  });
+
+  it("is still a command when the dictation spoke its trigger or a lead-in", () => {
+    expect(
+      checkVoiceCommandEdit("Slash clear the build cache", "/clear the build cache", claude, true)
+    ).toBeNull();
+    expect(checkVoiceCommandEdit("Run clear", "/clear", claude, true)).toBeNull();
+    expect(voiceCommandBaseline("Run clear", "/clear", claude)).toBe("/clear");
+    expect(
+      checkVoiceCommandEdit(
+        "Please run archive on the old release branches",
+        "/archive on the old release branches",
+        codex,
+        true
+      )
+    ).toBeNull();
+    expect(
+      voiceCommandBaseline(
+        "Please run archive on the old release branches",
+        "/archive on the old release branches",
+        codex
+      )
+    ).toBe("/archive on the old release branches");
+    expect(
+      voiceCommandBaseline("Slash clear the build cache", "/clear the build cache", claude)
+    ).toBe("/clear the build cache");
   });
 });
 

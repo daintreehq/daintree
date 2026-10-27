@@ -349,6 +349,13 @@ describe("buildCorrectionSystemPrompt target", () => {
     expect(prompt).toContain("$plugin-creator — Scaffold a plugin from a template\n/compact\n");
   });
 
+  it("never teaches the model to turn a bare command word into a command", () => {
+    const prompt = buildCorrectionSystemPrompt({ target });
+    const rules = prompt.indexOf("COMMAND RULES:");
+    expect(rules).toBeGreaterThan(-1);
+    expect(prompt.slice(rules)).not.toContain("compact the conversation");
+  });
+
   it("lists every command, bounding the descriptions instead", () => {
     const many = Array.from({ length: 100 }, (_, i) => ({
       token: `/command-${i}`,

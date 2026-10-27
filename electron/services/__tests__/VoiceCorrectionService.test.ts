@@ -868,10 +868,10 @@ describe("VoiceCorrectionService", () => {
       expect(body.input[1].content).toContain("prompt_start=no");
     });
 
-    it("writes an implied command at the start of the prompt", async () => {
+    it("writes an asked-for command at the start of the prompt", async () => {
       stubReply("/compact");
       const result = await new VoiceCorrectionService().correct(
-        { rawText: "compact the conversation", startsPrompt: true },
+        { rawText: "run the compact command", startsPrompt: true },
         { ...BASE_SETTINGS, commandTarget: targetFor("claude") }
       );
       expect(result.confirmedText).toBe("/compact");
@@ -917,7 +917,8 @@ describe("VoiceCorrectionService", () => {
     it.each([
       ["a command the target doesn't have", "run the deploy skill", "/deploy", true],
       ["another agent's syntax", "use the plugin creator skill", "$plugin-creator", true],
-      ["a command away from the start", "compact the conversation", "/compact", false],
+      ["a command away from the start", "run the compact command", "/compact", false],
+      ["a bare imperative that opens like a command", "compact the conversation", "/compact", true],
       ["a mention turned into a command", "the review skill is broken", "/review is broken", true],
     ])("keeps the raw text for %s", async (_label, rawText, reply, startsPrompt) => {
       stubReply(reply);
@@ -927,6 +928,45 @@ describe("VoiceCorrectionService", () => {
       );
       expect(result.confirmedText).toBe(rawText);
       expect(result.action).toBe("no_change");
+    });
+
+    it.each([
+      ["claude", "Delete the unused imports in the auth module", "/delete"],
+      ["claude", "Archive the old release branches", "/archive"],
+      ["claude", "Clear the build cache and rebuild", "/clear"],
+      ["claude", "Rewind the migration before you change it", "/rewind"],
+      ["codex", "Delete the unused imports in the auth module", "/delete"],
+      ["codex", "Archive the old release branches", "/archive"],
+      ["codex", "Clear the build cache and rebuild", "/clear"],
+      ["codex", "Rewind the migration before you change it", "/rewind"],
+    ] as const)(
+      "keeps %s's instruction %j out of %s whatever the model returns",
+      async (agentId, rawText, command) => {
+        const [, ...words] = rawText.split(" ");
+        stubReply(`${command} ${words.join(" ")}`);
+        const result = await new VoiceCorrectionService().correct(
+          { rawText, startsPrompt: true },
+          { ...BASE_SETTINGS, commandTarget: targetFor(agentId) }
+        );
+        expect(result.confirmedText).toBe(rawText);
+        expect(result.action).toBe("no_change");
+      }
+    );
+
+    it("still writes a built-in the dictation spoke with its trigger or asked to run", async () => {
+      stubReply("/clear the build cache and rebuild");
+      const triggered = await new VoiceCorrectionService().correct(
+        { rawText: "Slash clear the build cache and rebuild", startsPrompt: true },
+        { ...BASE_SETTINGS, commandTarget: targetFor("claude") }
+      );
+      expect(triggered.confirmedText).toBe("/clear the build cache and rebuild");
+
+      stubReply("/archive on the old release branches");
+      const asked = await new VoiceCorrectionService().correct(
+        { rawText: "Please run archive on the old release branches", startsPrompt: true },
+        { ...BASE_SETTINGS, commandTarget: targetFor("codex") }
+      );
+      expect(asked.confirmedText).toBe("/archive on the old release branches");
     });
 
     it("keeps a leading command's arguments as dictated", async () => {
@@ -954,10 +994,10 @@ describe("VoiceCorrectionService", () => {
     it("rejects invented command syntax with no target at all", async () => {
       stubReply("/compact");
       const result = await new VoiceCorrectionService().correct(
-        { rawText: "compact the conversation", startsPrompt: true },
+        { rawText: "run the compact command", startsPrompt: true },
         BASE_SETTINGS
       );
-      expect(result.confirmedText).toBe("compact the conversation");
+      expect(result.confirmedText).toBe("run the compact command");
     });
 
     it("keys the prompt cache by target", async () => {

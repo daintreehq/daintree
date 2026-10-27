@@ -923,14 +923,14 @@ describe("VoiceRecordingService — the target agent's commands (#14655)", () =>
     correct.fn.mockReturnValue(new Promise((resolve) => (resolveCorrection = resolve)));
     voiceStore.getState().setCorrectionEnabled(true);
 
-    say("compact the conversation", "item-a");
+    say("run the compact command", "item-a");
     await service.stop("Dictation stopped.");
     expect(correct.fn).toHaveBeenCalledWith(expect.objectContaining({ startsPrompt: true }));
     setDraft("First: " + draft());
 
     resolveCorrection({ action: "replace", correctedText: "/compact" });
     await vi.waitFor(() => expect(service.hasPendingCorrection(PANEL)).toBe(false));
-    expect(draft()).toBe("First: compact the conversation");
+    expect(draft()).toBe("First: run the compact command");
   });
 
   it("lands a path correction once text is typed in front of the passage", async () => {
@@ -952,7 +952,7 @@ describe("VoiceRecordingService — the target agent's commands (#14655)", () =>
     correct.fn.mockResolvedValue({ action: "replace", correctedText: "/compact" });
     voiceStore.getState().setCorrectionEnabled(true);
 
-    say("compact the conversation", "item-a");
+    say("run the compact command", "item-a");
     await service.stop("Dictation stopped.");
     await vi.waitFor(() => expect(draft()).toBe("/compact"));
   });

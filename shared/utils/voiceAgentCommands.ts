@@ -93,7 +93,8 @@ const INVOCATION_LEAD_WORDS = new Set([
 // Hesitation sounds a cleanup may drop anywhere, including before a command.
 const HESITATIONS = new Set(["um", "umm", "uh", "uhh", "uhm", "erm", "hmm", "mm"]);
 // At least one of these must be among the lead words: "the review skill is
-// broken" mentions a command without asking for it.
+// broken" mentions a command without asking for it, and "clear the build
+// cache" is an instruction that happens to open with a command's name.
 const INVOCATION_VERBS = new Set([
   "run",
   "use",
@@ -393,8 +394,10 @@ export function introducesVoiceCommand(raw: string, corrected: string): boolean 
 
 /**
  * Where the arguments start in `raw` when its opening words ask for `entry`,
- * with its prefix ("slash review…") or without it ("compact the conversation",
- * "please run the review skill on…"), else -1.
+ * with its prefix ("slash review…") or with a verb that runs it ("please run
+ * the review skill on…"), else -1. A sentence that merely opens with the
+ * command's name ("clear the build cache") is an instruction to the agent,
+ * never a request to run the command, however it's worded.
  */
 function invocationArgumentsAt(
   raw: string,
@@ -409,7 +412,7 @@ function invocationArgumentsAt(
   for (let start = 0; start < limit; start++) {
     const lead = spans.slice(0, start).map((span) => span.word);
     if (!lead.every((word) => INVOCATION_LEAD_WORDS.has(word))) return -1;
-    if (lead.length > 0 && !lead.some((word) => INVOCATION_VERBS.has(word))) continue;
+    if (!lead.some((word) => INVOCATION_VERBS.has(word))) continue;
     let joined = "";
     for (let end = start; end < spans.length && joined.length < entry.key.length; end++) {
       // As with a spoken prefix, `--force` is an argument, never part of a name.
@@ -439,8 +442,8 @@ export type VoiceCommandEditRejection =
  * back exactly, and so do its arguments, word for word, but for hesitation
  * sounds. A command cleanup introduces must be one the target has, may open
  * only the prompt itself, must have been asked for by the dictation's opening
- * words, and keeps every word that followed them, or none when the whole
- * phrase named it.
+ * words (its trigger, or a verb like "run"), and keeps every word that followed
+ * them, or none when the whole phrase named it.
  */
 export function checkVoiceCommandEdit(
   raw: string,
@@ -466,11 +469,11 @@ export function checkVoiceCommandEdit(
 
   // "/etc/hosts" fixed up from "slash etc slash hosts" is a path, not a command.
   if (correctedLead === rawLead) return null;
-  const shape = commandShape(correctedLead);
-  if (!shape) return null;
-  // A known token with punctuation stuck to it is still not one the composer has.
-  const entry = shape === correctedLead ? knownToken(shape, vocabulary) : null;
-  if (!entry) return "unknown_command";
+  // A skill the target has is checked even when it's named in capitals like a
+  // shell variable ("$README"); a token with punctuation stuck to it is still
+  // not one the composer has.
+  const entry = knownToken(correctedLead, vocabulary);
+  if (!entry) return commandShape(correctedLead) ? "unknown_command" : null;
   if (!startsPrompt) return "unprompted_command";
   const argumentsAt = invocationArgumentsAt(trimmedRaw, entry, vocabulary);
   if (argumentsAt < 0) return "unprompted_command";
@@ -482,7 +485,7 @@ export function checkVoiceCommandEdit(
   if (last >= 0)
     rawArguments[last] = rawArguments[last]!.replace(TRAILING_PROSE_PUNCTUATION_RE, "");
   // Either the rest of what was said comes along exactly as said, or none of
-  // it does, when the whole phrase named the command ("compact the conversation").
+  // it does, when the whole phrase named the command ("please run the compact skill").
   const kept =
     correctedArguments.length === 0 ||
     sameWords(correctedArguments, rawArguments) ||

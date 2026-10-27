@@ -238,8 +238,8 @@ function buildTargetSection(target: CorrectionTargetContext): string {
       )
       .join("\n")}`,
     `COMMAND RULES:
-- When <job> says prompt_start=yes and the target opens by asking to run one of these commands or skills, either with its trigger ("slash review", "dollar plugin creator") or without it ("run the review skill on the auth module", "compact the conversation"), write that command exactly as listed at the very start, then the rest of what was said as its arguments: "/review on the auth module".
-- Only do this when the opening words ask for the command to run. A sentence that just mentions the word ("the review skill is broken", "explain the compact command", "compact cars use less space") stays prose.
+- When <job> says prompt_start=yes and the target opens by asking to run one of these commands or skills, either with its trigger ("slash review", "dollar plugin creator") or with a verb that runs it ("run the review skill on the auth module", "please use plugin creator"), write that command exactly as listed at the very start, then the rest of what was said as its arguments: "/review on the auth module".
+- Only do this when the opening words ask for the command to run. A sentence that just mentions the word ("the review skill is broken", "explain the compact command"), or opens with it as an ordinary instruction to the agent ("clear the build cache", "delete the unused imports", "compact cars use less space"), stays prose, whatever the command does.
 - Never write a command that isn't listed, and never put one anywhere but the very start of the prompt.
 - When the target already starts with one of these commands, copy the command and everything after it exactly: no recasing, no added punctuation, no rewording of its arguments. You may only drop hesitation sounds.`
   );
