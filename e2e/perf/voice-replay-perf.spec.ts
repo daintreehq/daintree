@@ -49,6 +49,7 @@ import {
 import {
   deriveSession,
   installReplayCapture,
+  micProcessingMismatch,
   micOpenedAfter,
   readReplayCapture,
   rendererNow,
@@ -216,6 +217,7 @@ perfDescribe("Perf: dictation replay against real providers", () => {
           ...config.settings,
         },
         dictionary: config.dictionary,
+        micProcessing: config.micProcessing,
       })),
       skippedConfigs,
       clips: clips.map((prepared) => ({
@@ -328,7 +330,7 @@ async function dictateOnce(
     }
 
     const panel = await launchFakeAgent(page);
-    await installReplayCapture(page);
+    await installReplayCapture(page, { micProcessing: config.micProcessing });
     await ensureWindowFocused(ctx.app);
     await panel.locator(SEL.terminal.cmEditor).click();
 
@@ -380,12 +382,15 @@ async function dictateOnce(
         // `endReason: null` saying so.
       });
 
-    const derived = deriveSession(await readReplayCapture(page), {
+    const capture = await readReplayCapture(page);
+    const derived = deriveSession(capture, {
       startAt,
       stopAt,
       plannedStopAt,
       audioMs: prepared.audioMs,
     });
+    // An arm whose processing didn't take hasn't measured what it says it has.
+    const mismatch = micProcessingMismatch(capture, startAt, config.micProcessing);
     const draft = await panel
       .locator(SEL.terminal.cmEditor)
       .textContent()
@@ -396,7 +401,7 @@ async function dictateOnce(
       timing: derived.timing,
       statuses: derived.statuses,
       endReason: derived.endReason,
-      errors: derived.errors,
+      errors: mismatch ? [...derived.errors, mismatch] : derived.errors,
     };
   } finally {
     if (ctx?.app) {

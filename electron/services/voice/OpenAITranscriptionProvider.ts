@@ -20,6 +20,10 @@ import {
 import type { VadWorkerOutbound } from "./openaiVadWorkerProtocol.js";
 import { OpenAIVadProcess, type VadRetireReason } from "./openaiVadProcess.js";
 import {
+  resolveOpenAITranscriptionTuning,
+  type OpenAITranscriptionTuning,
+} from "./openaiTranscriptionTuning.js";
+import {
   formatKeytermPrompt,
   MAX_PROMPT_CHARS,
   sanitizeOpenAIKeywords,
@@ -57,15 +61,6 @@ interface OpenAITranscriptionConfig {
 const OPENAI_REALTIME_URL =
   process.env.DAINTREE_REALTIME_WS_URL ?? "wss://api.openai.com/v1/realtime?intent=transcription";
 const OPENAI_TRANSCRIPTION_MODEL = "gpt-live-transcribe";
-// How long the server buffers audio before emitting a partial
-// `...transcription.delta`. Higher tiers cut word-error rate and partial
-// "flapping" at the cost of how quickly interim text appears. We render those
-// partials live as the user speaks, so a sluggish tier is directly felt —
-// hence "low". This does NOT trade away final accuracy or add latency after our
-// explicit `input_audio_buffer.commit`: the final `...completed` is transcribed
-// from the whole frozen buffer regardless. It is therefore a different axis to
-// VAD_MAX_SEGMENT_MS below (client-side segmentation), and the two do not fight.
-const OPENAI_TRANSCRIPTION_DELAY: VoiceDelayTier = "low";
 const CONNECT_TIMEOUT_MS = 10_000;
 // Backstop for the drain: if a committed segment never reports a terminal
 // result (server error, dropped frame, or only an empty `conversation.item.done`),
@@ -128,13 +123,18 @@ const RECONNECT_BUFFER_MAX_CHUNKS = 400;
 // between utterances isn't transcribed. This replaces the old blind 2s interval,
 // which cut words mid-pause and added up to ~2s of latency at end-of-speech.
 //
-// Backstop: while speech runs continuously past this window with no detected
-// pause, force a commit so the segment streams back and the server-side buffer
-// stays bounded. Also the sole commit cadence in degraded mode (VAD init/worker
-// failure), where we can't detect speech boundaries at all.
-const VAD_MAX_SEGMENT_MS = 8_000;
+// Continuous speech is cut by the tuning (`OpenAITranscriptionTuning`): at a
+// short pause once the segment is long enough, or at the cap wherever it lands.
+//
+// When the VAD can't hear the boundaries, a fixed cadence commits instead: the
+// sole commit cadence in degraded mode (VAD init/worker failure), and the one
+// commit after a reconnect whose outage audio the new VAD never heard.
+const BLIND_COMMIT_MS = 8_000;
 // The commit reason of a segment the VAD closed at a pause.
 const VAD_PAUSE_COMMIT = "vad-end-of-speech";
+// The commit reason of a segment cut at a short pause inside speech.
+const VAD_GAP_COMMIT = "vad-gap";
+const SPEECH_BACKSTOP = "vad-speech";
 // Recent audio retained to replay after an `input_audio_buffer.clear` on speech
 // onset, so clearing the stale (silent) buffer doesn't also clip the start of
 // the utterance the VAD just detected. ~300ms at 24kHz mono PCM16 (48 B/ms).
@@ -144,7 +144,7 @@ const VAD_PRE_ROLL_BYTES = 14_400;
 // below this threshold.
 const MIN_COMMIT_BYTES = 4_800;
 // Audio whose transcript hasn't landed is replayed onto the next connection
-// after a drop. Speech keeps it short (the 8s backstop, plus a few seconds to
+// after a drop. Speech keeps it short (the segment cap, plus a few seconds to
 // notice a dead socket), so the cap only bites on a long silent tail, where the
 // oldest audio goes first. It has to hold a whole reconnect flush on top of
 // that, so a second drop during the flush still resends it all.
@@ -328,6 +328,11 @@ function joinFallbacks(
 
 export class OpenAITranscriptionProvider implements TranscriptionProvider {
   readonly hasServerVAD = false;
+  private readonly tuning: Readonly<OpenAITranscriptionTuning>;
+
+  constructor(tuning: Partial<OpenAITranscriptionTuning> = {}) {
+    this.tuning = resolveOpenAITranscriptionTuning(tuning);
+  }
 
   private connection: WebSocket | null = null;
   private sessionId = 0;
@@ -424,10 +429,13 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   // can't segment, so we fall back to a periodic backstop commit (no speech
   // gating) — dictation still works, just without speech-aware boundaries.
   private vadDegraded = false;
-  // Backstop commit timer. While speaking (or always, in degraded mode) it
-  // forces a commit every VAD_MAX_SEGMENT_MS so long utterances stream back and
-  // the server buffer stays bounded.
+  // Backstop commit timer. While speaking it forces a commit at the tuning's
+  // segment cap so long utterances stream back and the server buffer stays
+  // bounded; in degraded mode it commits every BLIND_COMMIT_MS.
   private maxSegmentTimer: ReturnType<typeof setInterval> | null = null;
+  // When the live segment of continuous speech began: its speech-start, or
+  // the last boundary accepted inside it. Null while not speaking.
+  private segmentStartedAt: number | null = null;
   // Sliding window of the most recent audio chunks, replayed after a
   // speech-onset `input_audio_buffer.clear` so the utterance's onset survives.
   private preRollChunks: ArrayBuffer[] = [];
@@ -516,7 +524,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
    * live-delta state since the renderer has already captured the displayed text.
    */
   commitParagraphBoundary(): void {
-    this.maybeCommitSegment("paragraph-boundary");
+    if (this.maybeCommitSegment("paragraph-boundary")) this.restartSpeechSegment();
     this.liveText = "";
   }
 
@@ -930,7 +938,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     const transcription: OpenAITranscriptionConfig = {
       model: OPENAI_TRANSCRIPTION_MODEL,
       ...(autoLanguage ? {} : { languages: [language] }),
-      delay: OPENAI_TRANSCRIPTION_DELAY,
+      delay: this.tuning.delay,
       // Omit rather than send `[]` / `""` when nothing survived sanitization.
       ...(keywords.length > 0 ? { keywords } : {}),
       ...(prompt ? { prompt } : {}),
@@ -2148,6 +2156,9 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
             case "speech-start":
               this.handleVadSpeechStart();
               return;
+            case "pause":
+              this.handleVadPause();
+              return;
             case "speech-end":
               this.handleVadSpeechEnd();
               return;
@@ -2183,6 +2194,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     this.clearBackstopTimer();
     this.vadReady = false;
     this.isSpeaking = false;
+    this.segmentStartedAt = null;
     this.preRollChunks = [];
     this.preRollBytes = 0;
     const vad = this.vadWorker;
@@ -2206,17 +2218,19 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     if (this.sessionId !== mySessionId || this.vadDegraded) return;
     this.vadDegraded = true;
     this.isSpeaking = false;
+    this.segmentStartedAt = null;
     const vad = this.vadWorker;
     this.vadWorker = null;
     vad?.retire("degraded");
-    logWarn(`${P} VAD degraded — committing on ${VAD_MAX_SEGMENT_MS}ms backstop only`);
+    logWarn(`${P} VAD degraded — committing on ${BLIND_COMMIT_MS}ms backstop only`);
     this.startBackstopTimer("vad-degraded-backstop");
   }
 
   private handleVadSpeechStart(): void {
     if (this.isSpeaking) return;
     this.isSpeaking = true;
-    this.startBackstopTimer("vad-speech");
+    this.segmentStartedAt = performance.now();
+    this.startBackstopTimer(SPEECH_BACKSTOP, { ms: this.tuning.maxSegmentMs });
     logDebug(`${P} VAD speech-start`, { preRollBytes: this.preRollBytes });
 
     // Barge-in clear: drop the silence the server buffered between the last
@@ -2246,21 +2260,47 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     }
   }
 
+  /**
+   * A short pause inside speech. Once the segment has run `minSegmentMs` it is
+   * cut here rather than at the cap, which can land mid-word. Not a pause
+   * commit: the speaker may go straight on, so break commands and a send still
+   * wait for the end of speech.
+   */
+  private handleVadPause(): void {
+    const minSegmentMs = this.tuning.minSegmentMs;
+    if (minSegmentMs === null || !this.isSpeaking || this.segmentStartedAt === null) return;
+    if (performance.now() - this.segmentStartedAt < minSegmentMs) return;
+    if (this.maybeCommitSegment(VAD_GAP_COMMIT)) this.restartSpeechSegment();
+  }
+
   private handleVadSpeechEnd(): void {
     if (!this.isSpeaking) return;
     this.isSpeaking = false;
+    this.segmentStartedAt = null;
     if (this.isReady) this.vadHasEndedSpeech = true;
     this.clearBackstopTimer();
     logDebug(`${P} VAD speech-end — committing segment`);
     this.maybeCommitSegment(VAD_PAUSE_COMMIT);
   }
 
-  private startBackstopTimer(reason: string, { once = false } = {}): void {
+  /** A boundary was accepted inside speech: the next segment, and its cap, run from here. */
+  private restartSpeechSegment(): void {
+    if (!this.isSpeaking) return;
+    this.segmentStartedAt = performance.now();
+    this.startBackstopTimer(SPEECH_BACKSTOP, { ms: this.tuning.maxSegmentMs });
+  }
+
+  private startBackstopTimer(
+    reason: string,
+    { once = false, ms = BLIND_COMMIT_MS }: { once?: boolean; ms?: number } = {}
+  ): void {
     this.clearBackstopTimer();
     this.maxSegmentTimer = setInterval(() => {
       if (once) this.clearBackstopTimer();
-      this.maybeCommitSegment(reason);
-    }, VAD_MAX_SEGMENT_MS);
+      if (this.maybeCommitSegment(reason) && this.isSpeaking) {
+        this.segmentStartedAt = performance.now();
+      }
+    }, ms);
   }
 
   private clearBackstopTimer(): void {
@@ -2275,14 +2315,14 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
    * transcribes it and streams back delta/completed events. No-ops when there's
    * no live connection, the session isn't ready, we're already draining, or too
    * little audio has accumulated since the last commit (OpenAI rejects an
-   * undersized buffer with a fatal error event).
+   * undersized buffer with a fatal error event). True when the boundary was
+   * sent or held.
    */
-  private maybeCommitSegment(reason: string): void {
+  private maybeCommitSegment(reason: string): boolean {
     // Before the socket is ready the audio is still held, so the boundary is
     // kept with it and committed when it's flushed.
     if (!this.isReady && !this.isDraining && this.holdsConnectAudio()) {
-      this.holdCommit(reason);
-      return;
+      return this.holdCommit(reason);
     }
     if (!this.connection || !this.isReady || this.isDraining) {
       logDebug(`${P} Commit skipped — session not in a committable state`, {
@@ -2291,7 +2331,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         isReady: this.isReady,
         isDraining: this.isDraining,
       });
-      return;
+      return false;
     }
     if (this.bytesSinceCommit < MIN_COMMIT_BYTES) {
       logDebug(`${P} Commit skipped — buffer below threshold`, {
@@ -2299,7 +2339,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         bytesSinceCommit: this.bytesSinceCommit,
         thresholdBytes: MIN_COMMIT_BYTES,
       });
-      return;
+      return false;
     }
     try {
       const bytes = this.bytesSinceCommit;
@@ -2310,27 +2350,30 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
         chunksStreamed: this.audioChunkCount,
         pendingCommits: this.pendingCommits,
       });
+      return true;
     } catch (err) {
       logWarn(`${P} Failed to commit audio segment`, {
         reason,
         ...voiceErrorLogFields(err),
       });
+      return false;
     }
   }
 
-  private holdCommit(reason: string): void {
+  private holdCommit(reason: string): boolean {
     const at = this.preConnectBuffer.length;
     const atPause = reason === VAD_PAUSE_COMMIT;
     // With nothing held yet, a boundary still closes a dropped connection's
     // unacknowledged tail, which is replayed ahead of the held audio.
-    if (at === 0 && this.replayTailBytes === 0) return;
+    if (at === 0 && this.replayTailBytes === 0) return false;
     const last = this.heldCommits.at(-1);
     if (last?.at === at) {
       last.atPause ||= atPause;
-      return;
+      return true;
     }
     this.heldCommits.push({ at, atPause });
     logDebug(`${P} Commit held until the socket is ready`, { reason, bufferedChunks: at });
+    return true;
   }
 
   /** A held commit, sent once the flush reaches it. Too little audio waits for the next. */
@@ -2364,7 +2407,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
 
   getSessionStats(): ProviderSessionStats {
     return {
-      delayTier: OPENAI_TRANSCRIPTION_DELAY,
+      delayTier: this.tuning.delay,
       droppedConnect: this.droppedConnectChunks,
       droppedReplay: this.droppedReplayChunks,
       reconnects: this.reconnectCount,

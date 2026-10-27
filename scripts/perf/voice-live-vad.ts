@@ -1,9 +1,10 @@
 /**
  * The OpenAI provider's VAD worker, unmodified, in a Node child instead of an
- * Electron utility process: `voice-preview-final.ts` forks this in place of
- * `utilityProcess.fork`. It stands in for `process.parentPort` over Node IPC,
- * holding what the parent sends until the worker's listener is in place, as
- * an Electron port holds messages until it is started.
+ * Electron utility process: the live voice harnesses (`lib/voiceLiveSession.ts`)
+ * fork this in place of `utilityProcess.fork`. It stands in for
+ * `process.parentPort` over Node IPC, holding what the parent sends until the
+ * worker's listener is in place, as an Electron port holds messages until it
+ * is started.
  */
 
 type Listener = (event: { data: unknown }) => void;
@@ -34,6 +35,6 @@ const port = {
 (process as unknown as { parentPort: typeof port }).parentPort = port;
 
 import("../../electron/services/voice/openaiVadWorker").catch((error: unknown) => {
-  console.error("[voice-preview-final] VAD worker failed to load:", error);
+  console.error("[voice-live-vad] VAD worker failed to load:", error);
   process.exit(1);
 });

@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { deriveSession, type ReplayCapture } from "../voiceReplayCapture";
+import { deriveSession, micProcessingMismatch, type ReplayCapture } from "../voiceReplayCapture";
 
 const capture: ReplayCapture = {
   micOpens: [50, 1_120],
+  micProcessing: [{}, {}],
   events: [
     // An earlier session's tail must not leak into this one.
     { t: 90, kind: "complete", sessionId: "old", text: "stale words" },
@@ -51,6 +52,7 @@ describe("deriveSession", () => {
   it("reports a last final before the stop as negative and a missing end as null", () => {
     const early: ReplayCapture = {
       micOpens: [10],
+      micProcessing: [{}],
       events: [
         { t: 20, kind: "status", sessionId: "s2", status: "recording" },
         { t: 500, kind: "complete", sessionId: "s2", text: "done" },
@@ -77,5 +79,29 @@ describe("deriveSession", () => {
     expect(session.sessionId).toBeNull();
     expect(session.hypothesis).toBe("");
     expect(session.timing.micOpenMs).toBeNull();
+  });
+});
+
+describe("micProcessingMismatch", () => {
+  const opened = (micProcessing: ReplayCapture["micProcessing"]): ReplayCapture => ({
+    micOpens: [50, 1_120],
+    micProcessing,
+    events: [],
+  });
+
+  it("flags an off arm whose track still processes, judging this session's open", () => {
+    const capture = opened([{}, { echoCancellation: false, autoGainControl: true }]);
+    expect(micProcessingMismatch(capture, 1_000, "off")).toBe(
+      "microphone processing stayed on: autoGainControl"
+    );
+    expect(
+      micProcessingMismatch(opened([{ noiseSuppression: true }, {}]), 1_000, "off")
+    ).toBeNull();
+  });
+
+  it("leaves the default arm and an unopened mic alone", () => {
+    const processing = opened([{}, { echoCancellation: true }]);
+    expect(micProcessingMismatch(processing, 1_000, "default")).toBeNull();
+    expect(micProcessingMismatch(processing, 2_000, "off")).toBeNull();
   });
 });

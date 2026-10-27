@@ -294,3 +294,67 @@ describe("OpenAI VAD process failures", () => {
     await vi.waitFor(() => expect(exitSpy).toHaveBeenCalledWith(1));
   });
 });
+
+describe("OpenAI VAD short pauses", () => {
+  interface Callbacks {
+    onFrameProcessed: (probabilities: { isSpeech: number }) => void;
+    onSpeechStart: () => void;
+    onSpeechEnd: () => void;
+    onVADMisfire: () => void;
+  }
+
+  async function callbacks(): Promise<Callbacks> {
+    mocks.create.mockResolvedValue(model());
+    await loadWorker();
+    await vi.waitFor(() => expect(mocks.postMessage).toHaveBeenCalledWith({ type: "ready" }));
+    return mocks.create.mock.calls[0]![0] as Callbacks;
+  }
+
+  function frames(vad: Callbacks, ...probabilities: number[]): void {
+    for (const isSpeech of probabilities) vad.onFrameProcessed({ isSpeech });
+  }
+
+  function pauses(): number {
+    return mocks.postMessage.mock.calls.filter(([message]) => message.type === "pause").length;
+  }
+
+  it("reports a pause once per run of silent frames inside speech", async () => {
+    const vad = await callbacks();
+    vad.onSpeechStart();
+    frames(vad, 0.9, 0.1, 0.1, 0.1, 0.1);
+    expect(pauses()).toBe(0);
+    frames(vad, 0.1, 0.1, 0.1);
+    expect(pauses()).toBe(1);
+
+    frames(vad, 0.9, 0.2, 0.2, 0.2, 0.2, 0.2);
+    expect(pauses()).toBe(2);
+  });
+
+  it("counts silent frames across uncertain ones, as avr-vad's end of speech does", async () => {
+    const vad = await callbacks();
+    vad.onSpeechStart();
+    frames(vad, 0.1, 0.1, 0.4, 0.1, 0.45, 0.1, 0.1);
+    expect(pauses()).toBe(1);
+  });
+
+  it("starts the count over on a speech frame", async () => {
+    const vad = await callbacks();
+    vad.onSpeechStart();
+    frames(vad, 0.1, 0.1, 0.1, 0.1, 0.5, 0.1, 0.1, 0.1, 0.1);
+    expect(pauses()).toBe(0);
+  });
+
+  it("reports no pause outside speech, nor one carried over from the last utterance", async () => {
+    const vad = await callbacks();
+    frames(vad, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1);
+    vad.onSpeechStart();
+    frames(vad, 0.1, 0.1, 0.1);
+    vad.onSpeechEnd();
+    frames(vad, 0.1, 0.1, 0.1);
+    vad.onSpeechStart();
+    frames(vad, 0.1, 0.1, 0.1, 0.1);
+    vad.onVADMisfire();
+    frames(vad, 0.1, 0.1, 0.1, 0.1, 0.1);
+    expect(pauses()).toBe(0);
+  });
+});

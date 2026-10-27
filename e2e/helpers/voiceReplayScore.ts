@@ -397,6 +397,8 @@ export interface VoiceReplayConfigRecord {
   settings: Record<string, unknown>;
   /** Terms added to the dictionary before dictating, in order. */
   dictionary: string[];
+  /** Absent from runs that predate it, which all ran Chromium's default. */
+  micProcessing?: "default" | "off";
 }
 
 export interface VoiceReplayClipRecord {
@@ -560,7 +562,8 @@ export function compareRuns(baseline: VoiceReplayRun, run: VoiceReplayRun): RunC
       settingsDiffer:
         baselineConfig.provider !== runConfig.provider ||
         JSON.stringify(baselineConfig.settings) !== JSON.stringify(runConfig.settings) ||
-        JSON.stringify(baselineConfig.dictionary) !== JSON.stringify(runConfig.dictionary),
+        JSON.stringify(baselineConfig.dictionary) !== JSON.stringify(runConfig.dictionary) ||
+        (baselineConfig.micProcessing ?? "default") !== (runConfig.micProcessing ?? "default"),
       metrics,
     });
   }
