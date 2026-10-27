@@ -4618,6 +4618,32 @@ describe("OpenAITranscriptionProvider — reconnect replay (#14605)", () => {
       expect(draftAtStop(events)).toBe("One. Two.");
     });
 
+    it("keeps one account of a tail previewed on both sides of a second drop", async () => {
+      const service = new OpenAITranscriptionProvider();
+      const events: VoiceTranscriptionEvent[] = [];
+      service.onEvent((e) => events.push(e));
+      const { socket } = await bringSessionReady(service);
+      latestVadWorker().emitSpeechStart();
+      service.sendAudioChunk(chunk(1));
+      delta(socket, "item-A", "hello");
+
+      socket.simulateClose(1006);
+      const socket2 = await reconnect();
+      delta(socket2, "item-B", "hello");
+      socket2.simulateClose(1006);
+      const socket3 = await reconnect();
+      expect(wire(socket3)).toEqual([1]);
+      expect(completions(events)).toEqual([
+        { text: "", itemId: "item-A" },
+        { text: "", itemId: "item-B" },
+      ]);
+      const stopPromise = service.stopGracefully();
+      vi.advanceTimersByTime(3_000);
+      await stopPromise;
+
+      expect(draftAtStop(events)).toBe("hello");
+    });
+
     it("retires a preview once across two reconnects that transcribe nothing", async () => {
       const service = new OpenAITranscriptionProvider();
       const events: VoiceTranscriptionEvent[] = [];

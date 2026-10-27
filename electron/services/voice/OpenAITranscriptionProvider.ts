@@ -1829,8 +1829,11 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
    * Leaves this connection's unacknowledged items on the audio they cover.
    * Commits are acknowledged in order, so they pair off, oldest first, with
    * the segments the cap evicted, whose previews settle now since their audio
-   * is gone, then the untagged segments, then the open tail. One whose
-   * transcript beat its ack takes its audio out of the replay instead.
+   * is gone, then the untagged segments, then the open tail. The server acks a
+   * commit before it hears the audio after it, so only the oldest of these can
+   * have shown a preview and the pairing is exact. One whose transcript beat
+   * its ack takes its audio out of the replay instead. The tail is one stretch
+   * however many connections previewed it, so its accounts are compared.
    */
   private foldUnacknowledgedPreviews(): void {
     let evicted = this.replayEvictedSegments;
@@ -1851,7 +1854,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       }
       const fallback = { text, final: false, itemId, showing: [itemId] };
       if (segment) segment.fallback = betterFallback(segment.fallback, fallback);
-      else this.replayTailFallback = joinFallbacks(this.replayTailFallback, fallback);
+      else this.replayTailFallback = betterFallback(this.replayTailFallback, fallback);
     }
     this.unackedItems = [];
     this.itemDeltaText.clear();
