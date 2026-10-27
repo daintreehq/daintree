@@ -198,10 +198,12 @@ describe("correction review", () => {
 
     vi.advanceTimersByTime(VOICE_CORRECTION_MARK_DWELL_MS);
     expect(view.contentDOM.querySelectorAll(".cm-voice-corrected-fading")).not.toHaveLength(0);
+    expect(view.contentDOM.querySelector(".cm-voice-restore")).toBeNull();
 
     vi.advanceTimersByTime(VOICE_CORRECTION_MARK_FADE_MS);
     expect(marked(view)).toEqual([]);
     expect(reviewing(view)).toBe(true);
+    expect(view.contentDOM.querySelector(".cm-voice-restore")).toBeNull();
     expect(onShown).toHaveBeenCalledTimes(1);
     const dispatch = vi.spyOn(view, "dispatch");
     vi.advanceTimersByTime(VOICE_CORRECTION_MARK_DWELL_MS * 10);
