@@ -649,6 +649,12 @@
     background-color: ButtonText !important;
   }
 
+  /* The toolbar dictation waveform's bars are backgrounds inside a button, so
+     they take the same pair. */
+  [data-voice-wave] > span {
+    background-color: ButtonText !important;
+  }
+
   /* The working glyph is a masked background too, so it takes the same pair. */
   button .spinner-circle,
   [role="button"] .spinner-circle,

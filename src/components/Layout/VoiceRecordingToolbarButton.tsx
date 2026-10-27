@@ -1,5 +1,5 @@
-import { useEffect, useRef, type CSSProperties, type ReactNode } from "react";
-import { Lock, Mic } from "lucide-react";
+import { useEffect, useRef, type ReactNode } from "react";
+import { Clock, Lock, Mic, Pause } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -31,26 +31,30 @@ import {
 import { isLocalHostId } from "@shared/types/remoteHosts";
 import type { VoiceSessionElsewhere } from "@shared/types";
 
-// Flywheel — matches VoiceInputButton so the toolbar and panel-header
-// indicators behave identically.
-const IDLE_SPEED = 72; // deg/sec — 1 revolution per 5s
-const ACTIVE_SPEED = 288; // deg/sec — 1 revolution per 1.25s
-const TAU_ATTACK = 0.22;
-const TAU_RELEASE = 0.5;
-const AUDIO_SMOOTH = 0.15;
-const BASE_THICKNESS = 2; // px
+// The level meter's envelope: a rise fast enough that a syllable registers at
+// once, a fall that settles back to rest within a few hundred milliseconds of
+// the voice stopping, so the bars never claim sound that has ended.
+const TAU_ATTACK = 0.015; // sec
+const TAU_RELEASE = 0.08; // sec
+// Room noise sits around 0.02-0.04 on the store's level scale; below the
+// floor the bars hold flat instead of twitching in silence.
+const NOISE_FLOOR = 0.04;
+const BAR_REST = 0.3; // scaleY in silence: short pills, still read as bars
 
-/** A 2px band on the ring's edge: the orbit's, the wait arc's, the held ring's. */
-const RING_BAND: CSSProperties = {
-  padding: `${BASE_THICKNESS}px`,
-  mask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
-  WebkitMask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
-  maskComposite: "exclude",
-  WebkitMaskComposite: "xor",
-};
+// The bars show the envelope's recent history, newest on the right, one step
+// apart, so speech travels across them instead of moving them as one block;
+// the weights give the meter its shape.
+const HISTORY_STEP = 0.07; // sec
+// Longer than this between frames, the window was hidden and the history is stale.
+const MAX_FRAME_GAP = 0.25; // sec
+const WAVE_WEIGHTS = [0.6, 1, 0.8, 0.65] as const;
+// Listening under reduced motion: one still shape at full ink.
+const STILL_SHAPE = [0.45, 0.8, 0.65, 0.4] as const;
 
-// Only listening spends the accent; waiting and paused rings are neutral ink.
-const RING_INK = "var(--color-text-secondary)";
+// One width for every state the slot shows — placeholder, locked, elsewhere,
+// and the mic with its waveform — so starting or ending a session never moves
+// the right-aligned items.
+const VOICE_SLOT_CLASS = "h-8 w-11";
 
 function formatDuration(seconds: number): string {
   const minutes = Math.floor(seconds / 60);
@@ -77,7 +81,10 @@ function VoiceLockedButton({
               source: "user",
             });
           }}
-          className="toolbar-icon-button relative mr-0.5 text-text-secondary"
+          className={cn(
+            "toolbar-icon-button relative mr-0.5 text-text-secondary",
+            VOICE_SLOT_CLASS
+          )}
           aria-label={`Dictation locked to ${label}. Click to unlock.`}
           data-testid="voice-locked-button"
         >
@@ -138,7 +145,10 @@ function VoiceElsewhereIndicator({
           onClick={() => {
             void voiceRecordingService.revealSessionElsewhere();
           }}
-          className="toolbar-icon-button relative mr-0.5 text-text-secondary"
+          className={cn(
+            "toolbar-icon-button relative mr-0.5 text-text-secondary",
+            VOICE_SLOT_CLASS
+          )}
           aria-label={`${title}. Click to go there.`}
           data-testid="voice-elsewhere-button"
         >
@@ -206,6 +216,111 @@ function VoiceToolbarMenu({
   );
 }
 
+type VoiceWaveMode = "level" | "waiting" | "held";
+
+// The meter box's own size, inline because the button's `[&_svg]:size-4`
+// outranks a size class on the glyph.
+const METER_GLYPH_SIZE = { width: 14, height: 14 } as const;
+
+/**
+ * What sits beside the mic. "level" is four bars that follow the input level
+ * from a RAF loop writing their transforms directly: audioLevel updates ~60Hz
+ * while recording, and a React subscription would re-render the button every
+ * frame. "waiting" (arming, the mic starting, reconnecting, finishing) is a
+ * still clock: no bars, so it can't pass for a quiet room. "held", a pause the
+ * user chose, is the pause glyph. Each state keeps its own shape where colour
+ * is gone (forced colours), and nothing in the toolbar spins or pulses.
+ */
+function VoiceWave({ mode }: { mode: VoiceWaveMode }) {
+  const barRefs = useRef<Array<HTMLSpanElement | null>>([]);
+
+  useEffect(() => {
+    if (mode !== "level") return;
+
+    let lastTime = performance.now();
+    let envelope = 0;
+    const history: Array<{ t: number; v: number }> = [];
+    let rafId = 0;
+
+    const tick = (now: number) => {
+      // A frame's timestamp can precede the snapshot the loop started from.
+      const gap = Math.max(0, (now - lastTime) / 1000);
+      lastTime = now;
+
+      const rawLevel = useVoiceRecordingStore.getState().audioLevel;
+      const gated = Math.max(0, (rawLevel - NOISE_FLOOR) / (1 - NOISE_FLOOR));
+      // Lift the quiet end before smoothing, so the envelope's timing is the
+      // timing the eye sees.
+      const target = Math.sqrt(gated);
+      if (gap > MAX_FRAME_GAP) {
+        // Frames stopped (a hidden window): what was heard before the gap is
+        // stale, so start again from what is heard now.
+        history.length = 0;
+        envelope = target;
+      } else {
+        const tau = target > envelope ? TAU_ATTACK : TAU_RELEASE;
+        envelope += (target - envelope) * (1 - Math.exp(-gap / tau));
+      }
+
+      const t = now / 1000;
+      history.push({ t, v: envelope });
+      const horizon = t - HISTORY_STEP * WAVE_WEIGHTS.length;
+      while (history.length > 1 && history[1]!.t <= horizon) history.shift();
+      const at = (lag: number) => {
+        for (let k = history.length - 1; k >= 0; k--) {
+          if (history[k]!.t <= t - lag) return history[k]!.v;
+        }
+        return 0;
+      };
+
+      // Reduced motion holds one still shape. Read per frame so flipping the
+      // preference mid-dictation applies at once.
+      const still = prefersReducedMotion();
+      WAVE_WEIGHTS.forEach((weight, i) => {
+        const el = barRefs.current[i];
+        if (!el) return;
+        const level = at((WAVE_WEIGHTS.length - 1 - i) * HISTORY_STEP);
+        const scale = still
+          ? STILL_SHAPE[i]!
+          : BAR_REST + (1 - BAR_REST) * Math.min(1, level * weight);
+        el.style.transform = `scaleY(${scale.toFixed(3)})`;
+      });
+
+      rafId = requestAnimationFrame(tick);
+    };
+
+    rafId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafId);
+  }, [mode]);
+
+  return (
+    <span
+      aria-hidden="true"
+      // The ink sits on the wrapper so the glyph inherits it: forced colours
+      // repaints an inherited currentColor, not one set on the svg itself.
+      className={cn(
+        "flex h-3.5 w-3.5 shrink-0 items-center justify-between pointer-events-none",
+        mode !== "level" && "text-text-secondary"
+      )}
+      data-voice-wave={mode}
+    >
+      {mode === "waiting" && <Clock style={METER_GLYPH_SIZE} />}
+      {mode === "held" && <Pause style={METER_GLYPH_SIZE} />}
+      {mode === "level" &&
+        WAVE_WEIGHTS.map((_, i) => (
+          <span
+            key={i}
+            ref={(el) => {
+              barRefs.current[i] = el;
+            }}
+            className="h-full w-0.5 rounded-full bg-accent-primary"
+            style={{ transform: `scaleY(${BAR_REST})` }}
+          />
+        ))}
+    </span>
+  );
+}
+
 function VoiceRecordingPlaceholder() {
   // Reserves the slot footprint so right-aligned toolbar items don't shift
   // when a session starts/stops. Matches DevServerPlaceholder's pattern.
@@ -214,7 +329,10 @@ function VoiceRecordingPlaceholder() {
   // by offsetParent, which opacity-0 does NOT null out).
   return (
     <div
-      className="toolbar-icon-button relative mr-0.5 h-9 w-9 opacity-0 pointer-events-none"
+      className={cn(
+        "toolbar-icon-button relative mr-0.5 opacity-0 pointer-events-none",
+        VOICE_SLOT_CLASS
+      )}
       aria-hidden="true"
     />
   );
@@ -253,121 +371,33 @@ export function VoiceRecordingToolbarButton({
     (Boolean(activeTarget) &&
       (isArming || isConnecting || isRecording || isReconnecting || isFinishing || isPaused));
 
-  // The orbit means "listening", so it waits for the mic to deliver real
+  // The waveform means "listening", so it waits for the mic to deliver real
   // audio — not for the transcription backend, which is a separate state
   // (captured audio is buffered while it connects). #13105.
   const isSessionOpen = isConnecting || isRecording || isReconnecting;
   const isMicLive = micSignal === "live";
   const isMicStarting = isSessionOpen && !isMicLive;
-  // Gate the orbit on isActive too — protects against a transient teardown
-  // race where status briefly stays "recording"/"finishing" while
-  // activeTarget has already been cleared, which would otherwise leave the
-  // RAF loop spinning on null refs.
-  // Reconnecting and finishing are not listening, so they get the static ring.
+  // Gated on isActive too — protects against a transient teardown race where
+  // status briefly stays "recording" while activeTarget has already been
+  // cleared, which would otherwise start the level loop behind a placeholder.
+  // Reconnecting and finishing are not listening, so they wait.
   const isListening = (isRecording || isConnecting) && isMicLive;
-  const showOrbit = !isQueued && isActive && (isListening || isPaused);
+  const showLevel = !isQueued && isActive && isListening;
+  const showHeld = !isQueued && isActive && isPaused;
   // Arming paints immediately — the visual confirmation IS the point of the
-  // state. The static accent ring holds from the hotkey press until the mic
-  // is live, so the indicator never blanks out before the orbit takes over.
-  const showArming =
+  // state. The waiting bars hold from the hotkey press until the mic is live,
+  // so the indicator never blanks out before the level takes over.
+  const showWaiting =
     isQueued || (isActive && (isArming || isMicStarting || isReconnecting || isFinishing));
+  const waveMode: VoiceWaveMode | null = showLevel
+    ? "level"
+    : showHeld
+      ? "held"
+      : showWaiting
+        ? "waiting"
+        : null;
 
-  const wrapperRef = useRef<HTMLDivElement>(null);
-  const ringRef = useRef<HTMLSpanElement>(null);
-  const dotCoreRef = useRef<HTMLSpanElement>(null);
-  const dotHaloRef = useRef<HTMLSpanElement>(null);
-  const trackRef = useRef<HTMLSpanElement>(null);
-  const rafRef = useRef<number>(0);
-
-  useEffect(() => {
-    if (!showOrbit) return;
-
-    // Paused draws a still neutral ring instead of the orbit, and no RAF loop
-    // runs: the toolbar isn't redrawn 60 times a second while the user thinks.
-    if (isPaused) return;
-
-    let lastTime = performance.now();
-    let angle = 0;
-    let v1 = IDLE_SPEED;
-    let velocity = IDLE_SPEED;
-    let smoothLevel = 0;
-
-    const tick = (now: number) => {
-      const dt = Math.min((now - lastTime) / 1000, 0.1);
-      lastTime = now;
-
-      // Force level to 0 during finishing so the ring decelerates gracefully.
-      // Imperative store read: audioLevel updates ~60Hz during recording, so a
-      // React subscription would re-render this button on every frame.
-      const rawLevel = isFinishing ? 0 : useVoiceRecordingStore.getState().audioLevel;
-      smoothLevel += (rawLevel - smoothLevel) * AUDIO_SMOOTH;
-      const level = Math.pow(smoothLevel, 1.5);
-
-      // Double-smoothed flywheel
-      const targetVelocity = IDLE_SPEED + level * (ACTIVE_SPEED - IDLE_SPEED);
-      const tau = targetVelocity > velocity ? TAU_ATTACK : TAU_RELEASE;
-      const alpha = 1 - Math.exp(-dt / tau);
-      v1 += (targetVelocity - v1) * alpha;
-      velocity += (v1 - velocity) * alpha;
-      angle = (angle + velocity * dt) % 360;
-
-      const opacity = (0.45 + level * 0.55).toFixed(3);
-      const opacityNum = Number(opacity);
-
-      // Reduced motion holds the arc still; its brightness still follows the
-      // voice, so the ring stays a live level meter without spinning. Read per
-      // frame so flipping either preference mid-dictation takes effect at once.
-      const wrapper = wrapperRef.current;
-      if (wrapper) {
-        const still = prefersReducedMotion();
-        wrapper.style.transform = `rotate(${still ? 0 : angle}deg) translateZ(0)`;
-      }
-
-      const ring = ringRef.current;
-      if (ring) {
-        ring.style.background = [
-          `conic-gradient(from 0deg,`,
-          `transparent 200deg,`,
-          `rgb(from var(--theme-accent-primary) r g b / ${(opacityNum * 0.05).toFixed(3)}) 248deg,`,
-          `rgb(from var(--theme-accent-primary) r g b / ${(opacityNum * 0.18).toFixed(3)}) 292deg,`,
-          `rgb(from var(--theme-accent-primary) r g b / ${(opacityNum * 0.42).toFixed(3)}) 326deg,`,
-          `rgb(from var(--theme-accent-primary) r g b / ${(opacityNum * 0.82).toFixed(3)}) 348deg,`,
-          `rgb(from var(--theme-accent-primary) r g b / ${opacity}) 355deg,`,
-          `transparent 360deg)`,
-        ].join(" ");
-      }
-
-      const core = dotCoreRef.current;
-      if (core) {
-        core.style.opacity = String(0.82 + level * 0.18);
-      }
-
-      // A glow only reads as light on a dark strip; on a light theme the
-      // halo lands as a pale ghost of the dot, so the dot goes without.
-      const halo = dotHaloRef.current;
-      if (halo) {
-        const glows = document.documentElement.dataset.colorMode !== "light";
-        const haloAlpha = (0.18 + level * 0.22).toFixed(3);
-        const haloBlur = 6 + level * 6;
-        halo.style.boxShadow = glows
-          ? `0 0 ${haloBlur}px rgb(from var(--theme-accent-primary) r g b / ${haloAlpha})`
-          : "none";
-        halo.style.opacity = glows ? String(0.5 + level * 0.5) : "0";
-      }
-
-      const track = trackRef.current;
-      if (track) {
-        track.style.opacity = String(0.08 + level * 0.04);
-      }
-
-      rafRef.current = requestAnimationFrame(tick);
-    };
-
-    rafRef.current = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(rafRef.current);
-  }, [showOrbit, isFinishing, isPaused]);
-
-  if (!isActive || (!showOrbit && !showArming)) {
+  if (!isActive || !waveMode) {
     if (!isActive && sessionElsewhere) {
       return (
         <VoiceToolbarMenu>
@@ -457,94 +487,15 @@ export function VoiceRecordingToolbarButton({
               void voiceRecordingService.focusActiveTarget();
             }}
             className={cn(
-              "toolbar-icon-button relative mr-0.5",
+              "toolbar-icon-button relative mr-0.5 gap-1",
+              VOICE_SLOT_CLASS,
               isPaused ? "text-text-secondary" : "text-text-primary",
               "hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]"
             )}
             aria-label={tooltipTitle}
           >
             <Mic className="h-4 w-4" />
-            {/* Waiting ring — arming, the mic starting, reconnecting and
-              finishing. It paints from the hotkey press, so the press is
-              acknowledged at once, and spins neutral: the accent orbit takes
-              over only once the mic is hearing. */}
-            {showArming && (
-              <>
-                <span
-                  aria-hidden="true"
-                  className="absolute inset-1 rounded-full pointer-events-none"
-                  style={{ ...RING_BAND, background: RING_INK, opacity: 0.2 }}
-                />
-                <span
-                  aria-hidden="true"
-                  className="absolute inset-1 rounded-full pointer-events-none animate-spin motion-reduce:animate-none"
-                  data-voice-ring="wait"
-                  style={{
-                    ...RING_BAND,
-                    background: `conic-gradient(${RING_INK} 0deg 100deg, transparent 100deg)`,
-                  }}
-                />
-              </>
-            )}
-            {/* Held ring — a pause the user chose: still, whole, neutral. */}
-            {showOrbit && isPaused && (
-              <span
-                aria-hidden="true"
-                className="absolute inset-1 rounded-full pointer-events-none"
-                data-voice-ring="held"
-                style={{ ...RING_BAND, background: RING_INK, opacity: 0.7 }}
-              />
-            )}
-            {/* Orbit overlay — absolute inset on the relative Button. No
-              contain:strict at this scale: the toolbar button is a flex
-              child and clipping the orbit would crop the ring. */}
-            {showOrbit && !isPaused && (
-              <>
-                <span
-                  ref={trackRef}
-                  aria-hidden="true"
-                  className="absolute inset-1 rounded-full pointer-events-none"
-                  data-voice-ring="orbit"
-                  style={{
-                    ...RING_BAND,
-                    opacity: 0.08,
-                    background: `var(--theme-accent-primary)`,
-                    transition: "opacity var(--duration-75) ease-out",
-                  }}
-                />
-                <div
-                  ref={wrapperRef}
-                  aria-hidden="true"
-                  className="absolute inset-1 pointer-events-none"
-                  style={{ willChange: "transform" }}
-                >
-                  <span ref={ringRef} className="absolute inset-0 rounded-full" style={RING_BAND} />
-                  <span
-                    ref={dotHaloRef}
-                    className="absolute rounded-full"
-                    style={{
-                      width: "6px",
-                      height: "6px",
-                      top: BASE_THICKNESS / 2,
-                      left: "50%",
-                      transform: "translate(-50%, -50%)",
-                      background: "rgb(from var(--theme-accent-primary) r g b / 0.3)",
-                    }}
-                  />
-                  <span
-                    ref={dotCoreRef}
-                    className="absolute rounded-full bg-accent-primary"
-                    style={{
-                      width: "3.5px",
-                      height: "3.5px",
-                      top: BASE_THICKNESS / 2,
-                      left: "50%",
-                      transform: "translate(-50%, -50%)",
-                    }}
-                  />
-                </div>
-              </>
-            )}
+            <VoiceWave mode={waveMode} />
           </Button>
         </TooltipTrigger>
         <TooltipContent side="bottom">

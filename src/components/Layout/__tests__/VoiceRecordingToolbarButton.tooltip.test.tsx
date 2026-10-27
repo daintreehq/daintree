@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { Profiler } from "react";
 import fs from "fs/promises";
 import path from "path";
-import { render, fireEvent } from "@testing-library/react";
+import { render, fireEvent, act } from "@testing-library/react";
 import { VoiceRecordingToolbarButton } from "../VoiceRecordingToolbarButton";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { useScratchStore } from "@/store/scratchStore";
@@ -45,8 +46,9 @@ vi.mock("@/hooks/useDeferredLoading", () => ({
   useDohertyGate: (value: boolean) => value,
 }));
 
+const motion = vi.hoisted(() => ({ reduced: true }));
 vi.mock("@/lib/appThemeViewTransition", () => ({
-  prefersReducedMotion: () => true,
+  prefersReducedMotion: () => motion.reduced,
 }));
 
 vi.mock("../ToolbarContextMenuItems", () => ({
@@ -184,7 +186,7 @@ describe("VoiceRecordingToolbarButton — tooltip names what a click does", () =
       activeTarget: { panelId: "p-1", panelTitle: "claude · notes" },
     },
     { status: "idle" as const, activeTarget: null },
-  ])("arms for a queued start instead of the orbit ($status)", ({ status, activeTarget }) => {
+  ])("arms for a queued start instead of the level ($status)", ({ status, activeTarget }) => {
     useVoiceRecordingStore.setState({
       isConfigured: true,
       status,
@@ -197,7 +199,9 @@ describe("VoiceRecordingToolbarButton — tooltip names what a click does", () =
     expect(container.querySelector("button")?.getAttribute("aria-label")).toBe(
       "Arming dictation: codex · api"
     );
-    expect(container.querySelector('[style*="will-change"]')).toBeNull();
+    expect(container.querySelector("[data-voice-wave]")?.getAttribute("data-voice-wave")).toBe(
+      "waiting"
+    );
   });
 });
 
@@ -441,10 +445,48 @@ describe("VoiceRecordingToolbarButton polish — issue #8176", () => {
       expect(toolbar).toMatch(/"voice-recording":\s*{[\s\S]*?isAvailable:\s*true/);
     });
 
-    it("renders an invisible placeholder with the same h-9 w-9 footprint as the active button", () => {
-      expect(source).toContain("VoiceRecordingPlaceholder");
-      expect(source).toMatch(/h-9\s+w-9\s+opacity-0\s+pointer-events-none/);
-      expect(source).toContain('aria-hidden="true"');
+    it("every state the slot shows shares one footprint, the waveform's included (#14911)", () => {
+      const widthOf = () => {
+        const root = document.body.querySelector<HTMLElement>(
+          "button, [aria-hidden='true'].toolbar-icon-button"
+        );
+        return (root?.className ?? "")
+          .split(/\s+/)
+          .filter((c) => /^[wh]-/.test(c))
+          .sort()
+          .join(" ");
+      };
+      const states: Array<Partial<ReturnType<typeof useVoiceRecordingStore.getState>>> = [
+        { status: "idle", activeTarget: null, lockedTarget: null, sessionElsewhere: null },
+        {
+          status: "idle",
+          activeTarget: null,
+          lockedTarget: { panelId: "p-1", panelTitle: "notes" },
+          sessionElsewhere: null,
+        },
+        {
+          status: "idle",
+          activeTarget: null,
+          lockedTarget: null,
+          sessionElsewhere: { sessionId: "s1", hostId: "local", projectId: "p", projectName: "A" },
+        },
+        {
+          status: "recording",
+          micSignal: "live",
+          activeTarget: { panelId: "p-1" },
+          lockedTarget: null,
+          sessionElsewhere: null,
+        },
+      ];
+      const footprints = states.map((state) => {
+        useVoiceRecordingStore.setState({ isConfigured: true, pendingTarget: null, ...state });
+        const { unmount } = render(<VoiceRecordingToolbarButton />);
+        const footprint = widthOf();
+        unmount();
+        return footprint;
+      });
+      expect(footprints[0]).toMatch(/w-/);
+      expect(new Set(footprints).size).toBe(1);
     });
 
     it("placeholder is excluded from the roving tabindex — opacity-0 does NOT null offsetParent", () => {
@@ -466,7 +508,7 @@ describe("VoiceRecordingToolbarButton polish — issue #8176", () => {
       // active button JSX, mirroring VoiceInputButton's gating. The guard
       // now also lets the arming state through so its static accent ring
       // can paint before audio init begins (#9178).
-      expect(source).toMatch(/if\s*\(!isActive\s*\|\|\s*\(!showOrbit\s*&&\s*!showArming\)\)\s*{/);
+      expect(source).toMatch(/if\s*\(!isActive\s*\|\|\s*!waveMode\)\s*{/);
       expect(source).toMatch(/return\s+<VoiceRecordingPlaceholder/);
     });
 
@@ -479,22 +521,22 @@ describe("VoiceRecordingToolbarButton polish — issue #8176", () => {
     });
   });
 
-  describe("orbit waits for real mic audio — issue #13105", () => {
-    it("spins the orbit only once the mic signal is live, not when the backend connects", () => {
+  describe("the level waits for real mic audio — issue #13105", () => {
+    it("shows the level only once the mic signal is live, not when the backend connects", () => {
       // A Bluetooth mic can hand over zeros long after the backend is ready;
-      // the orbit claims "listening" so it keys off micSignal, not status.
+      // the level claims "listening" so it keys off micSignal, not status.
       expect(source).toMatch(/const\s+isMicLive\s*=\s*micSignal\s*===\s*"live"/);
       expect(source).not.toContain("useDohertyGate");
     });
 
-    it("holds the static arming ring from the hotkey press until the mic is live", () => {
+    it("holds the waiting bars from the hotkey press until the mic is live", () => {
       expect(source).toMatch(
-        /const\s+showArming\s*=\s*isQueued\s*\|\|\s*\(isActive\s*&&\s*\(isArming\s*\|\|\s*isMicStarting\s*\|\|\s*isReconnecting\s*\|\|\s*isFinishing\)\)/
+        /const\s+showWaiting\s*=\s*isQueued\s*\|\|\s*\(isActive\s*&&\s*\(isArming\s*\|\|\s*isMicStarting\s*\|\|\s*isReconnecting\s*\|\|\s*isFinishing\)\)/
       );
     });
   });
 
-  describe("RAF-driven orbit ring (off-React animation)", () => {
+  describe("RAF-driven level waveform (off-React animation)", () => {
     it("reads the audio level imperatively in the tick so per-frame updates do not trigger React work", () => {
       // No React subscription to audioLevel — the store field updates ~60Hz
       // during recording, and a subscription re-renders the button per frame.
@@ -502,27 +544,15 @@ describe("VoiceRecordingToolbarButton polish — issue #8176", () => {
       expect(source).toMatch(/useVoiceRecordingStore\.getState\(\)\.audioLevel/);
     });
 
-    it("RAF effect deps are primitive booleans only — adding object refs would restart on every render", () => {
-      // All deps must derive from `status` (string from store) so the RAF
-      // tear-down/restart only fires on real state transitions, not every
-      // render. #9191 added isPaused to gate a frozen orbit branch.
-      expect(source).toMatch(/},\s*\[showOrbit,\s*isFinishing,\s*isPaused\]\);/);
+    it("RAF effect deps are the wave's mode only — an object dep would restart the loop on every render", () => {
+      expect(source).toMatch(/},\s*\[mode\]\);/);
     });
 
-    it("gates showOrbit on isActive so a status race with a cleared activeTarget cannot spin a ghost loop", () => {
+    it("gates showLevel on isActive so a status race with a cleared activeTarget cannot run a ghost loop", () => {
       // Without this gate, a transient (status=recording, activeTarget=null)
-      // state would let the RAF loop run while the placeholder is rendered,
-      // leaving the tick to no-op against null refs every frame. #9191 added
-      // isPaused as another isActive sub-state that should still render the
-      // (frozen) orbit chrome.
+      // state would let the RAF loop run while the placeholder is rendered.
       expect(source).toMatch(
-        /const\s+showOrbit\s*=\s*!isQueued\s*&&\s*isActive\s*&&\s*\(isListening\s*\|\|\s*isPaused\)/
-      );
-    });
-
-    it("forces level=0 during finishing so the ring decelerates instead of snapping off", () => {
-      expect(source).toMatch(
-        /isFinishing\s*\?\s*0\s*:\s*useVoiceRecordingStore\.getState\(\)\.audioLevel/
+        /const\s+showLevel\s*=\s*!isQueued\s*&&\s*isActive\s*&&\s*isListening/
       );
     });
   });
@@ -530,18 +560,9 @@ describe("VoiceRecordingToolbarButton polish — issue #8176", () => {
   describe("unified visual primitive across all active states", () => {
     it("no longer swaps in a Spinner for the finishing state", () => {
       // The Spinner-for-finishing path is the visual inconsistency this
-      // polish removes — orbit ring stays visible through finishing.
+      // polish removes — the waveform stays visible through finishing.
       expect(source).not.toContain('from "@/components/ui/Spinner"');
       expect(source).not.toContain("<Spinner");
-    });
-
-    it("does NOT use contain:strict on the wrapper — clips orbit overflow at toolbar scale", () => {
-      // VoiceInputButton uses contain:strict on a fixed 24×24 box with
-      // inset-0 children. At the toolbar's 36×36 button-shell scale, the
-      // ring uses inset-1 within a relative Button — adding contain:strict
-      // would clip the ring edges.
-      expect(source).not.toContain('contain: "strict"');
-      expect(source).not.toMatch(/contain:\s*['"]strict['"]/);
     });
 
     it("uses scoped transition durations — never the broad transition-all", () => {
@@ -592,5 +613,270 @@ describe("VoiceRecordingToolbarButton — locked target (#14629)", () => {
   it("renders no locked button when nothing is locked", () => {
     const { queryByTestId } = render(<VoiceRecordingToolbarButton />);
     expect(queryByTestId("voice-locked-button")).toBeNull();
+  });
+});
+
+// #14911: the toolbar shows the mic and a small waveform; the orbit is the
+// composer's signal, and nothing in the toolbar spins.
+describe("VoiceRecordingToolbarButton — waveform (#14911)", () => {
+  // Pending frames by id; ids only ever grow, so a cancel of a stale id
+  // leaves the live frame pending and the loop running.
+  let frames: Map<number, FrameRequestCallback>;
+  let nextFrameId: number;
+  let now: number;
+
+  beforeEach(() => {
+    frames = new Map();
+    nextFrameId = 0;
+    now = 0;
+    motion.reduced = false;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
+      frames.set(++nextFrameId, cb);
+      return nextFrameId;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => {
+      frames.delete(id);
+    });
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    useVoiceRecordingStore.setState({
+      isConfigured: true,
+      pendingTarget: null,
+      lockedTarget: null,
+      sessionElsewhere: null,
+      audioLevel: 0,
+    });
+  });
+
+  afterEach(() => {
+    motion.reduced = true;
+    vi.restoreAllMocks();
+    useVoiceRecordingStore.setState({ audioLevel: 0 });
+  });
+
+  type Status = "arming" | "connecting" | "recording" | "reconnecting" | "finishing" | "paused";
+  type MicSignal = "pending" | "live" | "silent";
+
+  function renderStatus(status: Status, micSignal: MicSignal = "live") {
+    useVoiceRecordingStore.setState({ status, micSignal, activeTarget: { panelId: "p-1" } });
+    return render(<VoiceRecordingToolbarButton />);
+  }
+
+  // Each frame runs inside act, so any React work a frame queued has
+  // committed before the next assertion.
+  function runFrames(count: number) {
+    for (let i = 0; i < count; i++) {
+      now += 16;
+      const pending = [...frames.values()];
+      frames.clear();
+      act(() => {
+        pending.forEach((cb) => cb(now));
+      });
+    }
+  }
+
+  function bars(container: HTMLElement) {
+    return Array.from(container.querySelectorAll<HTMLElement>("[data-voice-wave] > span"));
+  }
+
+  function barScales(container: HTMLElement) {
+    return bars(container).map((bar) =>
+      Number(bar.style.transform.match(/scaleY\(([\d.]+)\)/)?.[1])
+    );
+  }
+
+  function waveMode(container: HTMLElement) {
+    return container.querySelector("[data-voice-wave]")?.getAttribute("data-voice-wave");
+  }
+
+  it.each([
+    { status: "recording" as const, micSignal: "live" as const, mode: "level" },
+    { status: "connecting" as const, micSignal: "live" as const, mode: "level" },
+    { status: "arming" as const, micSignal: "pending" as const, mode: "waiting" },
+    { status: "recording" as const, micSignal: "pending" as const, mode: "waiting" },
+    { status: "recording" as const, micSignal: "silent" as const, mode: "waiting" },
+    { status: "reconnecting" as const, micSignal: "live" as const, mode: "waiting" },
+    { status: "finishing" as const, micSignal: "live" as const, mode: "waiting" },
+    { status: "paused" as const, micSignal: "live" as const, mode: "held" },
+  ])("$status with the mic $micSignal shows the $mode wave and no ring", (c) => {
+    const { container } = renderStatus(c.status, c.micSignal);
+    expect(waveMode(container)).toBe(c.mode);
+    expect(container.querySelector("[data-voice-ring]")).toBeNull();
+    expect(container.querySelector(".animate-spin")).toBeNull();
+    // Bars only while listening; the waits and the pause draw a glyph instead
+    // and cost no frames.
+    expect(bars(container)).toHaveLength(c.mode === "level" ? 4 : 0);
+    expect(frames.size).toBe(c.mode === "level" ? 1 : 0);
+  });
+
+  it("tells waiting, paused and listening apart by shape, not colour", () => {
+    const markOf = (status: Status, micSignal?: MicSignal) => {
+      const { container, unmount } = renderStatus(status, micSignal);
+      const wave = container.querySelector("[data-voice-wave]")!;
+      const mark = {
+        bars: bars(container).length,
+        glyph: wave.querySelector("svg")?.getAttribute("class") ?? null,
+      };
+      unmount();
+      return mark;
+    };
+    const waiting = markOf("arming", "pending");
+    const held = markOf("paused");
+    const listening = markOf("recording");
+
+    expect(listening).toEqual({ bars: 4, glyph: null });
+    expect(waiting.bars).toBe(0);
+    expect(held.bars).toBe(0);
+    // Two different glyphs, neither of them a spinner.
+    expect(waiting.glyph).not.toBeNull();
+    expect(held.glyph).not.toBeNull();
+    expect(waiting.glyph).not.toBe(held.glyph);
+    expect(`${waiting.glyph} ${held.glyph}`).not.toMatch(/spin|loader/);
+  });
+
+  it("stays at rest in silence, rises when the user speaks, and settles once they stop", () => {
+    const { container } = renderStatus("recording");
+    runFrames(30);
+    const silent = barScales(container);
+    expect(silent).toHaveLength(4);
+    expect(Math.max(...silent)).toBeLessThanOrEqual(0.31);
+
+    useVoiceRecordingStore.setState({ audioLevel: 0.8 });
+    runFrames(30);
+    const speaking = barScales(container);
+    expect(Math.max(...speaking)).toBeGreaterThan(0.8);
+    // The bars keep a shape, not one block.
+    expect(new Set(speaking.map((v) => v.toFixed(2))).size).toBeGreaterThan(1);
+
+    // Back at rest within 0.6s of the voice stopping: the release, plus the
+    // oldest bar's trail through the history.
+    useVoiceRecordingStore.setState({ audioLevel: 0 });
+    runFrames(36);
+    expect(Math.max(...barScales(container))).toBeLessThanOrEqual(0.31);
+  });
+
+  it("travels: a burst reaches the newest bar first and the oldest last", () => {
+    const { container } = renderStatus("recording");
+    runFrames(10);
+    useVoiceRecordingStore.setState({ audioLevel: 0.8 });
+    // Each bar rises once the burst is as old as its lag (70ms apart).
+    const risenAt = [-1, -1, -1, -1];
+    for (let frame = 1; frame <= 20; frame++) {
+      runFrames(1);
+      barScales(container).forEach((scale, i) => {
+        if (risenAt[i] === -1 && scale > 0.4) risenAt[i] = frame;
+      });
+    }
+    expect(risenAt.every((frame) => frame > 0)).toBe(true);
+    const [oldest = -1, second = -1, third = -1, newest = -1] = risenAt;
+    expect(newest).toBeLessThan(third);
+    expect(third).toBeLessThan(second);
+    expect(second).toBeLessThan(oldest);
+  });
+
+  it("drops what it heard before the frames stopped", () => {
+    const { container } = renderStatus("recording");
+    useVoiceRecordingStore.setState({ audioLevel: 0.9 });
+    runFrames(30);
+    expect(Math.max(...barScales(container))).toBeGreaterThan(0.8);
+    // The window is hidden for five seconds and the room goes quiet.
+    now += 5000;
+    useVoiceRecordingStore.setState({ audioLevel: 0 });
+    runFrames(1);
+    const after = barScales(container);
+    expect(after).toHaveLength(4);
+    expect(Math.max(...after)).toBeLessThanOrEqual(0.31);
+  });
+
+  it("never drops below rest when the first frame predates the loop's start", () => {
+    now = 1000;
+    const { container } = renderStatus("recording");
+    useVoiceRecordingStore.setState({ audioLevel: 0.8 });
+    const pending = [...frames.values()];
+    frames.clear();
+    act(() => {
+      pending.forEach((cb) => cb(990));
+    });
+    runFrames(5);
+    const scales = barScales(container);
+    expect(scales).toHaveLength(4);
+    expect(Math.min(...scales)).toBeGreaterThanOrEqual(0.3);
+  });
+
+  it("holds one still shape under reduced motion, whatever the level", () => {
+    const { container } = renderStatus("recording");
+    useVoiceRecordingStore.setState({ audioLevel: 0.8 });
+    runFrames(20);
+    const moving = barScales(container);
+
+    // Turned on mid-dictation: the bars stop in the still shape.
+    motion.reduced = true;
+    runFrames(5);
+    const still = barScales(container);
+    expect(still).not.toEqual(moving);
+    useVoiceRecordingStore.setState({ audioLevel: 0 });
+    runFrames(30);
+    expect(barScales(container)).toEqual(still);
+
+    // And off again: the bars follow the level once more.
+    motion.reduced = false;
+    runFrames(30);
+    expect(barScales(container)).not.toEqual(still);
+  });
+
+  it("moves the bars without a React commit per level update", () => {
+    let commits = 0;
+    useVoiceRecordingStore.setState({
+      status: "recording",
+      micSignal: "live",
+      activeTarget: { panelId: "p-1" },
+    });
+    const { container } = render(
+      <Profiler id="voice" onRender={() => commits++}>
+        <VoiceRecordingToolbarButton />
+      </Profiler>
+    );
+    runFrames(2);
+    const before = commits;
+    act(() => {
+      useVoiceRecordingStore.setState({ audioLevel: 0.9 });
+    });
+    runFrames(30);
+    expect(commits).toBe(before);
+    expect(Math.max(...barScales(container))).toBeGreaterThan(0.5);
+  });
+
+  it("cancels the level loop's live frame on unmount", () => {
+    const { unmount } = renderStatus("recording");
+    runFrames(5);
+    expect(frames.size).toBe(1);
+    unmount();
+    expect(frames.size).toBe(0);
+  });
+
+  it.each([
+    { status: "finishing" as const, mode: "waiting" },
+    { status: "reconnecting" as const, mode: "waiting" },
+    { status: "paused" as const, mode: "held" },
+  ])("stops the level loop when listening gives way to $status", ({ status, mode }) => {
+    const { container } = renderStatus("recording");
+    useVoiceRecordingStore.setState({ audioLevel: 0.8 });
+    runFrames(5);
+    act(() => {
+      useVoiceRecordingStore.setState({ status });
+    });
+    expect(frames.size).toBe(0);
+    expect(waveMode(container)).toBe(mode);
+    // The loop's bars go with it.
+    expect(bars(container)).toHaveLength(0);
+
+    // And come back with one live loop when listening resumes.
+    act(() => {
+      useVoiceRecordingStore.setState({ status: "recording" });
+    });
+    expect(frames.size).toBe(1);
+    useVoiceRecordingStore.setState({ audioLevel: 0.8 });
+    runFrames(30);
+    expect(frames.size).toBe(1);
+    expect(Math.max(...barScales(container))).toBeGreaterThan(0.8);
   });
 });
