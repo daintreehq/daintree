@@ -1027,3 +1027,53 @@ describe("expected draft changes (#14634)", () => {
     expect(only().utterances[0]!.range).toEqual({ from: 4, to: 7, edited: false });
   });
 });
+
+describe("draft writes that touch several places (#14781)", () => {
+  const other = { sessionId: "session-2", panelId: PANEL, projectId: PROJECT };
+
+  it("leaves a record and an anchor between two declared changes untouched", () => {
+    setDraft("aa bb cc");
+    useDictationRangeStore.getState().recordUtterance(other, {
+      insertion: { from: 3, to: 5 },
+      words: { from: 3, to: 5 },
+    });
+    useDictationRangeStore.getState().setAnchor(other, { from: 5, to: 5 });
+
+    const changes = [
+      { from: 0, to: 2, insert: "AAA" },
+      { from: 6, to: 8, insert: "C" },
+    ];
+    useDictationRangeStore.getState().expectDraftChange(PANEL, PROJECT, "aa bb cc", "AAA bb C", changes);
+    setDraft("AAA bb C");
+
+    expect(only().utterances[0]!.range).toEqual({ from: 4, to: 6, edited: false });
+    expect(useDictationRangeStore.getState().getAnchor(other)).toEqual({
+      from: 6,
+      to: 6,
+      edited: false,
+    });
+  });
+
+  it("still flags the words the diff of an undeclared write runs across", () => {
+    setDraft("aa bb cc");
+    useDictationRangeStore.getState().recordUtterance(other, {
+      insertion: { from: 3, to: 5 },
+      words: { from: 3, to: 5 },
+    });
+    setDraft("AAA bb C");
+
+    expect(only().utterances[0]!.range.edited).toBe(true);
+  });
+
+  it("never shows a subscriber anchors that moved with ranges that haven't", () => {
+    dictate("the parsr");
+    useDictationRangeStore.getState().setAnchor(other, { from: 9, to: 9 });
+    const seen: string[] = [];
+    const stop = useDictationRangeStore.subscribe(() => seen.push(textOf(only().utterances[0]!.range)));
+
+    edit(0, 0, "note: ");
+    stop();
+
+    expect(seen).toEqual(["the parsr"]);
+  });
+});

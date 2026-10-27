@@ -400,6 +400,11 @@ describe("VoiceRecordingService — dictation ranges (#14597)", () => {
       rawText: "hello again",
       correctedText: "Hello, again.",
       baseline: { raw: "hello again", corrected: "Hello, again." },
+      write: {
+        before: "Intro. Hello there. hello again",
+        after: "Intro. Hello there. Hello, again.",
+        changes: [{ from: 20, to: 31, insert: "Hello, again." }],
+      },
     });
   });
 
@@ -648,6 +653,15 @@ describe("VoiceRecordingService — correction over dictated ranges (#14613)", (
       rawText: "first part typed note second part",
       correctedText: "FIRST PART typed note SECOND PART",
       baseline: { raw: "first part second part", corrected: "FIRST PART SECOND PART" },
+      // Passage by passage, so the composer leaves what was typed between them alone.
+      write: {
+        before: "Intro. first part typed note second part",
+        after: "Intro. FIRST PART typed note SECOND PART",
+        changes: [
+          { from: 7, to: 17, insert: "FIRST PART" },
+          { from: 29, to: 40, insert: "SECOND PART" },
+        ],
+      },
     });
   });
 

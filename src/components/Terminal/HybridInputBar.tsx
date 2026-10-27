@@ -952,8 +952,14 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       const landed = takeLandedCorrection(terminalId, projectId, draft);
       const scratched = takeScratchLanded(terminalId, projectId, draft);
       // Only the span that differs is replaced, so an append leaves the
-      // image and file chips already in the draft attached.
-      const change = minimalDocChange(view.state.doc.toString(), draft);
+      // image and file chips already in the draft attached. A correction
+      // names each passage it rewrote, so the chips between them stay too.
+      const shown = view.state.doc.toString();
+      const write = landed?.write;
+      const change =
+        write && write.before === shown && write.after === draft
+          ? write.changes
+          : minimalDocChange(shown, draft);
       if (change !== null) {
         setValue(draft);
         lastEmittedValueRef.current = draft;

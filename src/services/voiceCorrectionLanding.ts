@@ -1,4 +1,5 @@
 import { makeDraftKey } from "@/lib/draftKey";
+import type { TextChange } from "@/lib/textRangeMapping";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 
 /**
@@ -17,6 +18,12 @@ export interface LandedCorrection {
   rawText: string;
   correctedText: string;
   baseline: CorrectionBaseline | null;
+  /**
+   * The draft write that swapped it in, passage by passage, for a composer
+   * still showing `before`: one replacement over the whole span would drop
+   * the image chips between the passages.
+   */
+  write?: { before: string; after: string; changes: readonly TextChange[] };
 }
 
 // Keyed by draft, so an isolated composer for the same terminal never takes

@@ -23,7 +23,7 @@ import {
   type DictationRecord,
   type DictationTextSpan,
 } from "@/store/dictationRangeStore";
-import { minimalDocChange, type TrackedTextRange } from "@/lib/textRangeMapping";
+import { minimalDocChange, type TextChange, type TrackedTextRange } from "@/lib/textRangeMapping";
 import {
   peekPendingComposerSelection,
   readComposerSelection,
@@ -75,7 +75,7 @@ import {
   summarizeOpeningChunks,
   type PcmChunkStats,
 } from "@/services/voiceStartDiagnostics";
-import { recordCorrectionLanded } from "@/services/voiceCorrectionLanding";
+import { recordCorrectionLanded, type LandedCorrection } from "@/services/voiceCorrectionLanding";
 import {
   collectCorrectionPassages,
   joinPassageTexts,
@@ -339,6 +339,19 @@ function mapLearningStart(before: string, after: string, start: number): number 
   if (!change || (change.from >= start && change.to > start)) return start;
   if (change.to <= start) return start + change.insert.length - (change.to - change.from);
   return -1;
+}
+
+/** Non-overlapping edits to `draft` as the changes they make, each trimmed to what it alters. */
+function draftChanges(
+  draft: string,
+  edits: ReadonlyArray<{ from: number; to: number; text: string }>
+): TextChange[] {
+  return edits.flatMap(({ from, to, text }) => {
+    const change = minimalDocChange(draft.slice(from, to), text);
+    return change
+      ? [{ from: from + change.from, to: from + change.to, insert: change.insert }]
+      : [];
+  });
 }
 
 /** A spoken rewrite of a composer selection, on its way to the model. */
@@ -797,7 +810,12 @@ class VoiceRecordingService {
           const edit = edits[i]!;
           voiceStore.shiftDraftOffsets(panelId, edit.to, edit.text.length - (edit.to - edit.from));
         }
-        this.writeShiftedDraft(panelId, applyDraftEdits(draft, edits), projectId);
+        const next = applyDraftEdits(draft, edits);
+        // Spelled out, so words between two swaps aren't taken as rewritten.
+        useDictationRangeStore
+          .getState()
+          .expectDraftChange(panelId, projectId, draft, next, draftChanges(draft, edits));
+        this.writeShiftedDraft(panelId, next, projectId);
         inputStore.bumpExternalDraftRevision({ keepsSelection: true });
       })
     );
@@ -2867,9 +2885,10 @@ class VoiceRecordingService {
       return corrected;
     });
 
-    let swapped: { from: number; rawText: string; correctedText: string } | null = null;
+    let swapped: Omit<LandedCorrection, "baseline"> | null = null;
     if (edits.length > 0) {
       const before = inputStore.getDraftInput(panelId, projectId);
+      const changes = draftChanges(before, edits);
       let next = before;
       for (const edit of edits.reverse()) {
         // A session restarted on this panel is dictating after the passage;
@@ -2877,6 +2896,9 @@ class VoiceRecordingService {
         voiceStore.shiftDraftOffsets(panelId, edit.to, edit.text.length - (edit.to - edit.from));
         next = next.slice(0, edit.from) + edit.text + next.slice(edit.to);
       }
+      // Spelled out, so the text between passages, and a session dictating
+      // there, isn't taken as rewritten along with them.
+      useDictationRangeStore.getState().expectDraftChange(panelId, projectId, before, next, changes);
       this.writeShiftedDraft(panelId, next, projectId);
       // One span from the first rewritten passage to the last, so restoring it
       // puts every passage back and leaves text typed between them as it is.
@@ -2886,6 +2908,7 @@ class VoiceRecordingService {
         from,
         rawText: before.slice(from, to),
         correctedText: next.slice(from, to + next.length - before.length),
+        write: { before, after: next, changes },
       };
     }
     logDebug(`${LOG_PREFIX} Correction settled`, { panelId, applied: edits.length, skipped });
