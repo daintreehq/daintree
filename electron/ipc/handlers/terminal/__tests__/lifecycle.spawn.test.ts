@@ -329,6 +329,7 @@ import {
 } from "../../../../../shared/config/pluginAgentRegistry.js";
 import { setUserRegistry } from "../../../../../shared/config/agentRegistry.js";
 import { CHANNELS } from "../../../channels.js";
+import { TRASH_TTL_MS } from "../../../../../shared/config/trash.js";
 import { registerTerminalLifecycleHandlers } from "../lifecycle.js";
 import type { HandlerDependencies } from "../../../types.js";
 
@@ -3033,6 +3034,52 @@ describe("terminal close handlers - resume journaling", () => {
 
     expect(persistAgentSessionMock.mock.calls[0][0].branch).toBeUndefined();
   });
+
+  it("journals a kill of a pane in the trash as the user's close, naming that trash", async () => {
+    ptyClient.getTerminalAsync.mockResolvedValue({
+      ...agentInfo,
+      spawnedAt: 1_000,
+      isTrashed: true,
+      trashExpiresAt: 50_000,
+    });
+    ptyClient.gracefulKill.mockResolvedValue("sess-abc");
+    register();
+
+    await getKillHandler()({}, "term-1");
+
+    const [record] = persistAgentSessionMock.mock.calls[0];
+    expect(record.closedBy).toBe("user");
+    expect(record.terminal).toEqual({ id: "term-1", spawnedAt: 1_000 });
+    expect(record.trash).toEqual({ expiresAt: 50_000, closedAt: 50_000 - TRASH_TTL_MS });
+  });
+
+  it("journals a kill of a pane the user had not closed as a kill, with no trash", async () => {
+    ptyClient.getTerminalAsync.mockResolvedValue({ ...agentInfo, spawnedAt: 1_000 });
+    ptyClient.gracefulKill.mockResolvedValue("sess-abc");
+    register();
+
+    await getKillHandler()({}, "term-1");
+
+    const [record] = persistAgentSessionMock.mock.calls[0];
+    expect(record.closedBy).toBe("kill");
+    expect(record.trash).toBeUndefined();
+  });
+
+  it.each(["kill", "gracefulKill"] as const)(
+    "journals a %s for a restart as a restart, never a user close",
+    async (operation) => {
+      ptyClient.getTerminalAsync.mockResolvedValue({ ...agentInfo, spawnedAt: 1_000 });
+      ptyClient.gracefulKill.mockResolvedValue("sess-abc");
+      register();
+      const handler = operation === "kill" ? getKillHandler() : getGracefulKillHandler();
+
+      await handler({}, "term-1", { forRestart: true });
+
+      const [record] = persistAgentSessionMock.mock.calls[0];
+      expect(record.closedBy).toBe("restart");
+      expect(record.trash).toBeUndefined();
+    }
+  );
 });
 
 describe("terminal spawn handler - Windows PATH refresh", () => {

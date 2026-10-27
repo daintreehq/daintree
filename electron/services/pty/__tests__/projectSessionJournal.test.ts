@@ -42,6 +42,8 @@ interface FakeTerminal {
   cwd: string;
   agentLaunchFlags?: string[];
   agentModelId?: string;
+  isTrashed?: boolean;
+  trashExpiresAt?: number;
   isAssistantTerminal?: boolean;
   spawnedAt: number;
 }
@@ -111,6 +113,48 @@ describe("gracefulTeardownAndJournalProject", () => {
     const [record, ctx] = journalMock.journalAgentSession.mock.calls[0]!;
     expect(record).toMatchObject({ sessionId: "s1", agentId: "claude", projectId: "proj" });
     expect(ctx).toMatchObject({ terminalId: "t1" });
+  });
+
+  it("journals a project close as sleep, and a pane already in the trash as the user's close", async () => {
+    const { client } = makePtyClient({
+      terminals: [
+        { id: "t1", projectId: "proj", launchAgentId: "claude", cwd: "/a", spawnedAt: 1 },
+        {
+          id: "t2",
+          projectId: "proj",
+          launchAgentId: "codex",
+          cwd: "/b",
+          spawnedAt: 2,
+          isTrashed: true,
+          trashExpiresAt: 90_000,
+        },
+      ],
+      outcome: {
+        confirmed: true,
+        sessions: [
+          { id: "t1", agentSessionId: "s1" },
+          { id: "t2", agentSessionId: "s2" },
+        ],
+      },
+    });
+
+    await gracefulTeardownAndJournalProject("proj", client);
+
+    const records = new Map(
+      journalMock.journalAgentSession.mock.calls.map(([record]) => [
+        (record as { sessionId: string }).sessionId,
+        record as {
+          closedBy?: string;
+          terminal?: { id: string };
+          trash?: { expiresAt: number };
+        },
+      ])
+    );
+    expect(records.get("s1")?.closedBy).toBe("sleep");
+    expect(records.get("s1")?.trash).toBeUndefined();
+    expect(records.get("s2")?.closedBy).toBe("user");
+    expect(records.get("s2")?.terminal).toEqual({ id: "t2", spawnedAt: 2 });
+    expect(records.get("s2")?.trash).toMatchObject({ expiresAt: 90_000 });
   });
 
   it("freezes each terminal's generation before the kill and passes it to the journal", async () => {

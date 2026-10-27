@@ -288,6 +288,19 @@ export interface CanopyRemoveRequest {
 }
 
 /**
+ * Canopy asks one view of a closed run's project to resume its session, the
+ * way the Resume Sessions palette does. The view claims it with
+ * `resumeStarted` before launching anything, and answers with `resumeSettled`.
+ */
+export interface CanopyResumeRequest {
+  requestId: string;
+  session: import("./agentSessionHistory.js").AgentSessionRecord;
+}
+
+/** A view's answer to a {@link CanopyResumeRequest}: the pane running the session, or why none is. */
+export type CanopyResumeAnswer = { runId: string } | { error: string };
+
+/**
  * The user renamed a run from Canopy. The view that holds its pane renames the
  * pane as the user's own rename there would; an empty title puts back the one
  * Daintree gives it.
@@ -457,16 +470,34 @@ export interface CanopyReaderLink {
 }
 
 /**
- * One agent run in the host's trash, whichever project it is in: Canopy's
- * Trash. A trashed run has left the fleet, so it carries the run as the host
- * had it when it was trashed: its name, agent and place, never its state.
+ * One agent run the user closed on this host, whichever project it is in:
+ * Canopy's Trash. A closed run has left the fleet, so it carries the run as
+ * the host had it when it was closed: its name, agent and place, never its
+ * state. Inside the trash's window its process lives on and Restore takes it
+ * back; after it, the entry is `ended` and Restore resumes its session.
  */
 export interface CanopyTrashEntry {
   run: FleetRunRow;
   trashedAt: number;
   /** When the trash lets it go; it also names which trash of the run this is. */
   expiresAt: number;
+  /** The trash let its process go. Absent while the process lives on. */
+  ended?: CanopyEndedTrash;
 }
+
+export interface CanopyEndedTrash {
+  /** The worktree it ran in is gone, so there is nowhere to resume it. */
+  worktreeRemoved?: boolean;
+}
+
+/**
+ * What a restore from Canopy's Trash did. `runId` is the run to show now: the
+ * same terminal put back, a pane already running the session, or a new one
+ * resuming it. `open` means no view of the run's project is open on its host
+ * to resume it in: the caller opens the project, as Go to terminal would, and
+ * asks there.
+ */
+export type CanopyRestoreOutcome = { runId: string } | { open: { workspaceId: string } };
 
 export interface CanopySnapshot {
   /**

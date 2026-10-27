@@ -1,5 +1,7 @@
 import path from "node:path";
-import { app } from "electron";
+import { randomUUID } from "node:crypto";
+import { stat } from "node:fs/promises";
+import { app, webContents } from "electron";
 import type {
   CanopyLookPlace,
   CanopyMode,
@@ -15,7 +17,10 @@ import type {
   AssistantOpenDestination,
   CanopyRenameRequest,
   CanopyRemoveRequest,
+  CanopyRestoreOutcome,
   CanopyRestoreRequest,
+  CanopyResumeAnswer,
+  CanopyResumeRequest,
   CanopyTrashEntry,
   CanopyTrashRequest,
   CanopyTrashTarget,
@@ -31,7 +36,21 @@ import { getFleetSnapshotService, getRunHandBackService } from "./projectCrud/in
 import { readPluginTerminalScreen } from "../../services/plugin/pluginTerminalScreenRead.js";
 import { CANOPY_HISTORY_ROWS, CanopyService } from "../../services/canopy/CanopyService.js";
 import { CanopyTrashLedger } from "../../services/canopy/canopyTrashLedger.js";
+import { CanopyClosedTrash, mergeCanopyTrash } from "../../services/canopy/canopyClosedTrash.js";
+import {
+  adoptCanopyTrashClose,
+  listAgentSessions,
+  onSessionHistoryWritten,
+  removeFromCanopyTrash,
+} from "../../services/pty/agentSessionHistory.js";
+import { getAgentSessionRetentionDays } from "../../services/pty/agentSessionRetention.js";
+import {
+  hasCanopyTrashRemoval,
+  noteCanopyTrashRemoval,
+} from "../../services/pty/canopyTrashRemovals.js";
+import { thawThenSend } from "../../utils/thawThenSend.js";
 import { getLifecycleLedger } from "../../services/pty/lifecycleLedger.js";
+import { attributeClose } from "../../services/pty/closeAttribution.js";
 import { getAgentAvailabilityStore } from "../../services/AgentAvailabilityStore.js";
 import { searchScreens } from "../../services/canopy/canopyScreenSearch.js";
 import { isCanopyMode, readCanopyMode } from "../../services/canopy/canopyMode.js";
@@ -215,9 +234,11 @@ function hiddenOrIdleSnapshot(): CanopySnapshot {
 
 /** Every agent run in this host's trash, any project's: made at registration, read by every snapshot. */
 let trashLedger: CanopyTrashLedger | null = null;
+/** The closes the journal holds past the trash's window: made at registration, read on writes. */
+let closedTrash: CanopyClosedTrash | null = null;
 
 function trashList(): CanopyTrashEntry[] {
-  return trashLedger?.list() ?? [];
+  return mergeCanopyTrash(trashLedger?.list() ?? [], closedTrash?.list() ?? []);
 }
 
 let service: CanopyService | null = null;
@@ -862,6 +883,7 @@ function heldTrash(runId: string, target: CanopyTrashTarget): CanopyTrashEntry {
   const held = trashLedger?.get(runId);
   if (
     !held ||
+    held.ended ||
     held.run.spawnedAt !== target.spawnedAt ||
     held.expiresAt !== target.expiresAt ||
     Date.now() >= held.expiresAt
@@ -869,6 +891,31 @@ function heldTrash(runId: string, target: CanopyTrashTarget): CanopyTrashEntry {
     throw leftTheTrash();
   }
   return held;
+}
+
+/** The trash Canopy's Trash showed, when it is that trash and the process lives on in it. */
+function isLiveTrash(runId: string, target: CanopyTrashTarget): boolean {
+  const held = trashLedger?.get(runId);
+  return (
+    !!held &&
+    !held.ended &&
+    held.run.spawnedAt === target.spawnedAt &&
+    held.expiresAt === target.expiresAt
+  );
+}
+
+/** The project of an ended run the Trash showed: still closing, or a close the journal holds. */
+function closedWorkspaceOf(runId: string, target: CanopyTrashTarget): string | undefined {
+  if (isEndingTrash(runId, target)) return trashLedger?.get(runId)?.run.workspaceId;
+  return closedTrash?.find(runId, target)?.entry.run.workspaceId;
+}
+
+/** The trash let the run go a moment ago, and its close is still on its way to the journal. */
+function isEndingTrash(runId: string, target: CanopyTrashTarget): boolean {
+  const held = trashLedger?.get(runId);
+  return (
+    !!held?.ended && held.run.spawnedAt === target.spawnedAt && held.expiresAt === target.expiresAt
+  );
 }
 
 /** The host's own word that the terminal is still in that trash, read just before acting on it. */
@@ -965,6 +1012,7 @@ function endOnHost(runId: string, info: HostTerminalRecord): void {
         agentLaunchFlags: info.agentLaunchFlags,
         agentModelId: info.agentModelId,
         cwd: info.cwd,
+        ...attributeClose(info, "kill"),
       },
     });
   })().catch((error: unknown) => {
@@ -996,8 +1044,10 @@ async function removeTrashedRun(
   // Trashed into the saved layout, so no open view holds the pane, even one
   // of the project opened since.
   const savedOnly = receipt !== undefined && recentlyTrashed.get(receipt)?.layoutSaved === true;
-  // The trash is over: an Undo of it must find nothing to put back.
+  // The trash is over: an Undo of it must find nothing to put back. Its close
+  // lands already out of Canopy's Trash, whichever path ends the process.
   forgetReceiptsFor(runId, target.spawnedAt);
+  noteCanopyTrashRemoval({ id: runId, spawnedAt: target.spawnedAt });
   const views = getProjectPushTargets(held.run.workspaceId, CHANNELS.CANOPY_REMOVE_REQUESTED);
   if (views.length === 0 || savedOnly) {
     endOnHost(runId, record);
@@ -1027,6 +1077,186 @@ async function removeTrashedRun(
   removeFallbacks.add(fallback);
 }
 
+/**
+ * Takes an ended run out of Canopy's Trash. Nothing is ended or deleted: its
+ * session stays in the journal for the Resume Sessions palette.
+ */
+async function dismissClosedRun(runId: string, target: CanopyTrashTarget): Promise<void> {
+  const terminal = { id: runId, spawnedAt: target.spawnedAt };
+  // A close still on its way lands removed; one already journaled is marked so.
+  noteCanopyTrashRemoval(terminal);
+  trashLedger?.remove(runId);
+  await removeFromCanopyTrash([terminal], app.getPath("userData"));
+}
+
+function stillClosing(): AppError {
+  return new AppError({
+    code: "NOT_FOUND",
+    message: "Terminal's close is still being saved",
+    userMessage: "That agent is still closing. Try again in a moment.",
+  });
+}
+
+/** How long the project's view is given to take up a resume before Canopy stops waiting. */
+const RESUME_START_MS = 30_000;
+/** How long a resume the view took up is given to land its pane. */
+const RESUME_LAUNCH_MS = 30_000;
+const MAX_PENDING_RESUMES = 20;
+
+interface PendingResume {
+  /** The view asked: only its word counts. */
+  viewId: number;
+  /** The view took it up: it is launching, and is waited for. */
+  started: boolean;
+  resolve: (answer: CanopyResumeAnswer) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+const pendingResumes = new Map<string, PendingResume>();
+/** One resume at a time per close: a second Restore joins the first. */
+const resumingCloses = new Map<string, Promise<CanopyRestoreOutcome>>();
+
+/**
+ * The view asked is about to launch: while Canopy still waits, the launch gets
+ * its own while to land, and the view is told how long, so a reply it hears
+ * late starts nothing either. Null once Canopy stopped waiting, so a view slow
+ * to hear never launches a resume nobody is told of.
+ */
+function startResume(requestId: string, viewId: number): number | null {
+  const pending = pendingResumes.get(requestId);
+  if (!pending || pending.viewId !== viewId || pending.started) return null;
+  pending.started = true;
+  clearTimeout(pending.timer);
+  pending.timer = setTimeout(
+    () => settleResume(requestId, { error: "The project didn't finish resuming it in time." }),
+    RESUME_LAUNCH_MS
+  );
+  pending.timer.unref?.();
+  return RESUME_LAUNCH_MS;
+}
+
+function settleResume(requestId: string, answer: CanopyResumeAnswer): void {
+  const pending = pendingResumes.get(requestId);
+  if (!pending) return;
+  pendingResumes.delete(requestId);
+  clearTimeout(pending.timer);
+  pending.resolve(answer);
+}
+
+/**
+ * Asks one view of the run's project to resume its session, the way the
+ * Resume Sessions palette does, and waits for the pane it lands in. The
+ * caller's own view when it shows that project; otherwise the project's first.
+ */
+function askViewToResume(
+  ctx: IpcContext,
+  workspaceId: string,
+  request: Omit<CanopyResumeRequest, "requestId">
+): Promise<CanopyResumeAnswer> | null {
+  const views = getProjectPushTargets(workspaceId, CHANNELS.CANOPY_RESUME_REQUESTED).filter(
+    (view) => !view.isDestroyed()
+  );
+  // A view that doesn't drive the project would hold the launch for control
+  // while reporting a pane: only the driver's, or with a window of this
+  // machine driving, any of this machine's windows.
+  const driver = peekDriveLeaseService()?.getHolderEndpoint(workspaceId)?.handle;
+  const permitted =
+    driver === undefined
+      ? views
+      : views.filter((view) => view.id === driver || (driver > 0 && view.id > 0));
+  const view = permitted.find((candidate) => candidate.id === ctx.webContentsId) ?? permitted[0];
+  if (!view) return null;
+  if (pendingResumes.size >= MAX_PENDING_RESUMES) {
+    throw new AppError({
+      code: "RATE_LIMITED",
+      message: "Too many resumes waiting on their views",
+      userMessage: "Too many agents are being restored at once. Try again in a moment.",
+    });
+  }
+  const requestId = randomUUID();
+  return new Promise<CanopyResumeAnswer>((resolve) => {
+    const timer = setTimeout(
+      () => settleResume(requestId, { error: "The project didn't answer in time." }),
+      RESUME_START_MS
+    );
+    timer.unref?.();
+    pendingResumes.set(requestId, { viewId: view.id, started: false, resolve, timer });
+    const send = () => {
+      try {
+        view.send(CHANNELS.CANOPY_RESUME_REQUESTED, {
+          requestId,
+          ...request,
+        } satisfies CanopyResumeRequest);
+      } catch {
+        settleResume(requestId, { error: "The project's window closed." });
+      }
+    };
+    // A cached view may be frozen, and a frozen renderer runs nothing until thawed.
+    const local = view.id > 0 ? webContents.fromId(view.id) : undefined;
+    if (local) thawThenSend(local, () => pendingResumes.has(requestId), send);
+    else send();
+  });
+}
+
+/**
+ * Puts back a run whose process the trash let go: its project's view resumes
+ * the session it was running, as the Resume Sessions palette would, or shows
+ * the pane already running it. Taken out of the Trash once a pane has it.
+ * With no view of the project open, says so, and the caller opens it there.
+ */
+async function resumeClosedRun(
+  ctx: IpcContext,
+  runId: string,
+  target: CanopyTrashTarget
+): Promise<CanopyRestoreOutcome> {
+  const closed = closedTrash?.find(runId, target);
+  if (!closed) throw leftTheTrash();
+  if (closed.entry.ended?.worktreeRemoved) {
+    throw new AppError({
+      code: "NOT_FOUND",
+      message: "Closed terminal's worktree was removed",
+      userMessage: "That agent's worktree has been removed. There's nowhere to resume it.",
+    });
+  }
+  const workspaceId = closed.entry.run.workspaceId;
+  const key = `${runId}#${target.spawnedAt}`;
+  const joined = resumingCloses.get(key);
+  if (joined) return joined;
+  const asked = askViewToResume(ctx, workspaceId, { session: closed.record });
+  if (!asked) return { open: { workspaceId } };
+  const resuming = asked.then(async (answer): Promise<CanopyRestoreOutcome> => {
+    if ("error" in answer) {
+      throw new AppError({
+        code: "PROJECT_VIEW_UNAVAILABLE",
+        message: "Resuming a closed terminal failed",
+        userMessage: answer.error,
+      });
+    }
+    await dismissClosedRun(runId, target).catch((error: unknown) => {
+      // The pane is back; only the Trash still lists it, until a later write.
+      console.warn("[Canopy] Taking a resumed run out of the Trash failed:", error);
+    });
+    return { runId: answer.runId };
+  });
+  resumingCloses.set(key, resuming);
+  try {
+    return await resuming;
+  } finally {
+    if (resumingCloses.get(key) === resuming) resumingCloses.delete(key);
+  }
+}
+
+/** Whether a worktree's directory is gone. Only a missing directory says so: unreadable is not gone. */
+async function isWorktreeGone(worktreePath: string): Promise<boolean> {
+  try {
+    await stat(worktreePath);
+    return false;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | null)?.code;
+    return code === "ENOENT" || code === "ENOTDIR";
+  }
+}
+
 const MAX_EMPTY_TRASH = 200;
 
 function requirePtyClient() {
@@ -1048,6 +1278,12 @@ function reconciledScope(): string | null {
 
 function syncActive(): void {
   const canopy = getService();
+  // History pruned, or a worktree deleted, while no panel looked: an opening
+  // panel sees the closes as they stand now.
+  if (activeViews.size > 0) {
+    closedTrash?.refresh();
+    closedTrash?.recheckWorktrees();
+  }
   // Opening, scope first, so the scan the opening starts reads the right runs;
   // closing, the close first, so a wider scope starts nothing while it settles.
   if (activeViews.size > 0) {
@@ -1751,13 +1987,73 @@ export const canopyNamespace = defineIpcNamespace({
      */
     restoreTrashed: op(
       CANOPY_METHOD_CHANNELS.restoreTrashed,
-      async (ctx, runId: string, target: CanopyTrashTarget): Promise<void> => {
+      async (ctx, runId: string, target: CanopyTrashTarget): Promise<CanopyRestoreOutcome> => {
         checkRateLimit(CANOPY_METHOD_CHANNELS.restoreTrashed, 20, 10_000);
         assertRunId(runId);
         assertTrashTarget(target);
-        const workspaceId = heldTrash(runId, target).run.workspaceId;
+        if (isLiveTrash(runId, target)) {
+          const workspaceId = heldTrash(runId, target).run.workspaceId;
+          if (!drivesProject(ctx, workspaceId)) throw drivenElsewhere(workspaceId);
+          await restoreTrashedRun(runId, target, (project) => drivesProject(ctx, project));
+          return { runId };
+        }
+        if (isEndingTrash(runId, target)) throw stillClosing();
+        // Read the journal again: a close aged out of history since is not resumed.
+        closedTrash?.refresh();
+        const workspaceId = closedTrash?.find(runId, target)?.entry.run.workspaceId;
+        if (workspaceId === undefined) throw leftTheTrash();
         if (!drivesProject(ctx, workspaceId)) throw drivenElsewhere(workspaceId);
-        await restoreTrashedRun(runId, target, (project) => drivesProject(ctx, project));
+        return resumeClosedRun(ctx, runId, target);
+      },
+      { withContext: true }
+    ),
+
+    /**
+     * A project's view is about to launch a resume Canopy asked of it: how
+     * long it has to land the pane, or null once Canopy stopped waiting. Only
+     * the view asked is heard, and only once.
+     */
+    resumeStarted: op(
+      CANOPY_METHOD_CHANNELS.resumeStarted,
+      async (ctx, requestId: string): Promise<number | null> => {
+        if (typeof requestId !== "string" || requestId.length === 0 || requestId.length > 64) {
+          throw new Error("Invalid resume request id");
+        }
+        return startResume(requestId, ctx.webContentsId);
+      },
+      { withContext: true }
+    ),
+
+    /**
+     * A project's view answers a resume Canopy asked of it: the pane now
+     * running the session, or why there is none. Only the view asked is heard.
+     */
+    resumeSettled: op(
+      CANOPY_METHOD_CHANNELS.resumeSettled,
+      async (ctx, requestId: string, answer: CanopyResumeAnswer): Promise<void> => {
+        if (typeof requestId !== "string" || requestId.length === 0 || requestId.length > 64) {
+          throw new Error("Invalid resume request id");
+        }
+        const pending = pendingResumes.get(requestId);
+        if (!pending || pending.viewId !== ctx.webContentsId) return;
+        const resumed =
+          answer !== null &&
+          typeof answer === "object" &&
+          "runId" in answer &&
+          typeof answer.runId === "string" &&
+          answer.runId.length > 0 &&
+          answer.runId.length <= 200;
+        const failed =
+          answer !== null &&
+          typeof answer === "object" &&
+          "error" in answer &&
+          typeof answer.error === "string";
+        settleResume(
+          requestId,
+          resumed
+            ? { runId: answer.runId }
+            : { error: failed ? answer.error.slice(0, 500) : "The project couldn't resume it." }
+        );
       },
       { withContext: true }
     ),
@@ -1772,9 +2068,16 @@ export const canopyNamespace = defineIpcNamespace({
         checkRateLimit(CANOPY_METHOD_CHANNELS.removeTrashed, 20, 10_000);
         assertRunId(runId);
         assertTrashTarget(target);
-        const workspaceId = heldTrash(runId, target).run.workspaceId;
+        if (isLiveTrash(runId, target)) {
+          const workspaceId = heldTrash(runId, target).run.workspaceId;
+          if (!drivesProject(ctx, workspaceId)) throw drivenElsewhere(workspaceId);
+          await removeTrashedRun(runId, target, (project) => drivesProject(ctx, project));
+          return;
+        }
+        const workspaceId = closedWorkspaceOf(runId, target);
+        if (workspaceId === undefined) throw leftTheTrash();
         if (!drivesProject(ctx, workspaceId)) throw drivenElsewhere(workspaceId);
-        await removeTrashedRun(runId, target, (project) => drivesProject(ctx, project));
+        await dismissClosedRun(runId, target);
       },
       { withContext: true }
     ),
@@ -1796,22 +2099,37 @@ export const canopyNamespace = defineIpcNamespace({
           assertRunId(target?.runId);
           assertTrashTarget(target);
         }
-        const held = targets.filter((target) => {
-          try {
-            heldTrash(target.runId, target);
-            return true;
-          } catch {
-            return false;
+        // Each run as the panel confirmed it: live in the trash, or ended.
+        const held = targets.flatMap((target) => {
+          if (isLiveTrash(target.runId, target)) {
+            try {
+              return [
+                {
+                  target,
+                  live: true,
+                  workspaceId: heldTrash(target.runId, target).run.workspaceId,
+                },
+              ];
+            } catch {
+              return [];
+            }
           }
+          const workspaceId = closedWorkspaceOf(target.runId, target);
+          return workspaceId === undefined ? [] : [{ target, live: false, workspaceId }];
         });
-        for (const target of held) {
-          const workspaceId = trashLedger!.get(target.runId)!.run.workspaceId;
+        for (const { workspaceId } of held) {
           if (!drivesProject(ctx, workspaceId)) throw drivenElsewhere(workspaceId);
         }
         let removed = 0;
-        for (const target of held) {
+        for (const { target, live } of held) {
           try {
-            await removeTrashedRun(target.runId, target, (project) => drivesProject(ctx, project));
+            if (live) {
+              await removeTrashedRun(target.runId, target, (project) =>
+                drivesProject(ctx, project)
+              );
+            } else {
+              await dismissClosedRun(target.runId, target);
+            }
             removed += 1;
           } catch (error) {
             // Left the trash while the others were removed: nothing to do for it.
@@ -2106,8 +2424,39 @@ export function registerCanopyHandlers(): () => void {
     // Only a service tells views: with none made, no panel is open, and the
     // next one to open reads the trash with the rest of the snapshot.
     onChange: () => service?.trashChanged(),
+    isRemoved: (entry) =>
+      hasCanopyTrashRemoval({ id: entry.run.runId, spawnedAt: entry.run.spawnedAt }),
+    // The incarnation's own record becomes the close when none of the close
+    // lands: its agent had quit before the pane was closed, or that quit's own
+    // capture took the record first.
+    onSettle: (entry) =>
+      adoptCanopyTrashClose(
+        { id: entry.run.runId, spawnedAt: entry.run.spawnedAt },
+        {
+          expiresAt: entry.expiresAt,
+          closedAt: entry.trashedAt,
+          ...(entry.run.titleMode !== undefined ? { titleMode: entry.run.titleMode } : {}),
+          ...(entry.run.agentPresetColor !== undefined
+            ? { agentPresetColor: entry.run.agentPresetColor }
+            : {}),
+        },
+        app.getPath("userData")
+      ),
   });
   trashLedger = ledger;
+  const closed = new CanopyClosedTrash({
+    readRecords: () =>
+      listAgentSessions(undefined, app.getPath("userData"), getAgentSessionRetentionDays()),
+    isWorktreeGone,
+    onChange: () => service?.trashChanged(),
+  });
+  closedTrash = closed;
+  // Every journal write, whoever made it: a close landing, a removal, a clear
+  // or prune of history. A close the journal now holds stands for its run.
+  const offHistory = onSessionHistoryWritten(() => {
+    closed.refresh();
+    for (const entry of closed.list()) ledger.onJournaled(entry.run.runId, entry.run.spawnedAt);
+  });
   const offTrashed = events.on("terminal:trashed", ({ id, expiresAt }) =>
     ledger.onTrashed(id, expiresAt)
   );
@@ -2132,8 +2481,14 @@ export function registerCanopyHandlers(): () => void {
     offTrashed();
     offTrashCleared();
     offRestored();
+    offHistory();
     ledger.dispose();
     if (trashLedger === ledger) trashLedger = null;
+    closed.dispose();
+    if (closedTrash === closed) closedTrash = null;
+    for (const requestId of [...pendingResumes.keys()]) {
+      settleResume(requestId, { error: "Canopy stopped." });
+    }
     for (const fallback of removeFallbacks) clearTimeout(fallback);
     removeFallbacks.clear();
     offHandBack();

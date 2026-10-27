@@ -4,7 +4,11 @@ import { act, fireEvent, render as rtlRender, within } from "@testing-library/re
 import type { ReactElement } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { FleetSnapshot } from "@shared/types/ipc/fleet";
-import type { CanopySnapshot, CanopyTrashEntry } from "@shared/types/ipc/canopy";
+import type {
+  CanopyRestoreOutcome,
+  CanopySnapshot,
+  CanopyTrashEntry,
+} from "@shared/types/ipc/canopy";
 
 const render = (ui: ReactElement) => rtlRender(ui, { wrapper: TooltipProvider });
 
@@ -114,7 +118,9 @@ function installElectron(snapshot: CanopySnapshot) {
     refresh: vi.fn(async () => {}),
     trash: vi.fn(async (): Promise<number | null> => null),
     untrash: vi.fn(async () => {}),
-    restoreTrashed: vi.fn(async (_runId: string, _target: unknown) => {}),
+    restoreTrashed: vi.fn(
+      async (runId: string, _target: unknown): Promise<CanopyRestoreOutcome> => ({ runId })
+    ),
     removeTrashed: vi.fn(async (_runId: string, _target: unknown) => {}),
     emptyTrash: vi.fn(async (targets: unknown[]) => targets.length),
     reread: vi.fn(async () => {}),
@@ -294,7 +300,8 @@ describe("CanopyView Trash", () => {
     // Main has not answered the restore when the user picks another run.
     let answer: () => void = () => {};
     canopy.restoreTrashed.mockImplementationOnce(
-      () => new Promise<void>((resolve) => (answer = resolve))
+      () =>
+        new Promise<CanopyRestoreOutcome>((resolve) => (answer = () => resolve({ runId: "newer" })))
     );
     fireEvent.click(trashBar()!);
     await act(async () => {
@@ -473,6 +480,218 @@ describe("CanopyView Trash", () => {
       { runId: "newer", spawnedAt: NOW - 3_600_000, expiresAt: TRASH[0]!.expiresAt },
       { runId: "older", spawnedAt: NOW - 3_600_000, expiresAt: TRASH[1]!.expiresAt },
     ]);
+  });
+
+  describe("past the trash's window", () => {
+    /** A run the trash let go, its session journaled: ended. */
+    const ended = (runId: string, ageMs: number, worktreeRemoved = false): CanopyTrashEntry => ({
+      ...trashed(runId, "p1", ageMs),
+      ended: worktreeRemoved ? { worktreeRemoved: true } : {},
+    });
+
+    it("keeps saying when it was closed, and that it ended", async () => {
+      await open([ended("older", 4 * 3_600_000)]);
+      fireEvent.click(trashBar()!);
+      expect(trashRows()[0]!.textContent).toContain("Closed 4h ago · ended");
+    });
+
+    it("resumes an ended run, and selects the pane it comes back as", async () => {
+      const canopy = await open([ended("older", 3_600_000)]);
+      canopy.restoreTrashed.mockResolvedValueOnce({ runId: "resumed" });
+      fireEvent.click(trashBar()!);
+      await act(async () => {
+        fireEvent.click(trashRows()[0]!.querySelector<HTMLElement>("[data-canopy-trash-restore]")!);
+      });
+      await act(async () => {
+        useCanopyStore.setState({ snapshot: { ...baseSnapshot, trash: [] } });
+        useFleetSnapshotStore.setState({ snapshot: fleet(["live", "resumed"]) });
+      });
+      await frames();
+      expect(document.getElementById("canopy-card-resumed")?.getAttribute("aria-selected")).toBe(
+        "true"
+      );
+      expect(vi.mocked(notify)).not.toHaveBeenCalled();
+    });
+
+    it("opens the run's project to resume it there when no view of it is open", async () => {
+      const switchProject = vi
+        .spyOn(useProjectStore.getState(), "switchProject")
+        .mockResolvedValue(undefined);
+      const canopy = await open([ended("older", 3_600_000)]);
+      canopy.restoreTrashed.mockResolvedValueOnce({ open: { workspaceId: "p1" } });
+      fireEvent.click(trashBar()!);
+      await act(async () => {
+        fireEvent.keyDown(trashBar()!, { key: "ArrowDown" });
+      });
+      await act(async () => {
+        fireEvent.keyDown(trashRows()[0]!, { key: "Enter" });
+      });
+      expect(switchProject).toHaveBeenCalledWith("p1", {
+        focusIntent: {
+          intent: "restore-trashed",
+          runId: "older",
+          spawnedAt: NOW - 3_600_000,
+          expiresAt: NOW - 3_600_000 + 20_000,
+        },
+      });
+      expect(useCanopyStore.getState().isOpen).toBe(false);
+    });
+
+    it("goes nowhere when the panel closed before main said where the run is", async () => {
+      const switchProject = vi
+        .spyOn(useProjectStore.getState(), "switchProject")
+        .mockResolvedValue(undefined);
+      const canopy = await open([ended("older", 3_600_000)]);
+      let answer: () => void = () => {};
+      canopy.restoreTrashed.mockImplementationOnce(
+        () =>
+          new Promise<CanopyRestoreOutcome>(
+            (resolve) => (answer = () => resolve({ open: { workspaceId: "p1" } }))
+          )
+      );
+      fireEvent.click(trashBar()!);
+      await act(async () => {
+        fireEvent.click(trashRows()[0]!.querySelector<HTMLElement>("[data-canopy-trash-restore]")!);
+      });
+      await act(async () => {
+        useCanopyStore.setState({ isOpen: false });
+      });
+      await act(async () => answer());
+      expect(switchProject).not.toHaveBeenCalled();
+    });
+
+    it("takes the keyboard to a resumed run that reached the inbox before main answered", async () => {
+      const canopy = await open([ended("older", 3_600_000)], []);
+      let answer: () => void = () => {};
+      canopy.restoreTrashed.mockImplementationOnce(
+        () =>
+          new Promise<CanopyRestoreOutcome>(
+            (resolve) => (answer = () => resolve({ runId: "resumed" }))
+          )
+      );
+      fireEvent.click(trashBar()!);
+      fireEvent.keyDown(trashBar()!, { key: "ArrowDown" });
+      await act(async () => {
+        fireEvent.keyDown(trashRows()[0]!, { key: "Enter" });
+      });
+      // The pane is in the fleet, and its row out of the Trash, before the answer.
+      await act(async () => {
+        useCanopyStore.setState({ snapshot: { ...baseSnapshot, trash: [] } });
+        useFleetSnapshotStore.setState({ snapshot: fleet(["resumed"]) });
+      });
+      await frames();
+      await act(async () => answer());
+      await frames();
+      expect(document.activeElement?.id).toBe("canopy-card-resumed");
+    });
+
+    it("says its worktree was removed, and offers no Restore", async () => {
+      const canopy = await open([ended("older", 3_600_000, true)]);
+      fireEvent.click(trashBar()!);
+      const row = trashRows()[0]!;
+      expect(row.textContent).toContain("Worktree removed");
+      expect(row.querySelector<HTMLButtonElement>("[data-canopy-trash-restore]")!.disabled).toBe(
+        true
+      );
+      fireEvent.keyDown(trashBar()!, { key: "ArrowDown" });
+      await act(async () => {
+        fireEvent.keyDown(trashRows()[0]!, { key: "Enter" });
+      });
+      expect(canopy.restoreTrashed).not.toHaveBeenCalled();
+    });
+
+    it("takes an ended run out at once: there is nothing to end, so nothing to confirm", async () => {
+      const canopy = await open([ended("older", 3_600_000)]);
+      fireEvent.click(trashBar()!);
+      fireEvent.contextMenu(trashRows()[0]!);
+      const item = await within(document.body).findByRole("menuitem", {
+        name: "Remove",
+        hidden: true,
+      });
+      await act(async () => {
+        fireEvent.click(item);
+      });
+      expect(within(document.body).queryByText("Remove 'Fix older'?")).toBeNull();
+      expect(canopy.removeTrashed).toHaveBeenCalledWith("older", {
+        spawnedAt: NOW - 3_600_000,
+        expiresAt: NOW - 3_600_000 + 20_000,
+      });
+    });
+
+    it("empties a trash of ended runs without asking, and asks once a live one is among them", async () => {
+      const canopy = await open([ended("older", 3_600_000)]);
+      const options = within(document.body).getByRole("button", {
+        name: "Trash options",
+        hidden: true,
+      });
+      await act(async () => {
+        fireEvent.keyDown(options, { key: "Enter" });
+      });
+      const item = await within(document.body).findByRole("menuitem", {
+        name: "Empty trash",
+        hidden: true,
+      });
+      await act(async () => {
+        fireEvent.click(item);
+      });
+      expect(canopy.emptyTrash).toHaveBeenCalledWith([
+        { runId: "older", spawnedAt: NOW - 3_600_000, expiresAt: NOW - 3_600_000 + 20_000 },
+      ]);
+      expect(within(document.body).queryByText("Empty trash?")).toBeNull();
+    });
+
+    it("asks before emptying a trash that holds a live run beside ended ones", async () => {
+      const canopy = await open([TRASH[0]!, ended("older", 3_600_000)]);
+      const options = within(document.body).getByRole("button", {
+        name: "Trash options",
+        hidden: true,
+      });
+      const ask = async () => {
+        await act(async () => {
+          fireEvent.keyDown(options, { key: "Enter" });
+        });
+        const item = await within(document.body).findByRole("menuitem", {
+          name: "Empty trash…",
+          hidden: true,
+        });
+        await act(async () => {
+          fireEvent.click(item);
+        });
+      };
+      await ask();
+      expect(within(document.body).getByText("Empty trash?")).toBeTruthy();
+      expect(document.body.textContent).toContain("1 running agent will be ended");
+      expect(canopy.emptyTrash).not.toHaveBeenCalled();
+      await act(async () => {
+        fireEvent.click(dialogButton("Cancel"));
+      });
+      expect(canopy.emptyTrash).not.toHaveBeenCalled();
+
+      await ask();
+      await act(async () => {
+        fireEvent.click(dialogButton("Empty trash"));
+      });
+      expect(canopy.emptyTrash).toHaveBeenCalledWith([
+        { runId: "newer", spawnedAt: NOW - 3_600_000, expiresAt: TRASH[0]!.expiresAt },
+        { runId: "older", spawnedAt: NOW - 3_600_000, expiresAt: NOW - 3_600_000 + 20_000 },
+      ]);
+    });
+
+    it("says nothing when a run's process ends and its row stays, ended", async () => {
+      const announce = vi
+        .spyOn(useAnnouncerStore.getState(), "announce")
+        .mockImplementation(() => {});
+      const due: CanopyTrashEntry = { ...trashed("closing", "p2", 20_000), expiresAt: Date.now() };
+      await open([due]);
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      await act(async () => {
+        useCanopyStore.setState({ snapshot: { ...baseSnapshot, trash: [{ ...due, ended: {} }] } });
+      });
+      await act(async () => {
+        vi.advanceTimersByTime(EXPIRY_CONFIRMED_MS);
+      });
+      expect(announce.mock.calls.filter(([message]) => /expired/.test(message))).toEqual([]);
+    });
   });
 
   it("says the last run's expiry even as the Trash goes with it, the panel scoped to another project", async () => {

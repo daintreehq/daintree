@@ -7,6 +7,7 @@ import { useGettingStartedChecklist } from "./useGettingStartedChecklist";
 import { useAgentWaitingNudge } from "./useAgentWaitingNudge";
 import { useForgeEnableRecommendation } from "./useForgeEnableRecommendation";
 import { useFocusOnActivateIntent } from "./useFocusOnActivateIntent";
+import { useCanopyResumeRequests } from "./useCanopyResumeRequests";
 import { useSleptProjectTransition } from "./useSleptProjectTransition";
 import { useDroppedViewRestore } from "./useDroppedViewRestore";
 import { useBackgroundWindowResize } from "./useBackgroundWindowResize";
@@ -84,6 +85,8 @@ export function useAppBootstrap() {
   // paint signal arrives before panel state is loaded — a direct dispatch
   // would silently no-op against an empty panelStore).
   useFocusOnActivateIntent(isStateLoaded);
+  // Canopy's Trash resumes a closed agent in this project's grid.
+  useCanopyResumeRequests(isStateLoaded);
   useSleptProjectTransition();
   useDroppedViewRestore();
   // Background window-resize receiver — keeps PTY geometry tracking the

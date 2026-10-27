@@ -56,6 +56,8 @@ const ptyClient = vi.hoisted(() => ({
 /** Who drives every project: this screen, another one, or nobody (no lease service at all). */
 const lease = vi.hoisted(() => ({
   holder: null as "self" | "other" | null,
+  /** The handle of the endpoint holding the lease, when one is attached. */
+  holderHandle: undefined as number | undefined,
   listeners: new Set<() => void>(),
 }));
 vi.mock("../../../services/DriveLeaseService.js", async (importOriginal) => ({
@@ -65,6 +67,8 @@ vi.mock("../../../services/DriveLeaseService.js", async (importOriginal) => ({
       ? null
       : {
           isDriving: () => lease.holder === "self",
+          getHolderEndpoint: () =>
+            lease.holderHandle === undefined ? null : { handle: lease.holderHandle },
           onChange: (listener: () => void) => {
             lease.listeners.add(listener);
             return () => lease.listeners.delete(listener);
@@ -75,6 +79,7 @@ vi.mock("../../../services/DriveLeaseService.js", async (importOriginal) => ({
 vi.mock("electron", () => ({
   ipcMain: ipcMainMock,
   BrowserWindow: { fromWebContents: () => null, getAllWindows: () => [] },
+  webContents: { fromId: () => undefined },
   safeStorage: {},
   app: {
     getPath: () => "/tmp",
@@ -84,6 +89,41 @@ vi.mock("electron", () => ({
   },
 }));
 vi.mock("../../../window/serviceRefs.js", () => ({ getPtyClient: () => ptyClient }));
+/** The session journal as Canopy reads it: its records, and who hears it written. */
+const history = vi.hoisted(() => ({
+  records: [] as Array<
+    import("../../../../shared/types/ipc/agentSessionHistory.js").AgentSessionRecord
+  >,
+  listeners: new Set<() => void>(),
+  written(): void {
+    for (const listener of [...this.listeners]) listener();
+  },
+}));
+const removeFromCanopyTrash = vi.hoisted(() =>
+  vi.fn(async (terminals: Array<{ id: string; spawnedAt: number }>) => {
+    history.records = history.records.map((record) =>
+      record.trash &&
+      terminals.some(
+        (terminal) =>
+          terminal.id === record.terminal?.id && terminal.spawnedAt === record.terminal.spawnedAt
+      )
+        ? { ...record, trash: { ...record.trash, removedAt: 1 } }
+        : record
+    );
+    history.written();
+    return terminals.length;
+  })
+);
+vi.mock("../../../services/pty/agentSessionHistory.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../services/pty/agentSessionHistory.js")>()),
+  listAgentSessions: () => history.records,
+  onSessionHistoryWritten: (listener: () => void) => {
+    history.listeners.add(listener);
+    return () => history.listeners.delete(listener);
+  },
+  removeFromCanopyTrash,
+  adoptCanopyTrashClose: vi.fn(async () => false),
+}));
 /** The lanes main holds an assistant for, and who hears one end. */
 const assistants = vi.hoisted(() => ({
   lane: null as { sessionId: string; terminalId: string } | null,
@@ -221,6 +261,7 @@ import { canopyPanelsListing, registerCanopyHandlers } from "../canopy.js";
 import { CANOPY_METHOD_CHANNELS } from "../canopy.preload.js";
 import { activeTerminalWatches } from "../canopyTerminalWatch.js";
 import { getIpcDispatcher } from "../../dispatcher.js";
+import { resetCanopyTrashRemovalsForTests } from "../../../services/pty/canopyTrashRemovals.js";
 import type { ClientEndpoint } from "../../endpoint.js";
 import { CHANNELS } from "../../channels.js";
 import { readPluginTerminalScreen } from "../../../services/plugin/pluginTerminalScreenRead.js";
@@ -1082,7 +1123,7 @@ describe("canopy IPC", () => {
       return snapshot.trash ?? [];
     }
 
-    it("lists an agent trashed in any project, and drops it once it is restored or let go", async () => {
+    it("lists an agent trashed in any project, drops it restored, and keeps it ended once let go", async () => {
       await trashedOnHost();
       expect((await trash()).map((entry) => [entry.run.runId, entry.run.workspaceId])).toEqual([
         ["run-1", "project-2"],
@@ -1092,7 +1133,276 @@ describe("canopy IPC", () => {
 
       await trashedOnHost();
       events.emit("terminal:trash-cleared", { id: "run-1", expiresAt: EXPIRES });
-      expect(await trash()).toEqual([]);
+      expect(await trash()).toEqual([
+        expect.objectContaining({ run: expect.objectContaining({ runId: "run-1" }), ended: {} }),
+      ]);
+    });
+
+    describe("past the trash's window", () => {
+      /** The user closed run-1 in project-2; the journal holds its session. */
+      function journaled(overrides: Record<string, unknown> = {}) {
+        history.records = [
+          {
+            sessionId: "session-1",
+            agentId: "claude",
+            worktreeId: null,
+            title: "Fix login",
+            projectId: "project-2",
+            savedAt: EXPIRES,
+            cwd: "/repo/login",
+            closedBy: "user",
+            terminal: { id: "run-1", spawnedAt: 100 },
+            trash: { expiresAt: EXPIRES, closedAt: EXPIRES - TRASH_TTL_MS },
+            ...overrides,
+          },
+        ];
+        history.written();
+      }
+
+      /** A view of the run's project, as main reaches it. */
+      function projectView(id: number) {
+        const view = { id, send: vi.fn(), isDestroyed: () => false };
+        state.views = [view];
+        return view;
+      }
+
+      beforeEach(() => {
+        history.records = [];
+        removeFromCanopyTrash.mockClear();
+        // Runs removed by earlier cases are this module's to remember, not this case's.
+        resetCanopyTrashRemovalsForTests();
+      });
+
+      /** What the panel is told when a restore is refused. */
+      async function refusal(promise: Promise<unknown>): Promise<string> {
+        try {
+          await promise;
+          return "";
+        } catch (error) {
+          return (error as { userMessage?: string }).userMessage ?? "";
+        }
+      }
+
+      it("lists the user's closes from the journal, and nothing else that ended a pane", async () => {
+        journaled();
+        history.records.push({
+          sessionId: "session-quit",
+          agentId: "codex",
+          worktreeId: null,
+          title: null,
+          projectId: "project-2",
+          savedAt: EXPIRES,
+          closedBy: "shutdown",
+          terminal: { id: "run-quit", spawnedAt: 100 },
+        });
+        history.written();
+        const listed = await trash();
+        expect(listed.map((entry) => entry.run.runId)).toEqual(["run-1"]);
+        expect(listed[0]).toMatchObject({ ended: {}, expiresAt: EXPIRES });
+        // The snapshot names the run, never the session it would resume.
+        expect(JSON.stringify(listed)).not.toContain("session-1");
+      });
+
+      it("resumes an ended run through a view of its project, then takes it out of the Trash", async () => {
+        journaled();
+        const view = projectView(1);
+        await trash();
+        const restoring = invoke(
+          CANOPY_METHOD_CHANNELS.restoreTrashed,
+          fakeSender(1),
+          "run-1",
+          target
+        ) as Promise<{ ok: boolean; data: unknown }>;
+        await vi.waitFor(() => expect(view.send).toHaveBeenCalled());
+        expect(ptyClient.restore).not.toHaveBeenCalled();
+        const [channel, request] = view.send.mock.calls[0]! as [
+          string,
+          { requestId: string; session: { sessionId: string } },
+        ];
+        expect(channel).toBe("canopy:resume-requested");
+        expect(request.session.sessionId).toBe("session-1");
+
+        // Only the view asked is heard.
+        await invoke(CANOPY_METHOD_CHANNELS.resumeSettled, fakeSender(2), request.requestId, {
+          runId: "elsewhere",
+        });
+        await invoke(CANOPY_METHOD_CHANNELS.resumeSettled, fakeSender(1), request.requestId, {
+          runId: "run-9",
+        });
+
+        expect(await restoring).toEqual({ runId: "run-9" });
+        expect(removeFromCanopyTrash).toHaveBeenCalledWith(
+          [{ id: "run-1", spawnedAt: 100 }],
+          expect.any(String)
+        );
+        expect(await trash()).toEqual([]);
+      });
+
+      it("lets only the view asked take up a resume, once, and only while Canopy waits", async () => {
+        journaled();
+        const view = projectView(1);
+        await trash();
+        const restoring = invoke(
+          CANOPY_METHOD_CHANNELS.restoreTrashed,
+          fakeSender(1),
+          "run-1",
+          target
+        );
+        await vi.waitFor(() => expect(view.send).toHaveBeenCalled());
+        const { requestId } = view.send.mock.calls[0]![1] as { requestId: string };
+        const started = (sender: number) =>
+          invoke(CANOPY_METHOD_CHANNELS.resumeStarted, fakeSender(sender), requestId);
+        expect(await started(2)).toBeNull();
+        // The launch's own while to land the pane, told to the view.
+        expect(await started(1)).toBeGreaterThan(0);
+        expect(await started(1)).toBeNull();
+        await invoke(CANOPY_METHOD_CHANNELS.resumeSettled, fakeSender(1), requestId, {
+          runId: "run-9",
+        });
+        expect(await restoring).toEqual({ runId: "run-9" });
+        // Settled: a view hearing it only now launches nothing.
+        expect(await started(1)).toBeNull();
+      });
+
+      it("gives up on a resume not taken up in time, and gives one taken up its own while", async () => {
+        journaled();
+        const view = projectView(1);
+        await trash();
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        try {
+          // Never taken up: Canopy stops waiting, and a late claim starts nothing.
+          const untaken = refusal(
+            invoke(CANOPY_METHOD_CHANNELS.restoreTrashed, fakeSender(1), "run-1", target)
+          );
+          await vi.waitFor(() => expect(view.send).toHaveBeenCalledTimes(1));
+          const first = (view.send.mock.calls[0]![1] as { requestId: string }).requestId;
+          await vi.advanceTimersByTimeAsync(30_000);
+          expect(await untaken).toContain("didn't answer in time");
+          expect(
+            await invoke(CANOPY_METHOD_CHANNELS.resumeStarted, fakeSender(1), first)
+          ).toBeNull();
+
+          // Taken up: the start's deadline no longer applies, the launch's does.
+          const taken = refusal(
+            invoke(CANOPY_METHOD_CHANNELS.restoreTrashed, fakeSender(1), "run-1", target)
+          );
+          await vi.waitFor(() => expect(view.send).toHaveBeenCalledTimes(2));
+          const second = (view.send.mock.calls[1]![1] as { requestId: string }).requestId;
+          await vi.advanceTimersByTimeAsync(20_000);
+          const budget = (await invoke(
+            CANOPY_METHOD_CHANNELS.resumeStarted,
+            fakeSender(1),
+            second
+          )) as number;
+          await vi.advanceTimersByTimeAsync(budget - 1);
+          let settled = false;
+          void taken.then(() => {
+            settled = true;
+          });
+          await vi.advanceTimersByTimeAsync(0);
+          expect(settled).toBe(false);
+          await vi.advanceTimersByTimeAsync(1);
+          expect(await taken).toContain("didn't finish resuming it in time");
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it("keeps an ended run whose resume failed, saying why", async () => {
+        journaled();
+        const view = projectView(1);
+        await trash();
+        const restoring = refusal(
+          invoke(CANOPY_METHOD_CHANNELS.restoreTrashed, fakeSender(1), "run-1", target)
+        );
+        await vi.waitFor(() => expect(view.send).toHaveBeenCalled());
+        const { requestId } = view.send.mock.calls[0]![1] as { requestId: string };
+        await invoke(CANOPY_METHOD_CHANNELS.resumeSettled, fakeSender(1), requestId, {
+          error: "Its agent can't resume.",
+        });
+        expect(await restoring).toBe("Its agent can't resume.");
+        expect(removeFromCanopyTrash).not.toHaveBeenCalled();
+        expect(await trash()).toHaveLength(1);
+      });
+
+      it("asks the view that drives the project, never one that would hold the launch", async () => {
+        journaled();
+        // The caller watches the project from this machine; a remote Shell drives it.
+        const watcher = { id: 1, send: vi.fn(), isDestroyed: () => false };
+        const driver = { id: -7, send: vi.fn(), isDestroyed: () => false };
+        state.views = [watcher, driver];
+        lease.holder = "self";
+        lease.holderHandle = -7;
+        try {
+          await trash();
+          const restoring = invoke(
+            CANOPY_METHOD_CHANNELS.restoreTrashed,
+            fakeSender(1),
+            "run-1",
+            target
+          );
+          await vi.waitFor(() => expect(driver.send).toHaveBeenCalled());
+          expect(watcher.send).not.toHaveBeenCalled();
+          const { requestId } = driver.send.mock.calls[0]![1] as { requestId: string };
+          await invoke(CANOPY_METHOD_CHANNELS.resumeSettled, fakeSender(-7), requestId, {
+            runId: "run-9",
+          });
+          expect(await restoring).toEqual({ runId: "run-9" });
+        } finally {
+          lease.holder = null;
+          lease.holderHandle = undefined;
+        }
+      });
+
+      it("says to open the project when no view of it is open, and resumes nothing", async () => {
+        journaled();
+        state.views = [];
+        await trash();
+        const result = await invoke(
+          CANOPY_METHOD_CHANNELS.restoreTrashed,
+          fakeSender(1),
+          "run-1",
+          target
+        );
+        expect(result).toEqual({ open: { workspaceId: "project-2" } });
+        expect(removeFromCanopyTrash).not.toHaveBeenCalled();
+      });
+
+      it("restores nothing whose worktree is gone, or that is still closing", async () => {
+        await trashedOnHost();
+        events.emit("terminal:trash-cleared", { id: "run-1", expiresAt: EXPIRES });
+        expect(
+          await refusal(
+            invoke(CANOPY_METHOD_CHANNELS.restoreTrashed, fakeSender(1), "run-1", target)
+          )
+        ).toContain("still closing");
+
+        journaled({ worktreeId: "/no/such/worktree-14891" });
+        projectView(1);
+        await vi.waitFor(async () =>
+          expect((await trash())[0]).toMatchObject({ ended: { worktreeRemoved: true } })
+        );
+        expect(
+          await refusal(
+            invoke(CANOPY_METHOD_CHANNELS.restoreTrashed, fakeSender(1), "run-1", target)
+          )
+        ).toContain("worktree has been removed");
+      });
+
+      it("takes an ended run out of the Trash without ending anything", async () => {
+        journaled();
+        await trash();
+        const removed = await outcome(
+          invoke(CANOPY_METHOD_CHANNELS.removeTrashed, fakeSender(1), "run-1", target)
+        );
+        expect(removed.ok).toBe(true);
+        expect(ptyClient.gracefulKill).not.toHaveBeenCalled();
+        expect(removeFromCanopyTrash).toHaveBeenCalledWith(
+          [{ id: "run-1", spawnedAt: 100 }],
+          expect.any(String)
+        );
+        expect(await trash()).toEqual([]);
+      });
     });
 
     it("restores a run a view trashed through the view holding its pane", async () => {

@@ -16,6 +16,7 @@ import {
   type CanopyTerminalView,
 } from "@shared/types/ipc/canopy";
 import type { FleetSnapshot } from "@shared/types/ipc/fleet";
+import { CANOPY_TRASH_LIMIT } from "@shared/config/trash";
 import type { HostId } from "@shared/types/remoteHosts";
 
 /**
@@ -146,7 +147,8 @@ export function mergeHostReadings(readings: readonly HostReading[]): {
     ),
     lastError: null,
     failedRuns,
-    // Every host's trash, its runs keyed as the fleet's are, newest first across hosts.
+    // Every host's trash, its runs keyed as the fleet's are, newest first across
+    // hosts, as many as one host lists.
     trash: loadedCanopies
       .flatMap(({ hostId, canopy: c }) =>
         (c!.trash ?? []).map((entry) => ({
@@ -162,7 +164,8 @@ export function mergeHostReadings(readings: readonly HostReading[]): {
         (a, b) =>
           b.trashedAt - a.trashedAt ||
           (a.run.runId < b.run.runId ? -1 : a.run.runId > b.run.runId ? 1 : 0)
-      ),
+      )
+      .slice(0, CANOPY_TRASH_LIMIT),
   };
   return { canopy, fleet, offRuns };
 }
@@ -360,7 +363,17 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
       trashed.delete(mine);
       await apiFor(entry.hostId).untrash(entry.receipt);
     },
-    restoreTrashed: (key, ...rest) => routed(key, (host, id) => host.restoreTrashed(id, ...rest)),
+    // What comes back is named as its host knows it: the inbox holds it by key.
+    restoreTrashed: (key, ...rest) =>
+      routed(key, (host, id, hostId) =>
+        host
+          .restoreTrashed(id, ...rest)
+          .then((outcome) =>
+            "runId" in outcome
+              ? { runId: allHostsKey(hostId, outcome.runId) }
+              : { open: { workspaceId: allHostsKey(hostId, outcome.open.workspaceId) } }
+          )
+      ),
     removeTrashed: (key, ...rest) => routed(key, (host, id) => host.removeTrashed(id, ...rest)),
     // Each host empties exactly the runs confirmed on it. Every host must
     // answer: a removal is never reported done where a host refused it.

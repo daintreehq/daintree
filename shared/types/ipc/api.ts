@@ -992,6 +992,13 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onRemoveRequested(
       callback: (request: import("./canopy.js").CanopyRemoveRequest) => void
     ): () => void;
+    /**
+     * Canopy asks this view, one of its project's, to resume a session the user
+     * closed: as the Resume Sessions palette would, answered with `resumeSettled`.
+     */
+    onResumeRequested(
+      callback: (request: import("./canopy.js").CanopyResumeRequest) => void
+    ): () => void;
     /** Canopy renamed a terminal this view owns: rename its pane as the user's own rename would. */
     onRenameRequested(
       callback: (request: import("./canopy.js").CanopyRenameRequest) => void

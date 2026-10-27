@@ -5,25 +5,13 @@ import path from "node:path";
 import { events } from "../events.js";
 import type { TerminalSnapshot } from "./types.js";
 import {
-  TRASH_TTL_MS,
   MAX_PRESERVED_TERMINAL_SNAPSHOTS,
   PRESERVED_SNAPSHOT_RECENT_ACCESS_GUARD_MS,
 } from "./types.js";
 import type { TerminalProcess } from "./TerminalProcess.js";
-import { parseE2ETimerOverrideMs } from "../../../shared/config/e2eTimerOverrides.js";
+import { resolveTrashTtlMs } from "./closeAttribution.js";
 
-/**
- * Host-side trash TTL. An unpackaged E2E launch may shorten it (the renderer
- * gets the same value through the preload) so a spec can observe expiry
- * without sleeping through the real 20 s window.
- */
-export function resolveTrashTtlMs(): number {
-  if (process.env.DAINTREE_E2E_MODE === "1" && process.env.DAINTREE_IS_PACKAGED === "0") {
-    const override = parseE2ETimerOverrideMs(process.env.DAINTREE_E2E_TRASH_TTL_MS);
-    if (override !== null) return override;
-  }
-  return TRASH_TTL_MS;
-}
+export { resolveTrashTtlMs };
 
 type ProjectIdCandidates = {
   mainProjectId: string | null;
@@ -154,6 +142,10 @@ export class TerminalRegistry {
 
   getTrashExpiresAt(id: string): number | undefined {
     return this.trashExpiryTimes.get(id);
+  }
+
+  getTrashTtlMs(): number {
+    return this.trashTtlMs;
   }
 
   getForProject(projectId: string): string[] {

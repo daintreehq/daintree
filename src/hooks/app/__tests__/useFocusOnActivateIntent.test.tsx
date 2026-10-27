@@ -6,13 +6,22 @@ type FocusPayload =
   | { intent: "focus-next-waiting" }
   | { intent: "focus-panel"; panelId: string }
   | { intent: "focus-worktree"; worktreeId: string }
-  | { intent: "open-assistant"; subject: Record<string, unknown> };
+  | { intent: "open-assistant"; subject: Record<string, unknown> }
+  | { intent: "restore-trashed"; runId: string; spawnedAt: number; expiresAt: number };
 
 const onFocusOnActivateMock = vi.hoisted(() =>
   vi.fn<(cb: (payload: FocusPayload) => void) => () => void>()
 );
 
 const dispatchMock = vi.hoisted(() => vi.fn());
+const restoreTrashedMock = vi.hoisted(() =>
+  vi.fn(
+    async (
+      _runId: string,
+      _target: unknown
+    ): Promise<{ runId: string } | { open: { workspaceId: string } }> => ({ runId: "resumed" })
+  )
+);
 
 vi.stubGlobal("window", {
   ...globalThis.window,
@@ -20,6 +29,7 @@ vi.stubGlobal("window", {
     project: {
       onFocusOnActivate: onFocusOnActivateMock,
     },
+    canopy: { restoreTrashed: restoreTrashedMock },
   },
 });
 
@@ -75,6 +85,57 @@ describe("useFocusOnActivateIntent", () => {
     expect(activateLaneMock).not.toHaveBeenCalled();
     rerender({ loaded: true });
     expect(activateLaneMock).toHaveBeenCalledWith(subject);
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it("restores a run from Canopy's Trash once hydrated, and lands on the pane it comes back in", async () => {
+    dispatchMock.mockResolvedValue({ ok: true });
+    const { rerender } = renderHook(({ loaded }) => useFocusOnActivateIntent(loaded), {
+      initialProps: { loaded: false },
+    });
+    act(() => {
+      lastCallback?.({ intent: "restore-trashed", runId: "run-1", spawnedAt: 5, expiresAt: 9 });
+    });
+    expect(restoreTrashedMock).not.toHaveBeenCalled();
+    rerender({ loaded: true });
+    expect(restoreTrashedMock).toHaveBeenCalledWith("run-1", { spawnedAt: 5, expiresAt: 9 });
+    await vi.waitFor(() =>
+      expect(dispatchMock).toHaveBeenCalledWith("panel.focus", { panelId: "resumed" })
+    );
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  it("lands on no restored pane once a newer destination has come", async () => {
+    let answer: () => void = () => {};
+    restoreTrashedMock.mockImplementationOnce(
+      () => new Promise((resolve) => (answer = () => resolve({ runId: "resumed" })))
+    );
+    dispatchMock.mockResolvedValue({ ok: true });
+    renderHook(() => useFocusOnActivateIntent(true));
+    act(() => {
+      lastCallback?.({ intent: "restore-trashed", runId: "run-1", spawnedAt: 5, expiresAt: 9 });
+    });
+    act(() => {
+      lastCallback?.({ intent: "focus-panel", panelId: "other" });
+    });
+    await vi.waitFor(() =>
+      expect(dispatchMock).toHaveBeenCalledWith("panel.focus", { panelId: "other" })
+    );
+    await act(async () => answer());
+    expect(dispatchMock).not.toHaveBeenCalledWith("panel.focus", { panelId: "resumed" });
+  });
+
+  it("says so when the run can't come back here, focusing nothing", async () => {
+    restoreTrashedMock.mockRejectedValueOnce(new Error("That terminal has left the trash."));
+    renderHook(() => useFocusOnActivateIntent(true));
+    act(() => {
+      lastCallback?.({ intent: "restore-trashed", runId: "run-1", spawnedAt: 5, expiresAt: 9 });
+    });
+    await vi.waitFor(() =>
+      expect(notifyMock).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Couldn't restore terminal" })
+      )
+    );
     expect(dispatchMock).not.toHaveBeenCalled();
   });
 

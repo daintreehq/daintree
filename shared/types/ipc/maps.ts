@@ -1902,6 +1902,7 @@ export interface IpcEventMap {
   "canopy:trash-requested": import("./canopy.js").CanopyTrashRequest;
   "canopy:restore-requested": import("./canopy.js").CanopyRestoreRequest;
   "canopy:remove-requested": import("./canopy.js").CanopyRemoveRequest;
+  "canopy:resume-requested": import("./canopy.js").CanopyResumeRequest;
   "canopy:rename-requested": import("./canopy.js").CanopyRenameRequest;
   "project:updated": Project;
   /**

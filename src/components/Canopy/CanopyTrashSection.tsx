@@ -40,8 +40,8 @@ import type { CanopyApi } from "./canopyHostSource";
 import {
   buildCanopyTrash,
   canopyTrashDomId,
-  closedPhrase,
   expiredAnnouncement,
+  trashAside,
   trashMatches,
   type CanopyTrashItem,
 } from "./canopyTrash";
@@ -52,6 +52,12 @@ const CLOCK_TICK_MS = 1000;
 const EXPIRY_SLACK_MS = 1000;
 /** How long a run that left at its deadline is given to turn up in the fleet, restored. */
 const EXPIRY_CONFIRM_MS = 1500;
+/**
+ * An ended run leaving this soon after its deadline had nothing to resume: the
+ * trash let it go, as before. One leaving later is the list's own upkeep (a
+ * close aged out of history, or taken out elsewhere), never news.
+ */
+const EXPIRY_ANNOUNCE_WITHIN_MS = 30_000;
 
 export interface CanopyTrashSectionHandle {
   /** Down off the inbox's last row: onto the Trash bar. False when there is no Trash shown. */
@@ -79,11 +85,13 @@ function failed(title: string, error: unknown): void {
 }
 
 /**
- * Canopy's Trash: every agent run the host's trash holds, whichever project it
- * is in and however it was closed, newest first. Folded by default, as
- * Archived is; a search shows its matching rows open. Enter, the row's
- * Restore and its menu put a run back where it was; Remove now and Empty
- * trash end the process for good, so each confirms first.
+ * Canopy's Trash: every agent run the user closed on the host, whichever
+ * project it is in and however it was closed, newest first. Folded by default,
+ * as Archived is; a search shows its matching rows open. Enter, the row's
+ * Restore and its menu put a run back where it was: the same process inside
+ * the trash's window, its session resumed after it. Remove now and Empty trash
+ * end a live process for good, so they confirm first; an ended run only
+ * leaves the list, its session kept for the Resume Sessions palette.
  */
 export function CanopyTrashSection({
   ref,
@@ -95,7 +103,7 @@ export function CanopyTrashSection({
   onLeaveUp,
   onSearch,
   onRestoring,
-  restoringRunId,
+  onRestoreElsewhere,
   acted,
 }: {
   ref?: Ref<CanopyTrashSectionHandle>;
@@ -112,12 +120,13 @@ export function CanopyTrashSection({
   /** "/" from a row. */
   onSearch: () => void;
   /**
-   * A run is being put back from here: the inbox selects it once it is back,
-   * unless the user picks something first. Settled with whether main did it.
+   * A run is being put back from here: the inbox selects the run it comes
+   * back as, unless the user picks something first. Settled with that run, or
+   * null when nothing came back.
    */
-  onRestoring: (runId: string) => (ok: boolean) => void;
-  /** The run whose restore the inbox is waiting for, to take the keyboard to. */
-  restoringRunId: string | null;
+  onRestoring: () => (runId: string | null) => void;
+  /** No view of the run's project is open to resume it in: open it there, as Go to terminal would. */
+  onRestoreElsewhere: (item: CanopyTrashItem) => void;
   /** What the panel did itself, so its leaving the trash is said as no expiry. */
   acted: TrashActed;
 }) {
@@ -176,6 +185,10 @@ export function CanopyTrashSection({
     []
   );
 
+  // Rows put back from here, until they leave: the inbox takes the keyboard
+  // to the run each comes back as.
+  const restoringRef = useRef(new Set<string>());
+
   // The row that had the keyboard left (removed, expired, restored): the
   // keyboard goes on to the next row, else the bar, else back up into the
   // inbox. A run restored from here takes it on once it is back.
@@ -184,6 +197,10 @@ export function CanopyTrashSection({
     const before = shownBeforeRef.current;
     const now = shown.map((item) => item.runId);
     shownBeforeRef.current = now;
+    const restoredHere = selectedRunId !== null && restoringRef.current.has(selectedRunId);
+    for (const runId of [...restoringRef.current]) {
+      if (!now.includes(runId)) restoringRef.current.delete(runId);
+    }
     if (selectedRunId === null || now.includes(selectedRunId)) return;
     const index = before.indexOf(selectedRunId);
     if (index === -1) return;
@@ -194,45 +211,59 @@ export function CanopyTrashSection({
     else if (headerRef.current) headerRef.current.focus();
     // Restored from here: the inbox takes the keyboard to it once it is back,
     // and moving its selection meanwhile would read as the user's own choice.
-    else if (restoringRunId !== selectedRunId) onLeaveUp();
+    else if (!restoredHere) onLeaveUp();
   });
 
   const restore = (item: CanopyTrashItem) => {
+    if (item.worktreeRemoved) return;
     acted.mark(item);
-    const settle = onRestoring(item.runId);
+    restoringRef.current.add(item.runId);
+    const settle = onRestoring();
+    const missed = () => {
+      acted.unmark(item);
+      restoringRef.current.delete(item.runId);
+      settle(null);
+    };
     safeFireAndForget(
       api.restoreTrashed(item.runId, targetOf(item)).then(
-        () => settle(true),
+        (outcome) => {
+          if ("runId" in outcome) {
+            settle(outcome.runId);
+            return;
+          }
+          missed();
+          onRestoreElsewhere(item);
+        },
         (error: unknown) => {
-          acted.unmark(item);
-          settle(false);
+          missed();
           failed("Couldn't restore terminal", error);
         }
       )
     );
   };
 
-  const [removing, setRemoving] = useState<CanopyTrashItem | null>(null);
-  const confirmRemove = () => {
-    const item = removing;
-    setRemoving(null);
-    if (!item) return;
+  // An ended run only leaves the list, so it goes at once; a live one confirms.
+  const removeNow = (item: CanopyTrashItem) => {
     acted.mark(item);
     safeFireAndForget(
       api.removeTrashed(item.runId, targetOf(item)).catch((error: unknown) => {
         acted.unmark(item);
-        failed("Couldn't remove terminal", error);
+        failed(item.ended ? "Couldn't remove from trash" : "Couldn't remove terminal", error);
       })
     );
   };
+  const [removing, setRemoving] = useState<CanopyTrashItem | null>(null);
+  const confirmRemove = () => {
+    const item = removing;
+    setRemoving(null);
+    if (item) removeNow(item);
+  };
 
-  // Exactly the runs listed when the confirm opened, never what the trash
-  // holds by the time it is answered.
+  // Exactly the runs listed when it was asked, never what the trash holds by
+  // the time it is answered. Confirmed only when it ends a live process.
   const [emptying, setEmptying] = useState<CanopyTrashItem[] | null>(null);
-  const confirmEmpty = () => {
-    const targets = emptying;
-    setEmptying(null);
-    if (!targets || targets.length === 0) return;
+  const emptyNow = (targets: readonly CanopyTrashItem[]) => {
+    if (targets.length === 0) return;
     for (const item of targets) acted.mark(item);
     safeFireAndForget(
       api
@@ -243,6 +274,16 @@ export function CanopyTrashSection({
         })
     );
   };
+  const askEmpty = () => {
+    if (items.some((item) => !item.ended)) setEmptying(items);
+    else emptyNow(items);
+  };
+  const confirmEmpty = () => {
+    const targets = emptying;
+    setEmptying(null);
+    if (targets) emptyNow(targets);
+  };
+  const emptyingLive = (emptying ?? []).filter((item) => !item.ended).length;
 
   const onRowKeyDown = (event: KeyboardEvent<HTMLDivElement>, item: CanopyTrashItem) => {
     if (event.metaKey || event.ctrlKey || event.altKey) return;
@@ -335,8 +376,8 @@ export function CanopyTrashSection({
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
-                  <DropdownMenuItem destructive onSelect={() => setEmptying(items)}>
-                    Empty trash…
+                  <DropdownMenuItem destructive onSelect={askEmpty}>
+                    {items.some((item) => !item.ended) ? "Empty trash…" : "Empty trash"}
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -363,14 +404,24 @@ export function CanopyTrashSection({
                 </div>
               </ContextMenuTrigger>
               <ContextMenuContent>
-                <ContextMenuItem aria-keyshortcuts="Enter" onSelect={() => restore(item)}>
+                <ContextMenuItem
+                  aria-keyshortcuts="Enter"
+                  disabled={item.worktreeRemoved}
+                  onSelect={() => restore(item)}
+                >
                   Restore
                   <ContextMenuShortcut shortcut="Enter" />
                 </ContextMenuItem>
                 <ContextMenuSeparator />
-                <ContextMenuItem destructive onSelect={() => setRemoving(item)}>
-                  Remove now…
-                </ContextMenuItem>
+                {item.ended ? (
+                  <ContextMenuItem destructive onSelect={() => removeNow(item)}>
+                    Remove
+                  </ContextMenuItem>
+                ) : (
+                  <ContextMenuItem destructive onSelect={() => setRemoving(item)}>
+                    Remove now…
+                  </ContextMenuItem>
+                )}
               </ContextMenuContent>
             </ContextMenu>
           ))}
@@ -390,7 +441,11 @@ export function CanopyTrashSection({
         isOpen={emptying !== null}
         onClose={() => setEmptying(null)}
         title="Empty trash?"
-        description={`${pluralize(emptying?.length ?? 0, "panel")} will be permanently removed.`}
+        description={
+          emptyingLive === (emptying?.length ?? 0)
+            ? `${pluralize(emptyingLive, "panel")} will be permanently removed.`
+            : `${pluralize(emptyingLive, "running agent")} will be ended, and every agent listed leaves the trash.`
+        }
         variant="destructive"
         // The list of what is removed: a dialog, not an alertdialog.
         hasPreview
@@ -419,12 +474,13 @@ export interface TrashActed {
 
 /**
  * A run leaving the trash at its deadline was let go by it, not by anyone:
- * said once, politely, as the dock says its own. Another host's list, or the
- * panel's first, has no departures to say, and neither has what the panel did
- * itself. A restore elsewhere just before the deadline looks the same until
- * the run is back in the fleet, so it is said only once the fleet has had
- * time to show it. Kept by the panel, not the section: the last run expiring
- * takes the section with it.
+ * said once, politely, as the dock says its own. A run with a session to
+ * resume does not leave then: it stays, ended, and saying nothing of that is
+ * the point. Another host's list, or the panel's first, has no departures to
+ * say, and neither has what the panel did itself. A restore elsewhere just
+ * before the deadline looks the same until the run is back in the fleet, so
+ * it is said only once the fleet has had time to show it. Kept by the panel,
+ * not the section: the last run expiring takes the section with it.
  */
 export function useTrashExpiryAnnouncer({
   active,
@@ -477,6 +533,7 @@ export function useTrashExpiryAnnouncer({
       if (current.has(key)) continue;
       if (actedRef.current.delete(key)) continue;
       if (now < item.expiresAt - EXPIRY_SLACK_MS) continue;
+      if (item.ended && now > item.expiresAt + EXPIRY_ANNOUNCE_WITHIN_MS) continue;
       if (dockAnnounces(item.row.run.workspaceId)) continue;
       expired.push(item);
     }
@@ -523,7 +580,7 @@ function CanopyTrashRow({
 }) {
   const domId = canopyTrashDomId(item.runId);
   const { row, workspace, subject } = item;
-  const closed = closedPhrase(item.trashedAt, nowMs);
+  const closed = trashAside(item, nowMs);
   const project = workspace.name || null;
   const worktree = row.worktreeLabel !== subject ? row.worktreeLabel : null;
   const host = workspace.host;
@@ -541,7 +598,7 @@ function CanopyTrashRow({
       aria-selected={isSelected}
       aria-label={subject}
       aria-describedby={`${domId}-meta`}
-      aria-keyshortcuts="Enter"
+      aria-keyshortcuts={item.worktreeRemoved ? undefined : "Enter"}
       tabIndex={tabbable ? 0 : -1}
       data-canopy-trash-row=""
       onFocus={() => {
@@ -577,6 +634,7 @@ function CanopyTrashRow({
             size="xs"
             // A mouse affordance: the row has the keyboard, and Enter restores.
             tabIndex={-1}
+            disabled={item.worktreeRemoved}
             data-canopy-trash-restore=""
             onMouseDown={(event) => event.preventDefault()}
             onClick={(event) => {

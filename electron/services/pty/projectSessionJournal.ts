@@ -2,6 +2,7 @@ import type { PtyClient } from "../PtyClient.js";
 import type { WorkspaceClient } from "../WorkspaceClient.js";
 import { getLifecycleLedger } from "./lifecycleLedger.js";
 import { journalAgentSession } from "./agentSessionJournal.js";
+import { attributeClose } from "./closeAttribution.js";
 import { isAssistantTerminalRecord } from "../assistantTerminal.js";
 import { projectStore } from "../ProjectStore.js";
 import { createLogger } from "../../utils/logger.js";
@@ -226,6 +227,8 @@ export async function gracefulTeardownAndJournalProject(
             agentModelId: info.agentModelId,
             cwd: info.cwd ?? undefined,
             branch: info.worktreeId ? branchByWorktree.get(info.worktreeId) : undefined,
+            // The project closing ends its panes; one in the trash the user had closed.
+            ...attributeClose(info, "sleep"),
           },
           // `?? null` marks an evicted/unknown generation as explicitly frozen
           // so the journal funnel fails open instead of re-reading a respawn's

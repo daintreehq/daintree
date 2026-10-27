@@ -33,16 +33,28 @@ export interface CanopyTrashLedgerDeps {
   isHelpTerminal: (id: string) => boolean;
   /** The list changed: Canopy's snapshot carries it. */
   onChange: () => void;
+  /**
+   * The trash let a run go and no close of it reached the journal in the time
+   * one takes to land. The caller may keep it some other way (a session the
+   * journal held from before the close); the run leaves the ledger either way.
+   */
+  onSettle?: (entry: CanopyTrashEntry) => Promise<boolean> | boolean;
+  /** The user took this run out of Canopy's Trash: when the trash lets it go, it goes. */
+  isRemoved?: (entry: CanopyTrashEntry) => boolean;
   now?: () => number;
 }
 
+/** Long enough for a close to land: a graceful quit's budget, the branch lookup and the queued write. */
+export const CANOPY_TRASH_SETTLE_MS = 15_000;
+
 /**
  * Every agent run this host's trash holds, whichever project it is in and
- * however it got there: Canopy's own Trash, across projects. A trashed run has
- * left the fleet, so the run is kept as the host had it when it was trashed —
- * its name, agent and place, never its state. An entry leaves when the host
- * restores the terminal, when the trash lets it go (removed, or expired), or
- * at its deadline should neither be heard.
+ * however it got there: the live half of Canopy's Trash, across projects. A
+ * trashed run has left the fleet, so the run is kept as the host had it when
+ * it was trashed — its name, agent and place, never its state. An entry leaves
+ * when the host restores the terminal. When the trash lets it go (removed, or
+ * expired), or at its deadline should neither be heard, it is ended and kept
+ * while its close lands in the journal, which holds it from then on.
  */
 export class CanopyTrashLedger {
   private readonly entries = new Map<string, CanopyTrashEntry>();
@@ -111,7 +123,8 @@ export class CanopyTrashLedger {
 
   /**
    * The trash let the terminal go: removed, or expired. Names which trash it
-   * was, so a late word about an earlier one leaves a newer trash be.
+   * was, so a late word about an earlier one leaves a newer trash be. The run
+   * stays, ended, while its close is journaled.
    */
   onCleared(id: string, expiresAt: number): void {
     if (this.disposed) return;
@@ -119,9 +132,39 @@ export class CanopyTrashLedger {
       this.bump(id);
       this.pending.delete(id);
     }
-    if (this.entries.get(id)?.expiresAt !== expiresAt) return;
-    this.drop(id);
+    const entry = this.entries.get(id);
+    if (entry?.expiresAt !== expiresAt || entry.ended) return;
+    if (this.deps.isRemoved?.(entry)) {
+      this.drop(id);
+      this.deps.onChange();
+      return;
+    }
+    const ended: CanopyTrashEntry = { ...entry, ended: {} };
+    this.entries.set(id, ended);
+    this.clearTimer(id);
+    const timer = setTimeout(() => this.settle(id, ended), CANOPY_TRASH_SETTLE_MS);
+    timer.unref?.();
+    this.timers.set(id, timer);
     this.deps.onChange();
+  }
+
+  /**
+   * The journal holds the close of this incarnation now, and Canopy lists it
+   * from there: the ended entry goes without a word, as nothing on screen
+   * changes. Returns whether one went.
+   */
+  onJournaled(id: string, spawnedAt: number): boolean {
+    const entry = this.entries.get(id);
+    if (!entry?.ended || entry.run.spawnedAt !== spawnedAt) return false;
+    return this.drop(id);
+  }
+
+  /** The user took the run out of Canopy's Trash. */
+  remove(id: string): void {
+    if (this.disposed) return;
+    this.bump(id);
+    this.pending.delete(id);
+    if (this.drop(id)) this.deps.onChange();
   }
 
   dispose(): void {
@@ -133,6 +176,25 @@ export class CanopyTrashLedger {
     this.pending.clear();
   }
 
+  private settle(id: string, entry: CanopyTrashEntry): void {
+    this.timers.delete(id);
+    if (this.disposed || this.entries.get(id) !== entry) return;
+    const leave = () => {
+      if (this.disposed || this.entries.get(id) !== entry) return;
+      this.drop(id);
+      this.deps.onChange();
+    };
+    void Promise.resolve()
+      .then(() => this.deps.onSettle?.(entry) ?? false)
+      .then(leave, leave);
+  }
+
+  private clearTimer(id: string): void {
+    const timer = this.timers.get(id);
+    if (timer !== undefined) clearTimeout(timer);
+    this.timers.delete(id);
+  }
+
   private bump(id: string): number {
     const turn = (this.turns.get(id) ?? 0) + 1;
     this.turns.set(id, turn);
@@ -140,9 +202,7 @@ export class CanopyTrashLedger {
   }
 
   private drop(id: string): boolean {
-    const timer = this.timers.get(id);
-    if (timer !== undefined) clearTimeout(timer);
-    this.timers.delete(id);
+    this.clearTimer(id);
     return this.entries.delete(id);
   }
 

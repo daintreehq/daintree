@@ -34,6 +34,36 @@ function knowsWorktrees(state: WorktreeListState): boolean {
 }
 
 /**
+ * Resolves once this view knows its worktrees: true then, false when the view
+ * goes to the cache or the wait runs past `timeoutMs` first.
+ */
+export function whenWorktreesKnown(
+  store: WorktreeListSource,
+  timeoutMs = LANDING_TIMEOUT_MS
+): Promise<boolean> {
+  if (knowsWorktrees(store.getState())) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const cleanups: Array<() => void> = [];
+    const finish = (known: boolean) => {
+      for (const cleanup of cleanups.splice(0)) cleanup();
+      resolve(known);
+    };
+    cleanups.push(
+      store.subscribe(() => {
+        if (knowsWorktrees(store.getState())) finish(true);
+      })
+    );
+    cleanups.push(
+      subscribeProjectViewLifecycle((phase) => {
+        if (phase === "cached") finish(false);
+      })
+    );
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    cleanups.push(() => clearTimeout(timer));
+  });
+}
+
+/**
  * Select `worktreeId` once this view knows its worktrees, or, when it isn't
  * among them, leave the project as it opened and say so. A view that goes to
  * the cache, or a wait past the timeout, ends it with nothing more done; so
