@@ -1092,9 +1092,7 @@ export function CanopyCard({
                   <KbdChord shortcut="Cmd+Enter" density="compact" />
                   <span className="shrink-0">Send and go to</span>
                   <TruncatedTooltip content={moveOnTo.row.title}>
-                    <span className="min-w-0 truncate text-text-primary">
-                      {moveOnTo.row.title}
-                    </span>
+                    <span className="min-w-0 truncate text-text-primary">{moveOnTo.row.title}</span>
                   </TruncatedTooltip>
                 </>
               )}
