@@ -24,9 +24,9 @@ import type {
 } from "../../electron/services/VoiceCorrectionService";
 import { CORRECTION_GUARD_LIMITS } from "../../electron/services/voiceCorrectionGuard";
 import {
-  landCorrection,
+  correctionOutcome,
   type VoiceCorrectionProposal,
-} from "../../electron/services/voiceCorrectionLanding";
+} from "../../electron/services/voiceCorrectionOutcome";
 import { CLEANUP_CORPUS, type CleanupCase, type TranscriptStyle } from "./lib/voiceCleanupCorpus";
 import { ADVERSARIAL_PROPOSALS, GUARD_VARIANTS, type GuardVariant } from "./lib/voiceCleanupGuards";
 import { PROMPT_VARIANTS, type PromptVariant } from "./lib/voiceCleanupPrompts";
@@ -301,7 +301,7 @@ function landUnder(
   if (!reply) {
     return { disposition: noReply, landed: entry.raw, landedScore: scoreText(entry, entry.raw) };
   }
-  const landing = landCorrection(entry.raw, reply, {
+  const landing = correctionOutcome(entry.raw, reply, {
     vocabulary,
     startsPrompt: requestFor(entry).startsPrompt === true,
     limits,
@@ -1065,7 +1065,7 @@ async function main(): Promise<number> {
         );
         // The replay must land a reply exactly as the service just did.
         const replayed = result.proposal
-          ? landCorrection(entry.raw, result.proposal, {
+          ? correctionOutcome(entry.raw, result.proposal, {
               vocabulary: vocabularyOf(profile),
               startsPrompt: requestFor(entry).startsPrompt === true,
               limits: CORRECTION_GUARD_LIMITS,

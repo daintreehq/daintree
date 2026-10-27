@@ -926,7 +926,7 @@ export function validateCorrection(
  * "make it shorter".
  */
 export function validateRewrite(selection: string, rewritten: string): CorrectionGuardResult {
-  return keepsProtectedSpans(selection, rewritten)
+  return keepsProtectedSpans(selection, rewritten, false)
     ? { ok: true }
     : { ok: false, reason: "protected_span" };
 }

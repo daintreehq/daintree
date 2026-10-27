@@ -10,9 +10,25 @@ describe("CORE_CORRECTION_PROMPT", () => {
     expect(CORE_CORRECTION_PROMPT).toMatch(/return it character-for-character/i);
   });
 
-  it("allows paragraph cleanup without rewriting the passage", () => {
+  it("cleans up to the message the speaker would have typed, never a rewrite of it", () => {
     expect(CORE_CORRECTION_PROMPT).toContain("Add natural paragraph breaks");
-    expect(CORE_CORRECTION_PROMPT).toContain("do not turn it into polished prose");
+    expect(CORE_CORRECTION_PROMPT).toContain(
+      "Return the message the speaker would have typed to the agent"
+    );
+    expect(CORE_CORRECTION_PROMPT).toContain(
+      "never paraphrase, summarize, merge instructions, or add anything"
+    );
+  });
+
+  it("names the tics to drop beside the same words when they carry meaning", () => {
+    expect(CORE_CORRECTION_PROMPT).toMatch(/a closing "so yeah" or "yeah" goes/);
+    expect(CORE_CORRECTION_PROMPT).toMatch(/"Yeah" or "Okay" answering a question the agent asked/);
+    expect(CORE_CORRECTION_PROMPT).toMatch(/"just" meaning only/);
+  });
+
+  it("leaves the uncertain tags no say over filler, layout or spoken symbols", () => {
+    expect(CORE_CORRECTION_PROMPT).not.toContain("preserve it verbatim");
+    expect(CORE_CORRECTION_PROMPT).toMatch(/they don't limit the rest of the cleanup/);
   });
 
   it("gates custom-dictionary correction on context instead of forcing every phonetic match", () => {

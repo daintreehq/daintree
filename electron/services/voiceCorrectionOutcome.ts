@@ -26,7 +26,7 @@ export interface VoiceCorrectionProposal {
 export type VoiceCorrectionRejectReason =
   CorrectionRejectReason | VoiceCommandEditRejection | "low_confidence";
 
-export interface VoiceCorrectionLanding {
+export interface VoiceCorrectionOutcome {
   action: "no_change" | "replace";
   /** The text the passage becomes: the cleanup, or the raw text exactly. */
   confirmedText: string;
@@ -60,17 +60,18 @@ function rejectionVerdict(rejection: VoiceCorrectionRejectReason): VoiceCorrecti
 }
 
 /**
- * Decides what a proposal lands as. A command the cleanup wrote in place of
- * its spoken request is measured as that command, so "can you please run the
- * review skill on…" isn't over the edit budget for the words the command
- * replaced. Pure, so the cleanup benchmark can land the replies it recorded
- * under other edit budgets exactly as the service would have.
+ * Decides what a proposal becomes: the cleanup, or the raw text and why. A
+ * command the cleanup wrote in place of its spoken request is measured as that
+ * command, so "can you please run the review skill on…" isn't over the edit
+ * budget for the words the command replaced. Pure, so the cleanup benchmark
+ * can land the replies it recorded under other edit budgets exactly as the
+ * service would have.
  */
-export function landCorrection(
+export function correctionOutcome(
   rawText: string,
   proposal: VoiceCorrectionProposal,
   checks: VoiceCorrectionChecks
-): VoiceCorrectionLanding {
+): VoiceCorrectionOutcome {
   let confirmedText = rawText;
   if (proposal.action === "replace" && proposal.correctedText.trim()) {
     const candidate = proposal.correctedText.trim();

@@ -19,10 +19,10 @@ import { buildOpenAIHeaders } from "../../shared/utils/openaiHeaders.js";
 import { createTimeoutSignal, withTimeoutSignal } from "../../shared/utils/timeoutSignal.js";
 import { validateRewrite } from "./voiceCorrectionGuard.js";
 import {
-  landCorrection,
+  correctionOutcome,
   type VoiceCorrectionProposal,
   type VoiceCorrectionRejectReason,
-} from "./voiceCorrectionLanding.js";
+} from "./voiceCorrectionOutcome.js";
 import { mayReferenceFile } from "../../shared/utils/voiceFileLinkCommands.js";
 import { sliceSpans, type VoiceTextSpan } from "../../shared/utils/voiceUncertainWords.js";
 import type { HeardAsRule } from "../../shared/utils/voiceHeardAs.js";
@@ -433,21 +433,21 @@ export class VoiceCorrectionService {
         onText
       );
 
-      const landing = landCorrection(request.rawText, proposal, {
+      const outcome = correctionOutcome(request.rawText, proposal, {
         vocabulary: settings.commandTarget?.vocabulary ?? EMPTY_VOICE_COMMAND_VOCABULARY,
         startsPrompt: request.startsPrompt === true,
       });
-      if (landing.rejected) {
+      if (outcome.rejected) {
         logDebug(`${P} Correction rejected, keeping raw text`, {
-          reason: landing.rejected.reason,
+          reason: outcome.rejected.reason,
           rawLen: request.rawText.length,
-          correctedLen: landing.rejected.candidate.length,
+          correctedLen: outcome.rejected.candidate.length,
         });
       } else {
         logDebug(`${P} Correction success`, {
           rawLen: request.rawText.length,
-          correctedLen: landing.confirmedText.length,
-          action: landing.action,
+          correctedLen: outcome.confirmedText.length,
+          action: outcome.action,
           confidence: proposal.confidence,
           contextLen: request.recentContext?.length ?? 0,
           reason: request.reason ?? "unspecified",
@@ -455,12 +455,12 @@ export class VoiceCorrectionService {
       }
 
       return {
-        action: landing.action,
-        correctedText: landing.confirmedText,
+        action: outcome.action,
+        correctedText: outcome.confirmedText,
         confidence: proposal.confidence,
-        confirmedText: landing.confirmedText,
-        verdict: landing.verdict,
-        ...(landing.rejected ? { rejected: landing.rejected } : {}),
+        confirmedText: outcome.confirmedText,
+        verdict: outcome.verdict,
+        ...(outcome.rejected ? { rejected: outcome.rejected } : {}),
         proposal,
       };
     } catch (error) {

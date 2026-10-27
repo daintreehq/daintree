@@ -6,7 +6,7 @@ import {
   EMPTY_VOICE_COMMAND_VOCABULARY,
 } from "../../../shared/utils/voiceAgentCommands.js";
 import { CORRECTION_GUARD_LIMITS } from "../voiceCorrectionGuard.js";
-import { landCorrection, type VoiceCorrectionProposal } from "../voiceCorrectionLanding.js";
+import { correctionOutcome, type VoiceCorrectionProposal } from "../voiceCorrectionOutcome.js";
 
 const checks = { vocabulary: EMPTY_VOICE_COMMAND_VOCABULARY, startsPrompt: true };
 
@@ -17,18 +17,18 @@ function replace(
   return { action: "replace", correctedText, confidence };
 }
 
-describe("landCorrection", () => {
+describe("correctionOutcome", () => {
   it("keeps the raw text exactly for no_change or an empty reply, whatever the confidence", () => {
     const raw = "  commit and push ";
     const unchanged = { action: "no_change", confirmedText: raw, verdict: "unchanged" };
     expect(
-      landCorrection(raw, { action: "no_change", correctedText: "x", confidence: "low" }, checks)
+      correctionOutcome(raw, { action: "no_change", correctedText: "x", confidence: "low" }, checks)
     ).toEqual(unchanged);
-    expect(landCorrection(raw, replace("   ", "low"), checks)).toEqual(unchanged);
+    expect(correctionOutcome(raw, replace("   ", "low"), checks)).toEqual(unchanged);
   });
 
   it("reads a reply that hands the raw text back as no change", () => {
-    expect(landCorrection("commit and push", replace(" commit and push "), checks)).toEqual({
+    expect(correctionOutcome("commit and push", replace(" commit and push "), checks)).toEqual({
       action: "no_change",
       confirmedText: "commit and push",
       verdict: "unchanged",
@@ -37,7 +37,7 @@ describe("landCorrection", () => {
 
   it("lands a cleanup that keeps the meaning, trimmed", () => {
     expect(
-      landCorrection(
+      correctionOutcome(
         "um wire up the racked component",
         replace(" Wire up the React component. "),
         checks
@@ -52,7 +52,7 @@ describe("landCorrection", () => {
   it("refuses a low-confidence cleanup before the guards see it", () => {
     // Over the edit budget too: confidence is the reason given.
     expect(
-      landCorrection("the promise rejects when it times out", replace("Done.", "low"), checks)
+      correctionOutcome("the promise rejects when it times out", replace("Done.", "low"), checks)
     ).toMatchObject({
       action: "no_change",
       confirmedText: "the promise rejects when it times out",
@@ -63,7 +63,7 @@ describe("landCorrection", () => {
 
   it("refuses what the guard refuses, with its reason", () => {
     expect(
-      landCorrection("don't delete the branch yet", replace("Delete the branch yet."), checks)
+      correctionOutcome("don't delete the branch yet", replace("Delete the branch yet."), checks)
     ).toMatchObject({
       confirmedText: "don't delete the branch yet",
       verdict: "rejected_negation",
@@ -73,7 +73,7 @@ describe("landCorrection", () => {
 
   it("checks a command the cleanup wrote before confidence and the guards", () => {
     expect(
-      landCorrection(
+      correctionOutcome(
         "can you review the auth module",
         replace("/nonexistent the auth module", "low"),
         checks
@@ -87,7 +87,7 @@ describe("landCorrection", () => {
       getAgentConfig("claude")!.completionSources!
     );
     expect(
-      landCorrection("can you please run the review skill on auth", replace("/review on auth"), {
+      correctionOutcome("can you please run the review skill on auth", replace("/review on auth"), {
         vocabulary,
         startsPrompt: true,
       })
@@ -97,9 +97,9 @@ describe("landCorrection", () => {
   it("lands under whatever edit budget it's given", () => {
     const raw = "check the logs on the staging box and the traces and the metrics";
     const shorter = "Check the logs on the staging box.";
-    expect(landCorrection(raw, replace(shorter), checks).rejected?.reason).toBe("edit_size");
+    expect(correctionOutcome(raw, replace(shorter), checks).rejected?.reason).toBe("edit_size");
     expect(
-      landCorrection(raw, replace(shorter), {
+      correctionOutcome(raw, replace(shorter), {
         ...checks,
         limits: { ...CORRECTION_GUARD_LIMITS, removedRatio: 0.5 },
       }).confirmedText

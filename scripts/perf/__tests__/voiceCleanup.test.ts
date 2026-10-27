@@ -404,6 +404,7 @@ describe("prompt and guard variants", () => {
       return validateCorrection(entry.raw, proposal, GUARD_VARIANTS.v11!.limits).ok;
     }).map(({ harm }) => harm);
     expect(landed).toEqual([
+      "drops the branch it names",
       "swaps who does what",
       "drops the Yeah that answers the agent",
       "drops the just that means only",

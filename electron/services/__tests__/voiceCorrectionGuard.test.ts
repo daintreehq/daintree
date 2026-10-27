@@ -243,6 +243,7 @@ describe("validateCorrection", () => {
 
   describe("with spoken symbols", () => {
     const symbols = { ...CORRECTION_GUARD_LIMITS, spokenSymbols: true };
+    const without = { ...CORRECTION_GUARD_LIMITS, spokenSymbols: false };
     // No budget at all, so any word left unaccounted for is an edit.
     const strict = { ...symbols, minRemoved: 0, removedRatio: 0, minAdded: 0, addedRatio: 0 };
 
@@ -251,7 +252,10 @@ describe("validateCorrection", () => {
         "add a project underscore id column then run npm run db colon generate and open electron slash ipc slash handlers";
       const corrected =
         "Add a project_id column, then run npm run db:generate and open electron/ipc/handlers.";
-      expect(validateCorrection(raw, corrected)).toEqual({ ok: false, reason: "edit_size" });
+      expect(validateCorrection(raw, corrected, without)).toEqual({
+        ok: false,
+        reason: "edit_size",
+      });
       expect(validateCorrection(raw, corrected, symbols)).toEqual({ ok: true });
       expect(validateCorrection(raw, corrected, strict)).toEqual({ ok: true });
     });
@@ -272,10 +276,9 @@ describe("validateCorrection", () => {
 
     it("lets a flag the speaker spelled out appear, and no other", () => {
       const raw = "run npm test dash dash watch and dash v on the voice tests";
-      expect(validateCorrection(raw, "Run npm test --watch and -v on the voice tests.")).toEqual({
-        ok: false,
-        reason: "protected_span",
-      });
+      expect(
+        validateCorrection(raw, "Run npm test --watch and -v on the voice tests.", without)
+      ).toEqual({ ok: false, reason: "protected_span" });
       expect(
         validateCorrection(raw, "Run npm test --watch and -v on the voice tests.", symbols)
       ).toEqual({ ok: true });
@@ -578,7 +581,10 @@ describe("validateCorrection on self-corrections and lists", () => {
         .replace(/<\/?uncertain>/g, "")
         .replace(/\\`/g, "`");
     const examples = [
-      ...CORE_CORRECTION_PROMPT.matchAll(/- Target: "(.*)"\n {2}Corrected: "(.*?)"(?: \(|$)/gm),
+      // A target may carry a note on what it answers: `- Target: "…" (answering …)`.
+      ...CORE_CORRECTION_PROMPT.matchAll(
+        /- Target: "(.*?)"(?: \(.*\))?\n {2}Corrected: "(.*?)"(?: \(|$)/gm
+      ),
     ];
     expect(examples.length).toBe(CORE_CORRECTION_PROMPT.match(/^- Target: /gm)?.length);
     for (const [, target, corrected] of examples) {
