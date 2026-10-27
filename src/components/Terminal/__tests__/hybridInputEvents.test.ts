@@ -74,13 +74,29 @@ describe("agentAltChordKey", () => {
     ).toBeNull();
   });
 
-  it("falls back to the physical key for a dead key, which carries no letter code", () => {
+  it("leaves a dead key to compose, even on a chord's letter", () => {
+    // Claiming the keydown would not stop the composition the OS starts with
+    // it: the agent would get the chord and the next letter its accent.
     expect(
       agentAltChordKey(
-        press({ key: "Dead", code: "KeyO", keyCode: 0, altKey: true }),
+        press({ key: "Dead", code: "KeyP", keyCode: 80, altKey: true }),
         CLAUDE_CHORDS
       )
-    ).toBe("alt+o");
+    ).toBeNull();
+    expect(
+      agentAltChordKey(
+        press({ key: "Dead", code: "KeyO", keyCode: 229, altKey: true }),
+        CLAUDE_CHORDS
+      )
+    ).toBeNull();
+  });
+
+  it("matches against the list the agent declares, not Claude's", () => {
+    const optionT = press({ key: "†", code: "KeyT", keyCode: 84, altKey: true });
+    expect(agentAltChordKey(optionT, ["p"])).toBeNull();
+    expect(
+      agentAltChordKey(press({ key: "≈", code: "KeyX", keyCode: 88, altKey: true }), ["x"])
+    ).toBe("alt+x");
   });
 
   it("leaves Option chords the agent doesn't document to type", () => {
@@ -144,18 +160,16 @@ describe("agentAltChordKey", () => {
     ).toBe("alt+p");
   });
 
-  it("finds no letter in a press that carries neither a letter code nor a dead letter key", () => {
+  it("finds no letter in a key code outside the letters", () => {
     expect(
       agentAltChordKey(
         press({ key: "Process", code: "KeyP", keyCode: 229, altKey: true }),
         CLAUDE_CHORDS
       )
     ).toBeNull();
+    // F1's key code, 112, is "p" in lowercase.
     expect(
-      agentAltChordKey(
-        press({ key: "Dead", code: "Digit6", keyCode: 0, altKey: true }),
-        CLAUDE_CHORDS
-      )
+      agentAltChordKey(press({ key: "F1", code: "F1", keyCode: 112, altKey: true }), CLAUDE_CHORDS)
     ).toBeNull();
   });
 

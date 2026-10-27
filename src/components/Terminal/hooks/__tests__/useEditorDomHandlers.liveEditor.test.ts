@@ -199,6 +199,47 @@ describe("an agent's documented Option chords in a live editor", () => {
     expect(event.defaultPrevented).toBe(false);
   });
 
+  it("leaves Option+P alone while the composer is disabled", () => {
+    const latest = agentLatest({ disabled: true });
+    const { view } = mountEditor([hookExtension({ latestRef: { current: latest } })]);
+    const event = optionKeydown("π", 80, "KeyP");
+
+    view.contentDOM.dispatchEvent(event);
+
+    expect(latest.onSendKey).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("leaves Option+P to type when the host gives the composer no way to send keys", () => {
+    const latest = agentLatest({ onSendKey: undefined });
+    const exceptions = vi.fn();
+    const { view } = mountEditor([
+      hookExtension({ latestRef: { current: latest } }),
+      EditorView.exceptionSink.of(exceptions),
+    ]);
+    const event = optionKeydown("π", 80, "KeyP");
+
+    view.contentDOM.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(exceptions).not.toHaveBeenCalled();
+  });
+
+  it("leaves Option+P to a composition the composer is tracking", () => {
+    // The ref alone: a real composition would stop CodeMirror short of the
+    // handler, and the test would pass without reaching it.
+    const latest = agentLatest();
+    const { view } = mountEditor([
+      hookExtension({ latestRef: { current: latest }, isComposingRef: { current: true } }),
+    ]);
+    const event = optionKeydown("π", 80, "KeyP");
+
+    view.contentDOM.dispatchEvent(event);
+
+    expect(latest.onSendKey).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+  });
+
   it("leaves Option+P to type when the composer's terminal declares no chords", () => {
     const latest = agentLatest({ altChords: undefined });
     const { view } = mountEditor([hookExtension({ latestRef: { current: latest } })]);

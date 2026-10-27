@@ -8,6 +8,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
 import { createWorktreeStore, setCurrentViewStore } from "@/store/createWorktreeStore";
 import { usePanelStore } from "@/store/panelStore";
+import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { initBuiltInPanelKinds } from "@/panels/registry";
 import { HybridInputBar } from "../HybridInputBar";
 
@@ -20,6 +21,8 @@ describe("HybridInputBar agent Option chords", () => {
   beforeEach(() => {
     initBuiltInPanelKinds();
     setCurrentViewStore(createWorktreeStore());
+    // Drafts outlive the composer, so one test's draft would greet the next.
+    useTerminalInputStore.setState({ draftInputs: new Map() });
     const panel = {
       id: "term-1",
       title: "terminal",
@@ -76,11 +79,11 @@ describe("HybridInputBar agent Option chords", () => {
     };
   }
 
-  function pressOptionP(content: HTMLElement) {
+  function press(content: HTMLElement, key: string, keyCode: number, code: string) {
     const event = new KeyboardEvent("keydown", {
-      key: "π",
-      code: "KeyP",
-      keyCode: 80,
+      key,
+      code,
+      keyCode,
       altKey: true,
       bubbles: true,
       cancelable: true,
@@ -91,18 +94,33 @@ describe("HybridInputBar agent Option chords", () => {
     return event;
   }
 
-  it("sends Option+P from a Claude composer to the agent and keeps the draft", async () => {
+  const pressOptionP = (content: HTMLElement) => press(content, "π", 80, "KeyP");
+
+  it("sends Option+P, Option+T and Option+O from a Claude composer to the agent and keeps the draft", async () => {
     const { onSendKey, content, view } = await renderComposer("claude");
     act(() => {
       view.dispatch({ changes: { from: 0, insert: "tighten the retry loop" } });
     });
 
-    const event = pressOptionP(content);
+    const events = [
+      press(content, "π", 80, "KeyP"),
+      press(content, "†", 84, "KeyT"),
+      press(content, "ø", 79, "KeyO"),
+    ];
 
-    expect(onSendKey).toHaveBeenCalledTimes(1);
-    expect(onSendKey).toHaveBeenCalledWith("alt+p");
-    expect(event.defaultPrevented).toBe(true);
+    expect(onSendKey.mock.calls).toEqual([["alt+p"], ["alt+t"], ["alt+o"]]);
+    expect(events.map((event) => event.defaultPrevented)).toEqual([true, true, true]);
     expect(view.state.doc.toString()).toBe("tighten the retry loop");
+  });
+
+  it("sends Alt+P as Windows and Linux deliver it, from an empty draft", async () => {
+    const { onSendKey, content, view } = await renderComposer("claude");
+
+    const event = press(content, "p", 80, "KeyP");
+
+    expect(onSendKey).toHaveBeenCalledExactlyOnceWith("alt+p");
+    expect(event.defaultPrevented).toBe(true);
+    expect(view.state.doc.toString()).toBe("");
   });
 
   it("leaves Option+P to type in another agent's composer and in a plain terminal's", async () => {
@@ -117,12 +135,18 @@ describe("HybridInputBar agent Option chords", () => {
     }
   });
 
-  it("takes the chords of the agent the terminal turns out to be running", async () => {
+  it("follows the agent the terminal is running as it changes", async () => {
     const { onSendKey, content, becomes } = await renderComposer(undefined);
+
     await becomes("claude");
+    const asClaude = pressOptionP(content);
+    expect(onSendKey).toHaveBeenCalledExactlyOnceWith("alt+p");
+    expect(asClaude.defaultPrevented).toBe(true);
 
-    pressOptionP(content);
-
-    expect(onSendKey).toHaveBeenCalledWith("alt+p");
+    onSendKey.mockClear();
+    await becomes("codex");
+    const asCodex = pressOptionP(content);
+    expect(onSendKey).not.toHaveBeenCalled();
+    expect(asCodex.defaultPrevented).toBe(false);
   });
 });
