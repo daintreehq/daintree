@@ -179,10 +179,18 @@ export type VoiceInputErrorSeverity = "transient" | "fatal";
 
 /**
  * A graceful stop gave up on audio it was holding for a socket that never
- * opened. Sent while the stop drains, which is when the renderer otherwise
- * ignores provider errors, so it is the one it still shows.
+ * opened, or for a fresh one after the connection stopped answering. Sent
+ * while the stop drains, which is when the renderer otherwise ignores provider
+ * errors, so it is one it still shows.
  */
 export const VOICE_STOP_AUDIO_LOST_CODE = "stop_audio_lost";
+
+/**
+ * Audio a reconnect would have to resend no longer fits what the provider
+ * holds for it, so some of the dictation may never be transcribed. The
+ * session keeps running; it can also land while a stop drains.
+ */
+export const VOICE_REPLAY_AUDIO_LOST_CODE = "replay_audio_lost";
 
 /**
  * Structured error payload emitted by the voice input pipeline. Plain
