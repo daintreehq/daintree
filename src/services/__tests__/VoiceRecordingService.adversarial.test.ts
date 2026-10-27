@@ -102,6 +102,7 @@ const runtime = vi.hoisted(() => ({
     micSignal: "pending" as string,
     micDeviceLabel: null as string | null,
     micNotice: null as unknown,
+    idleStopWarning: false,
   },
   voiceFns: {
     setLastError: vi.fn<(error: VoiceInputError | null) => void>(),
