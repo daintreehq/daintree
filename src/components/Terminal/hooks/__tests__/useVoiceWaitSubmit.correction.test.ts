@@ -5,7 +5,10 @@ import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { undo } from "@codemirror/commands";
 import { createComposerHistory } from "../../inputEditorExtensions/composerHistory";
-import { createCorrectionReview } from "../../inputEditorExtensions/correctionReview";
+import {
+  correctionReviewField,
+  createCorrectionReview,
+} from "../../inputEditorExtensions/correctionReview";
 import { addImageChip, imageChipField, readImageChipPaths } from "../../inputEditorExtensions";
 
 // Enter while dictating, end to end through the real voice service, both real
@@ -329,7 +332,7 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611, #14780)", () =
     });
 
     expect(view.state.doc.toString()).toBe("Hello world.");
-    expect(view.contentDOM.querySelector(".cm-voice-restore")).toBeNull();
+    expect(view.state.field(correctionReviewField, false)).toBeNull();
     expect(undo(view)).toBe(true);
     expect(view.state.doc.toString()).toBe("hello wrld");
   });
@@ -361,7 +364,7 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611, #14780)", () =
       });
 
       expect(view.state.doc.toString()).toBe("Hello world.");
-      expect(view.contentDOM.querySelector(".cm-voice-restore") === null).toBe(overtaken);
+      expect(view.state.field(correctionReviewField, false) === null).toBe(overtaken);
       expect(undo(view)).toBe(true);
       expect(view.state.doc.toString()).toBe("hello wrld");
     }

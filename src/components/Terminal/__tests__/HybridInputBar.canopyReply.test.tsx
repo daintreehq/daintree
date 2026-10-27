@@ -28,6 +28,7 @@ import { canopyReplyVoiceId } from "@/services/canopyReplyDictation";
 import { recordCorrectionLanded, takeLandedCorrection } from "@/services/voiceCorrectionLanding";
 import { isolatedComposerScope } from "@/lib/draftKey";
 import { HybridInputBar, type HybridInputBarHandle } from "../HybridInputBar";
+import { correctionReviewField } from "../inputEditorExtensions/correctionReview";
 import { createRef } from "react";
 
 const WT_ID = "/repo/wt";
@@ -198,7 +199,7 @@ describe("HybridInputBar — Canopy's reply beside the pane's own composer", () 
   it("ends each composer's correction review only when its own next dictation begins (#14875)", async () => {
     const { surface } = await mountBoth();
     const restore = (testId: string) =>
-      surface(testId).root.querySelector(".cm-voice-restore") !== null;
+      surface(testId).view.state.field(correctionReviewField, false) != null;
     await landCorrectionIn(PANE, "pane-1");
     await landCorrectionIn(REPLY, "reply-1");
     expect([restore("pane"), restore("reply")]).toEqual([true, true]);

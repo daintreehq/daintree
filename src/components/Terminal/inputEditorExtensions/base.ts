@@ -194,38 +194,8 @@ export function buildInputBarTheme(theme: ITheme): Extension {
       ".cm-chip-remove:hover": {
         background: `color-mix(in oklab, ${c.foreground} 14%, ${c.shellBg})`,
       },
-      // The dictation restore control borrows the remove control's quiet ink
-      // and hit area, all of it to the right: the gap before it is where a
-      // click puts the caret after the passage.
-      ".cm-voice-restore": {
-        position: "relative",
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        width: "16px",
-        height: "16px",
-        marginLeft: "6px",
-        verticalAlign: "-3px",
-        borderRadius: "var(--radius-xs)",
-        color: `color-mix(in oklab, ${c.foreground} 55%, ${c.shellBg})`,
-        cursor: "pointer",
-        transition: `color ${UI_ANIMATION_DURATION}ms ease-out, background-color ${UI_ANIMATION_DURATION}ms ease-out`,
-      },
-      ".cm-voice-restore::before": {
-        content: '""',
-        position: "absolute",
-        inset: "-4px -4px -4px 0",
-      },
-      ".cm-voice-restore svg": {
-        width: "12px",
-        height: "12px",
-      },
-      ".cm-voice-restore:hover": {
-        color: c.foreground,
-        background: `color-mix(in oklab, ${c.foreground} 14%, ${c.shellBg})`,
-      },
       "@media (prefers-reduced-motion: reduce)": {
-        ".cm-chip-remove, .cm-voice-restore": { transition: "none" },
+        ".cm-chip-remove": { transition: "none" },
       },
       ".cm-diff-chip": {
         ...chipStyle,

@@ -30,6 +30,7 @@ import { recordScratchLanded, takeScratchLanded } from "@/services/voiceScratchC
 import { setPendingComposerSelection } from "@/lib/composerCaret";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
 import { addImageChip, readImageChipPaths } from "../inputEditorExtensions";
+import { correctionReviewField } from "../inputEditorExtensions/correctionReview";
 import { HybridInputBar } from "../HybridInputBar";
 
 const WT_ID = "/repo/wt";
@@ -117,8 +118,7 @@ async function undo(view: EditorView): Promise<void> {
   });
 }
 
-const restoreControl = (view: EditorView) =>
-  view.contentDOM.querySelector<HTMLElement>(".cm-voice-restore");
+const reviewing = (view: EditorView) => view.state.field(correctionReviewField, false) != null;
 
 async function beginDictation(sessionId: string): Promise<void> {
   await act(async () => {
@@ -224,14 +224,14 @@ describe("HybridInputBar after an AI correction lands", () => {
     await beginDictation("session-1");
     await writeDraft(RAW);
     await landCorrection("session-1");
-    expect(restoreControl(view)).not.toBeNull();
+    expect(reviewing(view)).toBe(true);
 
     await beginDictation("session-2");
-    expect(restoreControl(view)).toBeNull();
+    expect(reviewing(view)).toBe(false);
     expect(view.contentDOM.querySelectorAll(".cm-voice-corrected")).toHaveLength(0);
 
     await writeDraft(CORRECTED + " And the next part.");
-    expect(restoreControl(view)).toBeNull();
+    expect(reviewing(view)).toBe(false);
     await undo(view);
     expect(view.state.doc.toString()).toBe(CORRECTED);
     await undo(view);
@@ -247,7 +247,7 @@ describe("HybridInputBar after an AI correction lands", () => {
     await act(async () => useVoiceRecordingStore.getState().appendDelta("And the", "item-2"));
     await writeDraft(CORRECTED + " And the next part.");
 
-    expect(restoreControl(view)).not.toBeNull();
+    expect(reviewing(view)).toBe(true);
     expect(view.contentDOM.querySelectorAll(".cm-voice-corrected")).not.toHaveLength(0);
   });
 
@@ -261,7 +261,7 @@ describe("HybridInputBar after an AI correction lands", () => {
       useVoiceRecordingStore.getState().beginSession({ panelId: "term-2" }, "session-2");
     });
 
-    expect(restoreControl(view)).not.toBeNull();
+    expect(reviewing(view)).toBe(true);
     expect(view.contentDOM.querySelectorAll(".cm-voice-corrected")).not.toHaveLength(0);
   });
 
@@ -276,7 +276,7 @@ describe("HybridInputBar after an AI correction lands", () => {
 
     await landCorrection("session-1");
     expect(view.state.doc.toString()).toBe(CORRECTED + " And the next part.");
-    expect(restoreControl(view)).toBeNull();
+    expect(reviewing(view)).toBe(false);
     expect(view.contentDOM.querySelectorAll(".cm-voice-corrected")).toHaveLength(0);
 
     await undo(view);
@@ -292,7 +292,7 @@ describe("HybridInputBar after an AI correction lands", () => {
     await writeDraft(RAW);
     await landCorrection("session-2");
 
-    expect(restoreControl(view)).not.toBeNull();
+    expect(reviewing(view)).toBe(true);
   });
 
   function landBeforeMount(): void {
@@ -312,7 +312,7 @@ describe("HybridInputBar after an AI correction lands", () => {
 
     const { view } = await mount();
 
-    expect(restoreControl(view)).not.toBeNull();
+    expect(reviewing(view)).toBe(true);
     await undo(view);
     expect(view.state.doc.toString()).toBe(RAW);
     expect(draft()).toBe(RAW);
@@ -325,7 +325,7 @@ describe("HybridInputBar after an AI correction lands", () => {
     const { view } = await mount();
 
     expect(view.state.doc.toString()).toBe(CORRECTED);
-    expect(restoreControl(view)).toBeNull();
+    expect(reviewing(view)).toBe(false);
     await undo(view);
     expect(view.state.doc.toString()).toBe(RAW);
   });
