@@ -220,6 +220,69 @@ describe("extractTerminalIdentifiers", () => {
     expect(extractTerminalIdentifiers([`use${osc}SessionRouter`])).toEqual(["useSessionRouter"]);
   });
 
+  it("keeps words a TUI separated with cursor-forward apart (#14886)", () => {
+    const row =
+      "\x1b[1C2.\x1b[1CSonnet\x1b[1C5\x1b[3CEfficient\x1b[1Cfor\x1b[1Croutine\x1b[1Ctasks";
+    expect(extractTerminalIdentifiers([row])).toEqual([]);
+  });
+
+  it.each([
+    ["cursor-forward", "\u001b[1C"],
+    ["cursor-forward with no count", "\u001b[C"],
+    ["cursor-forward of zero", "\u001b[0C"],
+    ["a long cursor-forward", "\u001b[99999999C"],
+    ["8-bit CSI cursor-forward", "\u009b3C"],
+    ["cursor up", "\u001b[2A"],
+    ["cursor back", "\u001b[4D"],
+    ["next line", "\u001b[E"],
+    ["column", "\u001b[12G"],
+    ["position", "\u001b[3;10H"],
+    ["position (HVP)", "\u001b[1;1f"],
+    ["row", "\u001b[3d"],
+    ["relative column", "\u001b[2a"],
+    ["absolute column", "\u001b[5`"],
+    ["relative row", "\u001b[e"],
+    ["tab stop", "\u001b[I"],
+    ["back tab", "\u001b[Z"],
+    ["cursor restore (CSI u)", "\u001b[u"],
+    ["cursor restore (ESC 8)", "\u001b8"],
+    ["reverse index", "\u001bM"],
+    ["C1 next line", "\u0085"],
+    ["backspace", "\b"],
+  ])("keeps fragments a %s reached apart", (_move, move) => {
+    expect(extractTerminalIdentifiers([`get${move}UserProfile`])).toEqual(["UserProfile"]);
+  });
+
+  it.each([
+    ["colour", "\u001b[32m"],
+    ["cursor save (ESC 7)", "\u001b7"],
+    ["cursor save (CSI s)", "\u001b[s"],
+    ["keyboard protocol push", "\u001b[>1u"],
+    ["keyboard protocol pop", "\u001b[<u"],
+    ["keyboard protocol query", "\u001b[?u"],
+    ["cursor hide", "\u001b[?25l"],
+    ["cursor style", "\u001b[2 q"],
+    ["erase to end of line", "\u001b[K"],
+    ["character set", "\u001b(B"],
+  ])("removes a %s that moves nothing whole", (_control, control) => {
+    expect(extractTerminalIdentifiers([`getUser${control}Profile`])).toEqual(["getUserProfile"]);
+  });
+
+  it("removes a cursor save without eating the capital after it", () => {
+    expect(extractTerminalIdentifiers(["\u001b7ModelPicker"])).toEqual(["ModelPicker"]);
+  });
+
+  it("drops a key a repaint split into pieces, and its wrapped lines", () => {
+    const ids = extractTerminalIdentifiers([
+      "key aB3xK9mQ7z\u001b[1CZt7WpL2nQ4 done",
+      "AbcDefGhi",
+      "JklMno\u001b[1CPqrStu",
+      "",
+      "useSessionRouter",
+    ]);
+    expect(ids).toEqual(["useSessionRouter"]);
+  });
+
   it("drops long branch slugs but keeps short compound identifiers", () => {
     const ids = extractTerminalIdentifiers([
       "Switched to bugfix-issue-14621-terminal-derived-keyterms-can-send",

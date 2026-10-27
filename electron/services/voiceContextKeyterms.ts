@@ -220,15 +220,32 @@ const BLOCKLIST = new Set([
   "your",
 ]);
 
-// Matches ANSI escape sequences
-// eslint-disable-next-line no-control-regex
-const ANSI_RE = /[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><~]/g;
-
 // OSC sequences (titles, hyperlinks, progress) open with ESC ] or the 8-bit
 // OSC and run to BEL or either form of ST. Their payload isn't output, and
 // left in place it splits whatever it sits inside.
 // eslint-disable-next-line no-control-regex
 const OSC_RE = /(?:\u001b\]|\u009d)[^\u0007\u001b\u009c\u009d]*(?:\u0007|\u001b\\|\u009c)/g;
+
+// A whole CSI sequence: parameter bytes, intermediate bytes, final byte.
+// eslint-disable-next-line no-control-regex
+const CSI_RE = /(?:\u001b\[|\u009b)([0-?]*)([ -/]*)([@-~])/g;
+
+// CSI finals that move the cursor: up, down, forward and back, next and
+// previous line, column, position, tab stops, the relative and absolute row
+// and column forms, and `u` restoring a saved position. A private form moves
+// nothing (`CSI > 1 u` sets the keyboard protocol).
+const CSI_CURSOR_MOVES = new Set("ABCDEFGHIZ`adefu");
+const CSI_PRIVATE_RE = /^[<=>?]/;
+
+// The other cursor moves: restoring a saved position, index, next line and
+// reverse index (7-bit and C1), and backspace.
+// eslint-disable-next-line no-control-regex
+const OTHER_CURSOR_MOVE_RE = /\u001b[8DEM]|[\u0008\u0084\u0085\u008d]/g;
+
+// Any other escape sequence: ESC, intermediate bytes, final byte (character
+// sets, saving the cursor, keypad modes).
+// eslint-disable-next-line no-control-regex
+const ESC_RE = /\u001b[ -/]*[0-~]/g;
 
 // Matches identifiers: camelCase, PascalCase, snake_case, kebab-case (with internal separators)
 const IDENTIFIER_RE = /\b[a-zA-Z][a-zA-Z0-9]*(?:[-_][a-zA-Z0-9]+)+\b/g;
@@ -297,8 +314,35 @@ function isValidTerm(term: string): boolean {
   return true;
 }
 
-export function stripAnsi(text: string): string {
-  return text.replace(OSC_RE, "").replace(ANSI_RE, "");
+// The text with its escapes removed and each cursor move replaced by `gap`.
+function terminalText(text: string, gap: string): string {
+  return text
+    .replace(OSC_RE, "")
+    .replace(CSI_RE, (_sequence, params: string, intermediates: string, final: string) =>
+      intermediates === "" && !CSI_PRIVATE_RE.test(params) && CSI_CURSOR_MOVES.has(final) ? gap : ""
+    )
+    .replace(OTHER_CURSOR_MOVE_RE, gap)
+    .replace(ESC_RE, "");
+}
+
+/**
+ * Terminal lines as plain text, redacted, one per line given.
+ *
+ * The raw stream paints a gap with a cursor move as often as with a space:
+ * Claude Code advances the cursor between words, and a repaint jumps over the
+ * cells it leaves alone. So each move reads as a space, or `Sonnet 5` glues
+ * into `Sonnet5` and a repaint's fragments join into words the screen never
+ * showed. Redaction also judges the lines with the moves closed up.
+ */
+export function readTerminalLines(lines: readonly string[], strict = false): string[] {
+  // Guard against malformed IPC payloads delivering non-string lines, which
+  // would otherwise throw here and drop the whole read.
+  const raw = lines.map((line) => (typeof line === "string" ? line : ""));
+  return redactSecretShapedLines(
+    raw.map((line) => terminalText(line, " ")),
+    strict,
+    raw.map((line) => terminalText(line, ""))
+  );
 }
 
 export function tokenizeBranchName(branchName: string): string[] {
@@ -340,11 +384,7 @@ interface TermScore {
 // cross-platform ordering. No clocks, no floats, no external state.
 export function extractTerminalIdentifiers(lines: string[]): string[] {
   const scores = new Map<string, TermScore>();
-  // Guard against malformed IPC payloads delivering non-string lines, which
-  // would otherwise throw in stripAnsi and drop the entire terminal tier.
-  const cleanLines = redactSecretShapedLines(
-    lines.map((line) => (typeof line === "string" ? stripAnsi(line) : ""))
-  );
+  const cleanLines = readTerminalLines(lines);
 
   cleanLines.forEach((clean, lineIndex) => {
     // Count each term at most once per line so same-line repeats don't inflate

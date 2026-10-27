@@ -269,25 +269,51 @@ const BARE_RUN_RE = /^[\s│┃║|⎿]*[A-Za-z0-9_\-+/=]+[\s│┃║|]*$/;
  * beside a recognised token, free to match as an identifier. In the lines that
  * remain, opaque IDs and bare credential names are blanked. `strict` is for
  * lines sent on as text rather than mined for words (see {@link holdsCredential}).
+ *
+ * `joined` is the same lines from a terminal with its cursor moves closed up
+ * rather than kept as spaces, the way the raw stream's bytes run. A repaint
+ * can split a key across moves, so the joined form holding a credential, or a
+ * bare run of a wrapped one, counts too, and an ID only the join makes empties
+ * the line rather than leave its pieces. A credential name only the join makes
+ * doesn't: closing up prose makes those (`API key` → `APIkey`).
  */
-export function redactSecretShapedLines(lines: readonly string[], strict = false): string[] {
+export function redactSecretShapedLines(
+  lines: readonly string[],
+  strict = false,
+  joined: readonly string[] = lines
+): string[] {
   let wrapping = false;
   let firstAfter = false;
-  return lines.map((line) => {
-    if (holdsCredential(line, strict)) {
+  return lines.map((line, i) => {
+    const closed = joined[i] ?? line;
+    const split = closed !== line;
+    if (holdsCredential(line, strict) || (split && holdsCredential(closed, strict))) {
       wrapping = true;
       firstAfter = true;
       return "";
     }
     if (wrapping) {
       // A blank line ends a wrapped key.
-      const continues = line.trim() !== "" && (firstAfter || BARE_RUN_RE.test(line));
+      const continues =
+        line.trim() !== "" &&
+        (firstAfter || BARE_RUN_RE.test(line) || (split && BARE_RUN_RE.test(closed)));
       firstAfter = false;
       if (continues) return "";
       wrapping = false;
     }
+    if (split && joinsOpaqueId(closed, line)) return "";
     return line.replace(BLANKABLE_RUN_RE, (run) =>
       isOpaqueId(run) || namesCredential(run) ? " " : run
     );
   });
+}
+
+// An ID in a run the spaced line doesn't have came from pieces it keeps
+// apart, each too short to read as one: a hex key split by a repaint.
+function joinsOpaqueId(joined: string, spaced: string): boolean {
+  const runs = new Set(spaced.match(BLANKABLE_RUN_RE));
+  for (const [run] of joined.matchAll(BLANKABLE_RUN_RE)) {
+    if (!runs.has(run) && isOpaqueId(run)) return true;
+  }
+  return false;
 }

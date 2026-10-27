@@ -56,6 +56,31 @@ describe("boundTerminalOutput", () => {
     expect(out).toBe("kept");
   });
 
+  it("keeps words a TUI separated with cursor-forward apart (#14886)", () => {
+    const row =
+      "\x1b[1C2.\x1b[1CSonnet\x1b[1C5\x1b[3CEfficient\x1b[1Cfor\x1b[1Croutine\x1b[1Ctasks";
+    const out = boundTerminalOutput([row])!;
+    expect(out).toContain("Sonnet 5");
+    expect(out).toContain("Efficient for routine tasks");
+    expect(out).not.toMatch(/5Efficient/);
+  });
+
+  it("keeps a repaint's fragments from joining across the rows it jumps", () => {
+    const out = boundTerminalOutput(["\x1b[3;1HModel\x1b[1Cpicker\x1b[5;3HSonnet\x1b[2AOpus"])!;
+    expect(out).toContain("Model picker");
+    expect(out).not.toMatch(/pickerSonnet|SonnetOpus/);
+  });
+
+  it("drops a key a repaint split into pieces too short to read as one", () => {
+    const out = boundTerminalOutput(["key aB3xK9mQ7z\x1b[1CZt7WpL2nQ4 done", "", "kept"])!;
+    expect(out).toBe("kept");
+  });
+
+  it("drops a hex key a repaint split", () => {
+    const out = boundTerminalOutput(["DG=7c26\x1b[1C52f8\x1b[1C3d4d\x1b[1C0fff", "", "kept"])!;
+    expect(out).toBe("kept");
+  });
+
   it("is null when nothing readable remains", () => {
     expect(boundTerminalOutput([])).toBeNull();
     expect(boundTerminalOutput(["", "   ", ""])).toBeNull();

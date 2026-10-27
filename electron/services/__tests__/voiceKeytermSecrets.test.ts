@@ -249,4 +249,55 @@ describe("redactSecretShapedLines", () => {
     const line = "vitest run --reporter verbose useSessionRouter";
     expect(redactSecretShapedLines([line])).toEqual([line]);
   });
+
+  describe("with a joined form", () => {
+    // Pieces too short to read as a key alone, as a repaint can leave them.
+    const head = fakeBody(10, 30);
+    const tail = fakeBody(10, 31);
+
+    it("empties a line only the joined form shows a credential on", () => {
+      const spaced = `key ${head} ${tail} done`;
+      const joined = `key ${head}${tail} done`;
+      expect(redactSecretShapedLines([spaced])).toEqual([spaced]);
+      expect(
+        redactSecretShapedLines([spaced, "", "useTerminalStore"], false, [
+          joined,
+          "",
+          "useTerminalStore",
+        ])
+      ).toEqual(["", "", "useTerminalStore"]);
+    });
+
+    it("continues a wrapped key onto a line only the joined form shows as one run", () => {
+      const out = redactSecretShapedLines(
+        ["--password hunter_two_x", "AbcDefGhi", "JklMno PqrStu", "", "useTerminalStore"],
+        false,
+        ["--passwordhunter_two_x", "AbcDefGhi", "JklMnoPqrStu", "", "useTerminalStore"]
+      );
+      expect(out).toEqual(["", "", "", "", "useTerminalStore"]);
+    });
+
+    it("empties a line whose pieces join into an ID", () => {
+      const key = fakeBody(16, 18, HEX);
+      const pieces = key.match(/.{4}/g)!;
+      const spaced = `DG=${pieces.join(" ")} useSessionRouter`;
+      expect(redactSecretShapedLines([spaced], true)).toEqual([spaced]);
+      expect(redactSecretShapedLines([spaced], true, [`DG=${key} useSessionRouter`])).toEqual([""]);
+    });
+
+    it("blanks an ID the spaced line shows whole and keeps the rest", () => {
+      const [out] = redactSecretShapedLines(["Commit abcdef1234 with useSessionRouter"], false, [
+        "Commitabcdef1234withuseSessionRouter",
+      ]);
+      expect(out).not.toContain("abcdef1234");
+      expect(out).toContain("useSessionRouter");
+    });
+
+    it("keeps a line whose words only join into a credential name", () => {
+      const line = "Set the API key in useSessionRouter";
+      expect(redactSecretShapedLines([line], false, ["SettheAPIkeyinuseSessionRouter"])).toEqual([
+        line,
+      ]);
+    });
+  });
 });
