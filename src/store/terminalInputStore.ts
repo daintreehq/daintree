@@ -166,11 +166,11 @@ export interface TerminalInputState {
   addToHistory: (terminalId: string, command: string, projectId?: string) => void;
   /**
    * Notes a prompt sent to `terminalId`, as written, for its dictations'
-   * cleanup. Returns its place in the terminal's sends, null for a blank one.
+   * cleanup. Returns the record, null for a blank prompt.
    */
-  recordSentPrompt: (terminalId: string, text: string, sentAt?: number) => number | null;
-  /** Takes back a send the terminal turned down. */
-  retractSentPrompt: (terminalId: string, seq: number) => void;
+  recordSentPrompt: (terminalId: string, text: string, sentAt?: number) => SentPrompt | null;
+  /** Takes back a send the terminal turned down, if it is still on record. */
+  retractSentPrompt: (terminalId: string, sent: SentPrompt) => void;
   getSentPrompts: (terminalId: string) => readonly SentPrompt[];
   navigateHistory: (
     terminalId: string,
@@ -381,32 +381,33 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
     if (trimmed === "") return null;
     const key = sentPromptKey(terminalId);
     const existing = get().sentPrompts.get(key) ?? [];
-    const seq = (existing[existing.length - 1]?.seq ?? -1) + 1;
+    const sent: SentPrompt = {
+      text: boundSentPrompt(trimmed),
+      sentAt,
+      seq: (existing[existing.length - 1]?.seq ?? -1) + 1,
+    };
     set((state) => {
       const next = new Map(state.sentPrompts);
       // Re-inserted, so the map's first key is the terminal sent to longest ago.
       next.delete(key);
-      next.set(
-        key,
-        [...existing, { text: boundSentPrompt(trimmed), sentAt, seq }].slice(
-          -VOICE_RECENT_PROMPTS_MAX
-        )
-      );
+      next.set(key, [...existing, sent].slice(-VOICE_RECENT_PROMPTS_MAX));
       if (next.size > MAX_SENT_PROMPT_TERMINALS) next.delete(next.keys().next().value!);
       return { sentPrompts: next };
     });
-    return seq;
+    return sent;
   },
 
-  retractSentPrompt: (terminalId, seq) =>
+  // By the record itself: a count that restarted after the terminal's record
+  // was cleared can give a newer send the same seq.
+  retractSentPrompt: (terminalId, sent) =>
     set((state) => {
       const key = sentPromptKey(terminalId);
       const existing = state.sentPrompts.get(key);
-      if (!existing?.some((prompt) => prompt.seq === seq)) return state;
+      if (!existing?.includes(sent)) return state;
       const next = new Map(state.sentPrompts);
       next.set(
         key,
-        existing.filter((prompt) => prompt.seq !== seq)
+        existing.filter((prompt) => prompt !== sent)
       );
       return { sentPrompts: next };
     }),

@@ -64,14 +64,23 @@ describe("terminalInputStore", () => {
 
     it("takes back one send, leaving the rest and the count where they were", () => {
       const store = useTerminalInputStore.getState();
-      const seqs = ["one", "two", "three"].map((text) => store.recordSentPrompt("term-1", text));
-      expect(seqs).toEqual([0, 1, 2]);
+      const sent = ["one", "two", "three"].map((text) => store.recordSentPrompt("term-1", text));
+      expect(sent.map((prompt) => prompt?.seq)).toEqual([0, 1, 2]);
       expect(store.recordSentPrompt("term-1", "   ")).toBeNull();
 
-      useTerminalInputStore.getState().retractSentPrompt("term-1", 1);
-      useTerminalInputStore.getState().retractSentPrompt("term-1", 9);
+      useTerminalInputStore.getState().retractSentPrompt("term-1", sent[1]!);
       expect(texts("term-1")).toEqual(["one", "three"]);
-      expect(useTerminalInputStore.getState().recordSentPrompt("term-1", "four")).toBe(3);
+      expect(useTerminalInputStore.getState().recordSentPrompt("term-1", "four")?.seq).toBe(3);
+    });
+
+    it("takes back nothing newer when the refused send's record was cleared first", () => {
+      const pending = useTerminalInputStore.getState().recordSentPrompt("term-1", "refused late")!;
+      useTerminalInputStore.getState().clearTerminalState("term-1");
+      const newer = useTerminalInputStore.getState().recordSentPrompt("term-1", "landed")!;
+      expect(newer.seq).toBe(pending.seq);
+
+      useTerminalInputStore.getState().retractSentPrompt("term-1", pending);
+      expect(texts("term-1")).toEqual(["landed"]);
     });
 
     it("keeps only the opening of a long prompt, never half a surrogate pair", () => {

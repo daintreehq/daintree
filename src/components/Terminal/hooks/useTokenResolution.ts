@@ -445,10 +445,10 @@ export function useTokenResolution({
         // sends to this terminal in the order they went, so this one is noted
         // as it goes and taken back if the terminal turns it down.
         const destination = latest.terminalId;
-        const seq = useTerminalInputStore.getState().recordSentPrompt(destination, authored);
-        if (seq !== null && accepted instanceof Promise) {
+        const sent = useTerminalInputStore.getState().recordSentPrompt(destination, authored);
+        if (sent && accepted instanceof Promise) {
           const retract = () =>
-            useTerminalInputStore.getState().retractSentPrompt(destination, seq);
+            useTerminalInputStore.getState().retractSentPrompt(destination, sent);
           void accepted.then((ok) => {
             if (!ok) retract();
           }, retract);
