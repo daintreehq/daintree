@@ -17,6 +17,9 @@ process.on("message", (data) => {
 });
 // An interrupted run must not leave the model loaded in an orphan.
 process.on("disconnect", () => process.exit(0));
+// The parent decides when this stops. A terminal Ctrl+C reaches the whole
+// process group, and the run's first one lets the session in flight finish.
+process.on("SIGINT", () => {});
 
 const port = {
   on(event: string, next: Listener) {

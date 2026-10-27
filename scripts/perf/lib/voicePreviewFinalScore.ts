@@ -251,7 +251,10 @@ export interface FinalWord {
 export interface SessionScore {
   clip: string;
   pass: number;
+  /** Segments with words in the preview or the final; silent ones are counted apart. */
   segments: number;
+  /** Silence the server closed with no words on either side: nothing to agree on. */
+  silentSegments: number;
   /** Segments whose final is their preview character for character, once trimmed. */
   segmentsVerbatim: number;
   /** Segments with any span, drops included. */
@@ -280,6 +283,7 @@ export function scoreSession(
 ): SessionScore {
   const words: FinalWord[] = [];
   const spans: SessionScore["spans"] = [];
+  let silentSegments = 0;
   let segmentsVerbatim = 0;
   let segmentsDisagreeing = 0;
   let segmentsDisagreeingLiteral = 0;
@@ -287,9 +291,13 @@ export function scoreSession(
   // Where each span's first final word sits in the session's joined words.
   const spanStarts: number[] = [];
   segments.forEach((segment, index) => {
-    if (segment.preview.trim() === segment.final.trim()) segmentsVerbatim++;
     const preview = normaliseWords(segment.preview);
     const final = normaliseWords(segment.final);
+    if (preview.length === 0 && final.length === 0) {
+      silentSegments++;
+      return;
+    }
+    if (segment.preview.trim() === segment.final.trim()) segmentsVerbatim++;
     const kinds = new Array<FinalWord["kind"]>(final.length).fill(null);
     const segmentSpans = disagreementSpans(preview, final);
     if (segmentSpans.length > 0) segmentsDisagreeing++;
@@ -324,7 +332,8 @@ export function scoreSession(
   return {
     clip: observation.clip,
     pass: observation.pass,
-    segments: segments.length,
+    segments: segments.length - silentSegments,
+    silentSegments,
     segmentsVerbatim,
     segmentsDisagreeing,
     segmentsDisagreeingLiteral,
@@ -413,6 +422,7 @@ export interface RunSummary {
   scored: number;
   excluded: Array<{ clip: string; pass: number; reasons: string[] }>;
   segments: number;
+  silentSegments: number;
   segmentsVerbatim: number;
   segmentsDisagreeing: number;
   segmentsDisagreeingLiteral: number;
@@ -444,6 +454,7 @@ export function summarise(
     scored: scored.length,
     excluded: [...excluded],
     segments: sum((s) => s.segments),
+    silentSegments: sum((s) => s.silentSegments),
     segmentsVerbatim: sum((s) => s.segmentsVerbatim),
     segmentsDisagreeing: sum((s) => s.segmentsDisagreeing),
     segmentsDisagreeingLiteral: sum((s) => s.segmentsDisagreeingLiteral),
@@ -611,7 +622,7 @@ export function renderReport(
 export function renderHeadline(summary: RunSummary): string[] {
   const any = summary.policies.find((p) => p.policy === "any")!;
   return [
-    `Scored ${summary.scored} of ${summary.sessions} sessions (${summary.excluded.length} excluded), ${summary.segments} segments, ${summary.finalWords} final words, WER ${pct(summary.wer)}.`,
+    `Scored ${summary.scored} of ${summary.sessions} sessions (${summary.excluded.length} excluded), ${summary.segments} segments${summary.silentSegments ? ` (and ${summary.silentSegments} silent, left out)` : ""}, ${summary.finalWords} final words, WER ${pct(summary.wer)}.`,
     "",
     `- Finals identical to their preview, character for character once trimmed: ${summary.segmentsVerbatim}/${summary.segments}.`,
     `- Segments where the final disagrees with the preview: ${summary.segmentsDisagreeing}/${summary.segments} (${pct(ratio(summary.segmentsDisagreeing, summary.segments))}); ${summary.segmentsDisagreeingLiteral} under the literal normaliser.`,

@@ -12,7 +12,7 @@ import {
   type PreparedClip,
 } from "../../e2e/helpers/voiceReplayFixtures";
 import { contentHash } from "../../e2e/helpers/voiceReplayScore";
-import type { OpenAITranscriptionProvider as ProviderType } from "../../electron/services/voice/OpenAITranscriptionProvider";
+import type { TranscriptionProvider } from "../../electron/services/voice/TranscriptionProvider";
 import { VOICE_CLEANUP_AI_MODEL } from "../../shared/config/voiceCorrection";
 import type { VoiceInputSettings } from "../../shared/types/ipc/api";
 import { formatErrorMessage } from "../../shared/utils/errorMessage";
@@ -153,14 +153,17 @@ function sleep(ms: number): Promise<void> {
 
 // `electron` under Node is a path string. The provider needs only
 // `utilityProcess.fork` from it, for its VAD; this hands it a Node child
-// running the real worker, and reports what the child says on `vadEvents`.
+// running the real worker, and reports what each child says on `vadEvents`,
+// tagged with its id so a session counts only its own.
 function electronStubSource(): string {
   return `
 import { fork } from "node:child_process";
 import { EventEmitter } from "node:events";
 export const vadEvents = new EventEmitter();
+let nextId = 0;
 class NodeUtilityProcess extends EventEmitter {
   pid = undefined;
+  #id = ++nextId;
   #destroyRequested = false;
   #exited = false;
   constructor(options) {
@@ -171,13 +174,13 @@ class NodeUtilityProcess extends EventEmitter {
       serialization: "advanced",
       stdio: ["ignore", "ignore", "inherit", "ipc"],
     });
-    vadEvents.emit("fork");
+    vadEvents.emit("fork", this.#id);
     this.child.once("spawn", () => {
       this.pid = this.child.pid;
       this.emit("spawn");
     });
     this.child.on("message", (message) => {
-      vadEvents.emit("message", message);
+      vadEvents.emit("message", this.#id, message);
       this.emit("message", message);
     });
     this.child.on("error", (error) => {
@@ -189,7 +192,7 @@ class NodeUtilityProcess extends EventEmitter {
   #exit(code) {
     if (this.#exited) return;
     this.#exited = true;
-    vadEvents.emit("exit", { code, expected: this.#destroyRequested });
+    vadEvents.emit("exit", this.#id, { code, expected: this.#destroyRequested });
     this.emit("exit", code);
   }
   postMessage(message) {
@@ -245,6 +248,7 @@ function settingsFor(apiKey: string, keyterms: string[]): VoiceInputSettings {
     paragraphingStrategy: "manual",
     resolveFileLinks: false,
     deviceId: "",
+    deviceLabel: "",
     organizationId: process.env.OPENAI_ORG_ID ?? "",
     projectId: process.env.OPENAI_PROJECT_ID ?? "",
     recordingMode: "toggle",
@@ -256,7 +260,7 @@ function settingsFor(apiKey: string, keyterms: string[]): VoiceInputSettings {
 }
 
 interface Host {
-  Provider: new () => ProviderType;
+  Provider: new () => TranscriptionProvider;
   waitForRetiringVadProcesses: (timeoutMs: number) => Promise<number>;
   retireWaitMs: number;
   vadEvents: EventEmitter;
@@ -271,10 +275,10 @@ interface Host {
 async function dictate(
   host: Host,
   prepared: PreparedClip,
+  samples: Int16Array,
   pass: number,
   settings: VoiceInputSettings
 ): Promise<SessionObservation> {
-  const samples = readPcm16Wav(readFileSync(prepared.wavPath)).samples;
   const vad: VadObservation = {
     forks: 0,
     ready: 0,
@@ -283,15 +287,20 @@ async function dictate(
     errors: 0,
     unexpectedExits: 0,
   };
-  const onFork = () => vad.forks++;
-  const onMessage = (message: { type?: string }) => {
+  const mine = new Set<number>();
+  const onFork = (id: number) => {
+    mine.add(id);
+    vad.forks++;
+  };
+  const onMessage = (id: number, message: { type?: string }) => {
+    if (!mine.has(id)) return;
     if (message.type === "ready") vad.ready++;
     else if (message.type === "speech-start") vad.speechStarts++;
     else if (message.type === "speech-end") vad.speechEnds++;
     else if (message.type === "error") vad.errors++;
   };
-  const onExit = (exit: { expected: boolean }) => {
-    if (!exit.expected) vad.unexpectedExits++;
+  const onExit = (id: number, exit: { expected: boolean }) => {
+    if (mine.has(id) && !exit.expected) vad.unexpectedExits++;
   };
   host.vadEvents.on("fork", onFork);
   host.vadEvents.on("message", onMessage);
@@ -360,16 +369,23 @@ async function dictate(
     };
   } finally {
     provider.destroy();
-    // The VAD child drains and exits before the next session forks its own.
-    await host.waitForRetiringVadProcesses(host.retireWaitMs);
+    const left = await host.waitForRetiringVadProcesses(host.retireWaitMs);
     host.vadEvents.off("fork", onFork);
     host.vadEvents.off("message", onMessage);
     host.vadEvents.off("exit", onExit);
+    // A VAD still running would share the next session's CPU and socket timing.
+    if (left > 0) throw new Error(`${left} VAD process(es) outlived the session`);
   }
 }
 
 function load(file: string): RunRecord {
-  const run = JSON.parse(readFileSync(file, "utf8")) as RunRecord;
+  let run: RunRecord;
+  try {
+    run = JSON.parse(readFileSync(file, "utf8")) as RunRecord;
+  } catch {
+    // A parse error can quote the file, and the file quotes transcripts.
+    throw new Error(`${file} is not a readable run`);
+  }
   if (run.schemaVersion !== VOICE_PREVIEW_FINAL_SCHEMA_VERSION) {
     throw new Error(
       `${file}: schema ${run.schemaVersion}, this script reads ${VOICE_PREVIEW_FINAL_SCHEMA_VERSION}`
@@ -419,13 +435,24 @@ async function main(): Promise<number> {
   // The report quotes previews and finals, so only counts reach the terminal.
   if (options.rescore) {
     const run = load(options.rescore);
-    const out = options.rescore.replace(/\.json$/, "") + "-rescored.md";
+    mkdirSync(RESULTS_DIR, { recursive: true });
+    const out = path.join(
+      RESULTS_DIR,
+      `${path.basename(options.rescore).replace(/\.json$/, "")}-rescored.md`
+    );
     const summary = writeReport(run, out);
     console.log(renderHeadline(summary).join("\n"));
     console.error(`\n[voice-preview-final] wrote ${path.relative(REPO_ROOT, path.resolve(out))}`);
     return 0;
   }
 
+  // The provider honours it, and a mock's numbers would pass for OpenAI's.
+  if (process.env.DAINTREE_REALTIME_WS_URL) {
+    console.error(
+      "[voice-preview-final] DAINTREE_REALTIME_WS_URL is set: unset it to measure the real provider"
+    );
+    return 1;
+  }
   const apiKey = process.env.OPENAI_API_KEY ?? "";
   if (!apiKey) {
     console.error("[voice-preview-final] OPENAI_API_KEY is not set");
@@ -442,6 +469,18 @@ async function main(): Promise<number> {
       voice: process.env.VOICE_REPLAY_VOICE,
     })
   );
+  // Audio goes out as it is, so a recording at another rate would play at the wrong speed.
+  const samples = new Map<string, Int16Array>();
+  for (const prepared of clips) {
+    const pcm = readPcm16Wav(readFileSync(prepared.wavPath));
+    if (pcm.sampleRate !== REPLAY_SAMPLE_RATE) {
+      console.error(
+        `[voice-preview-final] ${prepared.wavPath} is ${pcm.sampleRate} Hz; the provider takes ${REPLAY_SAMPLE_RATE} Hz`
+      );
+      return 1;
+    }
+    samples.set(prepared.clip.id, pcm.samples);
+  }
   const audioMinutes = (clips.reduce((n, clip) => n + clip.audioMs, 0) * options.repeats) / 60_000;
   console.error(
     `[voice-preview-final] ${clips.length * options.repeats} sessions, ${audioMinutes.toFixed(1)} min of audio, about $${(audioMinutes * LIVE_TRANSCRIBE_USD_PER_MINUTE).toFixed(2)}`
@@ -453,8 +492,13 @@ async function main(): Promise<number> {
   process.env.DAINTREE_DISABLE_FILE_LOGGING = "1";
   const { setLogLevelOverrides } = await import("../../electron/utils/logger");
   setLogLevelOverrides({ "*": "warn" });
-  const { OpenAITranscriptionProvider } =
-    await import("../../electron/services/voice/OpenAITranscriptionProvider");
+  // A computed specifier keeps the provider's import graph out of the perf
+  // TypeScript program, which can't see the remote-service keys it reads;
+  // `TranscriptionProvider` types every call made on it.
+  const providerModule = "../../electron/services/voice/OpenAITranscriptionProvider";
+  const { OpenAITranscriptionProvider } = (await import(providerModule)) as {
+    OpenAITranscriptionProvider: new () => TranscriptionProvider;
+  };
   const { VAD_RETIRE_KILL_MS, waitForRetiringVadProcesses } =
     await import("../../electron/services/voice/openaiVadProcess");
   const { vadEvents } = (await import("electron")) as unknown as { vadEvents: EventEmitter };
@@ -520,7 +564,7 @@ async function main(): Promise<number> {
   for (let pass = 1; pass <= options.repeats && !interrupted; pass++) {
     for (const prepared of seededShuffle(clips, options.seed + pass)) {
       if (interrupted) break;
-      const session = await dictate(host, prepared, pass, settings);
+      const session = await dictate(host, prepared, samples.get(prepared.clip.id)!, pass, settings);
       run.sessions.push(session);
       save();
       const completions = session.events.filter((event) => event.type === "complete").length;

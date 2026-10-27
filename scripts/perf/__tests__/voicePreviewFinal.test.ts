@@ -69,8 +69,9 @@ describe("collectSegments", () => {
   it("joins each item's deltas into its preview, in completion order", () => {
     const { segments, anomalies } = collectSegments(
       observation([
-        delta("a", " Commit"),
+        // b's preview starts first, but a completes first.
         delta("b", " Then"),
+        delta("a", " Commit"),
         delta("a", " and push."),
         complete("a", "Commit and push.", { endsAtPause: true }),
         delta("b", " stop."),
@@ -93,7 +94,7 @@ describe("collectSegments", () => {
   });
 
   it("names every reason a session can't be scored whole", () => {
-    const { anomalies } = collectSegments(
+    const { anomalies, segments } = collectSegments(
       observation(
         [
           delta(null, " lost"),
@@ -135,6 +136,30 @@ describe("collectSegments", () => {
         "preview never finalised",
       ].sort()
     );
+    // A second completion of an item never becomes a second segment.
+    expect(segments.map((s) => [s.itemId, s.final])).toEqual([["b", "settled"]]);
+  });
+
+  it("excludes on each provider and VAD condition alone", () => {
+    const words = [delta("a", " Commit."), complete("a", "Commit.")];
+    const vad = (overrides: Partial<SessionObservation["vad"]>) => ({
+      forks: 1,
+      ready: 1,
+      speechStarts: 1,
+      speechEnds: 0,
+      errors: 0,
+      unexpectedExits: 0,
+      ...overrides,
+    });
+    const reasons = (overrides: Partial<SessionObservation>) =>
+      collectSegments(observation(words, overrides)).anomalies;
+    expect(reasons({})).toEqual([]);
+    expect(reasons({ droppedConnect: 1 })).toEqual(["audio dropped"]);
+    expect(reasons({ droppedReplay: 1 })).toEqual(["audio dropped"]);
+    expect(reasons({ vad: vad({ forks: 0 }) })).toEqual(["VAD never ready"]);
+    expect(reasons({ vad: vad({ ready: 0 }) })).toEqual(["VAD never ready"]);
+    expect(reasons({ vad: vad({ errors: 1 }) })).toEqual(["VAD failed"]);
+    expect(reasons({ vad: vad({ unexpectedExits: 1 }) })).toEqual(["VAD failed"]);
   });
 
   it("flags a session that produced no segment", () => {
@@ -272,31 +297,44 @@ describe("scorePolicy", () => {
         segment(" fix the cash", "fix the cache", "a"),
         segment(" open the web socket", "open the websocket", "b"),
         segment(" then", "then ship it", "c"),
+        segment(" run it now", "run all of it now", "d"),
+        segment(" stop now", "stop now", "e"),
       ],
-      "fix the cache open the web socket then ship"
+      "fix the cache open the web socket then ship run it now stop here"
     ),
   ];
 
   it("counts flags, hits and misses per policy", () => {
+    // Flagged: cache (changed, right), websocket (spacing, wrong: the reference
+    // splits it), ship and it (suffix, right and wrong), all and of (inserted,
+    // both wrong). The last "now" is wrong and no policy can see it.
     const any = scorePolicy("any", sessions);
-    // cache (right), websocket (wrong: the reference splits it), ship (right), it (wrong).
     expect(any).toMatchObject({
-      finalWords: 9,
-      wrongWords: 2,
-      flagged: 4,
-      flaggedWrong: 2,
+      finalWords: 16,
+      wrongWords: 5,
+      flagged: 6,
+      flaggedWrong: 4,
       flaggedRight: 2,
-      missed: 0,
+      missed: 1,
     });
-    expect(any.precision).toBe(0.5);
-    expect(any.recall).toBe(1);
-    // Half the flags are wrong where two words in nine are.
-    expect(any.lift).toBeCloseTo(0.5 / (2 / 9));
+    expect(any.precision).toBeCloseTo(4 / 6);
+    expect(any.recall).toBeCloseTo(4 / 5);
+    expect(any.lift).toBeCloseTo(4 / 6 / (5 / 16));
 
-    const changed = scorePolicy("changed", sessions);
-    expect(changed).toMatchObject({ flagged: 1, flaggedWrong: 0, missed: 2 });
-    expect(changed.precision).toBe(0);
-    expect(changed.recall).toBe(0);
+    expect(scorePolicy("substituted", sessions)).toMatchObject({
+      flagged: 2,
+      flaggedWrong: 1,
+      missed: 4,
+    });
+    expect(scorePolicy("changed", sessions)).toMatchObject({
+      flagged: 1,
+      flaggedWrong: 0,
+      precision: 0,
+      recall: 0,
+    });
+    const interior = scorePolicy("interior", sessions);
+    expect(interior).toMatchObject({ flagged: 3, flaggedWrong: 2, missed: 3 });
+    expect(interior.recall).toBeCloseTo(2 / 5);
   });
 
   it("reports an undefined ratio as null, not zero", () => {
@@ -316,6 +354,44 @@ describe("scoreRun and the report", () => {
   const broken = observation([delta("a", " half")], { clip: "commit", pass: 2 });
   const unknown = observation([complete("a", "Something.")], { clip: "gone" });
   const references = new Map([["commit", "Commit and push."]]);
+
+  it("totals WER, deletions and span kinds across sessions", () => {
+    const greek = observation(
+      [
+        delta("a", " alpha bravo charlie delta echo"),
+        complete("a", "alpha wrong charlie echo extra"),
+      ],
+      { clip: "greek" }
+    );
+    const { summary } = scoreRun([greek], new Map([["greek", "alpha bravo charlie delta echo"]]));
+    expect(summary.referenceDeletions).toBe(1);
+    expect(summary.policies.find((p) => p.policy === "any")!.wrongWords).toBe(2);
+    expect(summary.wer).toBeCloseTo(3 / 5);
+    expect(
+      summary.kinds
+        .filter((k) => k.spans > 0)
+        .map((k) => [k.kind, k.spans, k.previewWords, k.finalWords, k.wrongWords])
+    ).toEqual([
+      ["changed", 1, 1, 1, 1],
+      ["suffix", 1, 0, 1, 1],
+      ["drop", 1, 1, 0, 0],
+    ]);
+  });
+
+  it("counts silent segments apart from the ones with words", () => {
+    const { summary } = scoreRun(
+      [
+        observation([delta("a", " cash"), complete("a", "cache"), complete("b", "")], {
+          clip: "cache",
+        }),
+      ],
+      new Map([["cache", "cache"]])
+    );
+    expect(summary.segments).toBe(1);
+    expect(summary.silentSegments).toBe(1);
+    expect(summary.segmentsDisagreeing).toBe(1);
+    expect(summary.segmentsVerbatim).toBe(0);
+  });
 
   it("scores clean sessions and lists the rest with their reasons", () => {
     const { summary, scored } = scoreRun([clean, broken, unknown], references);
@@ -337,6 +413,8 @@ describe("scoreRun and the report", () => {
     });
     const { summary, scored } = scoreRun([secret], references);
     const headline = renderHeadline(summary).join("\n").toLowerCase();
+    expect(headline).toContain("scored 1 of 1 sessions");
+    expect(headline).toContain("character for character once trimmed: 1/1");
     expect(headline).not.toContain("zebra");
     expect(headline).not.toContain("quokka");
     const report = renderReport(
@@ -355,5 +433,25 @@ describe("scoreRun and the report", () => {
       scored
     );
     expect(report).toContain("~$0.017");
+  });
+
+  it("quotes each span in the report, which stays in .tmp/", () => {
+    const { summary, scored } = scoreRun([clean], references);
+    const report = renderReport(
+      {
+        label: "t",
+        startedAt: "2026-10-27T00:00:00.000Z",
+        revision: "abc",
+        dirty: false,
+        passes: 1,
+        terms: false,
+        complete: true,
+        audioMs: 1_000,
+      },
+      [clean],
+      summary,
+      scored
+    );
+    expect(report).toContain('changed · "posh" → "push" · 0/1 wrong');
   });
 });
