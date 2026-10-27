@@ -72,6 +72,24 @@ const RECONNECT_BUFFER_MAX_CHUNKS = 400;
 // full reconnect flush (~10s before the drop plus the window) so a second drop
 // during the flush still resends all of it.
 const REPLAY_MAX_BYTES = RECONNECT_BUFFER_MAX_BYTES + 10 * AUDIO_BYTES_PER_SECOND;
+// Half-open detection. KeepAlive gets no reply and silent audio gets no
+// results, so only a ping's pong shows the socket still reaches Deepgram; a
+// dead one otherwise looks healthy until TCP gives up, minutes later. On a
+// missed answer we `terminate()` (no closing handshake on a dead socket), and
+// the close handler reconnects and replays what wasn't confirmed.
+//
+// The OpenAI provider's scheme: a check every HEARTBEAT_TICK_MS. Idle, it
+// pings every HEARTBEAT_IDLE_MS and allows as long for the answer. Once audio
+// has gone out since Deepgram was last heard from, a dead socket is swallowing
+// speech, so it pings at once and allows HEARTBEAT_ACTIVE_MS. Any frame from
+// the server counts as an answer. A pong can't come back before everything
+// queued ahead of its ping has arrived, so each ping also gets the bytes not
+// yet proven delivered at the audio's own wire rate: an uplink slower than
+// that can't carry dictation anyway.
+const HEARTBEAT_TICK_MS = 2_000;
+const HEARTBEAT_IDLE_MS = 20_000;
+const HEARTBEAT_ACTIVE_MS = 3_000;
+const HEARTBEAT_FLOOR_BYTES_PER_MS = AUDIO_BYTES_PER_SECOND / 1_000;
 
 // Close codes that mean Deepgram refused what we sent (undecodable audio,
 // policy, oversized frame). A new connection would fail the same way.
@@ -242,6 +260,21 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
   private firstTranscriptLogged = false;
 
   private keepAliveTimer: ReturnType<typeof setInterval> | null = null;
+
+  // Heartbeat for the current connection. Times are tick multiples
+  // (`heartbeatTick * HEARTBEAT_TICK_MS`), exact for a ping since pings only go
+  // out on a tick. `heartbeatPing` is the ping being judged, null once
+  // answered; `heartbeatPingMarks` holds `heartbeatBytesSent` at each
+  // unanswered ping, oldest first, and a pong moves `heartbeatDeliveredBytes`
+  // up to the oldest. `audioSentSinceHeard` makes an unanswered ping urgent.
+  private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+  private heartbeatTick = 0;
+  private heartbeatLastHeardMs = 0;
+  private heartbeatPing: { sentMs: number; backlogBytes: number } | null = null;
+  private heartbeatPingMarks: number[] = [];
+  private heartbeatBytesSent = 0;
+  private heartbeatDeliveredBytes = 0;
+  private audioSentSinceHeard = false;
 
   // Session-level, so reconnects reuse the URL the session settled on: once a
   // 400 forced a smaller keyterm list, every reconnect keeps that step.
@@ -554,6 +587,11 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       });
     });
 
+    connection.on("pong", () => {
+      if (this.sessionId !== mySessionId || this.connection !== connection) return;
+      this.handlePong();
+    });
+
     connection.on("open", () => {
       if (this.sessionId !== mySessionId || this.connection !== connection) {
         logWarn(`${P} Session expired during connect, closing`);
@@ -593,12 +631,14 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
         return;
       }
       this.startKeepAlive(connection, mySessionId);
+      this.startHeartbeat(connection, mySessionId);
       this.emit({ type: "status", status: "recording" });
       this.settlePendingStart(mySessionId, { ok: true });
     });
 
     connection.on("message", (data) => {
       if (this.sessionId !== mySessionId || this.connection !== connection) return;
+      this.markHeard();
       const raw =
         typeof data === "string"
           ? data
@@ -648,6 +688,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
       if (this.sessionId !== mySessionId || this.connection !== connection) return;
       this.clearConnectTimeout();
       this.clearKeepAlive();
+      this.clearHeartbeat();
       const wasReady = this.isReady;
       logInfo(`${P} WebSocket closed`, {
         code,
@@ -793,6 +834,87 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     }
   }
 
+  /**
+   * Starts the heartbeat for one connection. Each tick either judges the
+   * outstanding ping against its deadline (send time, plus the allowance, plus
+   * the time the bytes ahead of it need at the floor rate) or sends a new one
+   * when audio has gone out unanswered or the idle interval is up. Deadlines
+   * are checked only on later ticks, so they can run late but never early. The
+   * session-id / socket-identity guard stops a stale interval from terminating
+   * a newer connection.
+   */
+  private startHeartbeat(connection: WebSocket, mySessionId: number): void {
+    this.clearHeartbeat();
+    this.heartbeatTick = 0;
+    this.heartbeatLastHeardMs = 0;
+    this.heartbeatPing = null;
+    this.heartbeatPingMarks = [];
+    this.heartbeatBytesSent = 0;
+    this.heartbeatDeliveredBytes = 0;
+    this.audioSentSinceHeard = false;
+    this.heartbeatInterval = setInterval(() => {
+      if (this.sessionId !== mySessionId || this.connection !== connection) {
+        this.clearHeartbeat();
+        return;
+      }
+      const nowMs = ++this.heartbeatTick * HEARTBEAT_TICK_MS;
+      const ping = this.heartbeatPing;
+      if (ping) {
+        const allowanceMs = this.audioSentSinceHeard ? HEARTBEAT_ACTIVE_MS : HEARTBEAT_IDLE_MS;
+        const deadlineMs =
+          ping.sentMs + allowanceMs + ping.backlogBytes / HEARTBEAT_FLOOR_BYTES_PER_MS;
+        if (nowMs < deadlineMs) return;
+        logWarn(`${P} Heartbeat: no answer, terminating half-open connection`, {
+          waitedMs: nowMs - ping.sentMs,
+          backlogBytes: ping.backlogBytes,
+          audioUnanswered: this.audioSentSinceHeard,
+        });
+        try {
+          connection.terminate();
+        } catch {
+          // Ignore terminate errors — the close handler drives reconnect.
+        }
+        return;
+      }
+      if (!this.audioSentSinceHeard && nowMs - this.heartbeatLastHeardMs < HEARTBEAT_IDLE_MS) {
+        return;
+      }
+      this.heartbeatPing = {
+        sentMs: nowMs,
+        backlogBytes: this.heartbeatBytesSent - this.heartbeatDeliveredBytes,
+      };
+      this.heartbeatPingMarks.push(this.heartbeatBytesSent);
+      try {
+        connection.ping();
+      } catch (err) {
+        logWarn(`${P} Heartbeat ping failed`, { ...voiceErrorLogFields(err) });
+      }
+    }, HEARTBEAT_TICK_MS);
+  }
+
+  /** A pong: everything sent before the oldest unanswered ping has arrived. */
+  private handlePong(): void {
+    const mark = this.heartbeatPingMarks.shift();
+    if (mark !== undefined) {
+      this.heartbeatDeliveredBytes = Math.max(this.heartbeatDeliveredBytes, mark);
+    }
+    this.markHeard();
+  }
+
+  /** Records that the current connection answered: a pong or any server frame. */
+  private markHeard(): void {
+    this.heartbeatLastHeardMs = this.heartbeatTick * HEARTBEAT_TICK_MS;
+    this.heartbeatPing = null;
+    this.audioSentSinceHeard = false;
+  }
+
+  private clearHeartbeat(): void {
+    if (this.heartbeatInterval !== null) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
+  }
+
   private handleFatalError(mySessionId: number, error: VoiceInputError): void {
     logError(`${P} Fatal error — tearing down session`, undefined, { code: error.code });
     this.isExpectedClose = true;
@@ -911,6 +1033,8 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     // Tracked before the send: a send that throws means the socket is going
     // down, and the chunk goes out again on the next connection.
     this.trackUnconfirmedAudio(chunk);
+    this.audioSentSinceHeard = true;
+    this.heartbeatBytesSent += chunk.byteLength;
     try {
       // Deepgram expects raw PCM16 as binary WebSocket frames — NOT base64 JSON.
       this.connection.send(Buffer.from(chunk));
@@ -1057,8 +1181,12 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
   private cleanupConnection(): void {
     this.clearConnectTimeout();
     this.clearKeepAlive();
+    this.clearHeartbeat();
     this.connection = null;
     this.isReady = false;
+    this.heartbeatPing = null;
+    this.heartbeatPingMarks = [];
+    this.audioSentSinceHeard = false;
   }
 
   private cleanupPreviousSession(): void {
@@ -1079,6 +1207,7 @@ export class DeepgramTranscriptionProvider implements TranscriptionProvider {
     this.clearConnectTimeout();
     this.clearDrainTimeout();
     this.clearKeepAlive();
+    this.clearHeartbeat();
     this.clearReconnectTimer();
     this.reconnectAttempt = 0;
     this.isReconnecting = false;
