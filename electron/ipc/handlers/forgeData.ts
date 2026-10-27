@@ -16,6 +16,7 @@ import {
 } from "./forgeResolution.js";
 import { auditForgeCall, summarizeForgeArgs } from "../../services/forge/forgeAuditService.js";
 import { getForgeProviderBaseImpl } from "../../services/forgeProviderRegistry.js";
+import { buildStoredCredentials } from "../../services/forge/forgeCredentialUtils.js";
 import { getCommitCount } from "../../utils/git.js";
 import { logWarn } from "../../utils/logger.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
@@ -23,6 +24,8 @@ import { normalizeProviderId } from "../../../shared/utils/forgeProviderIds.js";
 import type {
   CheckRun,
   CIStatus,
+  ForgeNumberReference,
+  ForgeReferenceLookupResult,
   ForgeRepoCounts,
   ForgeTokenHealthState,
   Issue,
@@ -1100,6 +1103,58 @@ async function handleForgeGetChecks(payload: {
   });
 }
 
+/** The distinct numbers one reference lookup answers; a longer draft keeps its first ones. */
+const MAX_REFERENCE_NUMBERS = 50;
+
+/**
+ * What each bare `#N` in a draft names (#14849). An ambient read: `null` says
+ * nothing can be looked up here (no remote, no provider, no stored credential,
+ * or a provider without the lookup), and is answered without asking the forge.
+ * The code forge answers even when the project's issues live elsewhere,
+ * because `#N` names the repository's own issues and pull requests.
+ */
+async function handleForgeGetReferencesByNumbers(payload: {
+  cwd: string;
+  numbers: number[];
+}): Promise<ForgeReferenceLookupResult[] | null> {
+  checkRateLimit(CHANNELS.FORGE_GET_REFERENCES_BY_NUMBERS, 20, 10_000);
+  if (!payload || typeof payload !== "object") return null;
+  if (typeof payload.cwd !== "string" || !payload.cwd.trim()) return null;
+  if (!Array.isArray(payload.numbers)) return null;
+  const numbers: number[] = [];
+  for (const n of payload.numbers) {
+    if (numbers.length >= MAX_REFERENCE_NUMBERS) break;
+    if (typeof n !== "number" || !Number.isInteger(n) || n <= 0 || numbers.includes(n)) continue;
+    numbers.push(n);
+  }
+  if (numbers.length === 0) return [];
+
+  let context: ResolvedForgeContext;
+  try {
+    context = await resolveForCwd(payload.cwd);
+  } catch {
+    return null;
+  }
+  const batch = context.impl.batchLookups;
+  if (!batch?.findReferencesByNumbers || !buildStoredCredentials(context.namespaceId)) {
+    return null;
+  }
+
+  let found: Map<number, ForgeNumberReference | null>;
+  try {
+    found = await batch.findReferencesByNumbers(context.repoRef, numbers);
+  } catch {
+    return numbers.map((n) => ({ number: n, status: "unresolved" as const }));
+  }
+  return numbers.map((n) => {
+    if (!found.has(n)) return { number: n, status: "unresolved" as const };
+    const reference = found.get(n);
+    return reference
+      ? { number: n, status: "found" as const, reference }
+      : { number: n, status: "not_found" as const };
+  });
+}
+
 async function handleForgeGetPRReviewThreads(payload: {
   cwd: string;
   prNumber: number;
@@ -1257,6 +1312,10 @@ export const forgeCapabilityDataNamespace = defineIpcNamespace({
     getChecks: op(CHANNELS.FORGE_GET_CHECKS, handleForgeGetChecks),
     getIssuesByNumbers: op(CHANNELS.FORGE_GET_ISSUES_BY_NUMBERS, handleForgeGetIssuesByNumbers),
     getPRsByNumbers: op(CHANNELS.FORGE_GET_PRS_BY_NUMBERS, handleForgeGetPRsByNumbers),
+    getReferencesByNumbers: op(
+      CHANNELS.FORGE_GET_REFERENCES_BY_NUMBERS,
+      handleForgeGetReferencesByNumbers
+    ),
     getPRReviewThreads: op(CHANNELS.FORGE_GET_PR_REVIEW_THREADS, handleForgeGetPRReviewThreads),
     listIssueComments: op(CHANNELS.FORGE_LIST_ISSUE_COMMENTS, handleForgeListIssueComments),
     resolveAuthorAvatar: op(CHANNELS.FORGE_RESOLVE_AUTHOR_AVATAR, handleForgeResolveAuthorAvatar),

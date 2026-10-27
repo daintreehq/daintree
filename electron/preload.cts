@@ -2876,6 +2876,8 @@ function buildElectronApi(): ElectronAPI {
         _unwrappingInvoke(CHANNELS.FORGE_GET_ISSUES_BY_NUMBERS, payload),
       getPRsByNumbers: (payload: { cwd: string; numbers: number[] }) =>
         _unwrappingInvoke(CHANNELS.FORGE_GET_PRS_BY_NUMBERS, payload),
+      getReferencesByNumbers: (payload: { cwd: string; numbers: number[] }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_GET_REFERENCES_BY_NUMBERS, payload),
       getPRReviewThreads: (payload: { cwd: string; prNumber: number }) =>
         _unwrappingInvoke(CHANNELS.FORGE_GET_PR_REVIEW_THREADS, payload),
       listIssueComments: (payload: { cwd: string; issueNumber: number; opts?: unknown }) =>

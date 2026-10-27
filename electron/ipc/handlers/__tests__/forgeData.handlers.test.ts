@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type {
+  ForgeNumberReference,
   ForgeProviderImpl,
+  ForgeReferenceLookupResult,
   Issue,
   ListOptions,
   PR,
@@ -30,7 +32,12 @@ const fakeImpl = vi.hoisted(
       getRepoMetadata: vi.fn(),
       // Optional on the provider contract, and the batch tests below toggle it
       // between present and absent to exercise both routes.
-      batchLookups: undefined as { findPRsByNumbers?: ReturnType<typeof vi.fn> } | undefined,
+      batchLookups: undefined as
+        | {
+            findPRsByNumbers?: ReturnType<typeof vi.fn>;
+            findReferencesByNumbers?: ReturnType<typeof vi.fn>;
+          }
+        | undefined,
     }) as {
       listIssues: ReturnType<typeof vi.fn>;
       listPRs: ReturnType<typeof vi.fn>;
@@ -38,7 +45,10 @@ const fakeImpl = vi.hoisted(
       getPR: ReturnType<typeof vi.fn>;
       getCIStatus: ReturnType<typeof vi.fn>;
       getRepoMetadata: ReturnType<typeof vi.fn>;
-      batchLookups?: { findPRsByNumbers?: ReturnType<typeof vi.fn> };
+      batchLookups?: {
+        findPRsByNumbers?: ReturnType<typeof vi.fn>;
+        findReferencesByNumbers?: ReturnType<typeof vi.fn>;
+      };
     }
 );
 
@@ -118,6 +128,14 @@ const projectStoreMock = vi.hoisted(() => ({
 }));
 
 vi.mock("../../../services/ProjectStore.js", () => ({ projectStore: projectStoreMock }));
+
+const buildStoredCredentialsMock = vi.hoisted(() =>
+  vi.fn((_providerId: string): unknown => ({ kind: "bearer", value: "token" }))
+);
+
+vi.mock("../../../services/forge/forgeCredentialUtils.js", () => ({
+  buildStoredCredentials: buildStoredCredentialsMock,
+}));
 
 vi.mock("../../../utils/git.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../utils/git.js")>()),
@@ -1226,6 +1244,86 @@ describe("registerForgeDataHandlers", () => {
       const result = await handler()({}, { cwd: "/repo", numbers: [0, -1, 1.5, 2] });
       expect(result).toEqual([{ number: 2, status: "found", pr: makePR(2) }]);
       expect(findPRsByNumbers).toHaveBeenCalledWith(repoRef, [2]);
+    });
+  });
+
+  describe("forge:get-references-by-numbers", () => {
+    const lookup = (payload: unknown) => {
+      registerForgeDataHandlers();
+      return findHandler("forge:get-references-by-numbers")({}, payload) as Promise<
+        ForgeReferenceLookupResult[] | null
+      >;
+    };
+    const issue = (n: number): ForgeNumberReference => ({
+      kind: "issue",
+      number: n,
+      title: `Issue ${n}`,
+      state: "open",
+    });
+
+    it("answers each distinct number in order, telling found from missing from unanswered", async () => {
+      const findReferencesByNumbers = vi.fn(
+        async () =>
+          new Map<number, ForgeNumberReference | null>([
+            [5, issue(5)],
+            [6, null],
+          ])
+      );
+      fakeImpl.batchLookups = { findReferencesByNumbers };
+      const result = await lookup({ cwd: "/repo", numbers: [5, 6, 5, 7, 0, 1.5] });
+      expect(result).toEqual([
+        { number: 5, status: "found", reference: issue(5) },
+        { number: 6, status: "not_found" },
+        { number: 7, status: "unresolved" },
+      ]);
+      expect(findReferencesByNumbers).toHaveBeenCalledWith(repoRef, [5, 6, 7]);
+      // The code forge, never the issues override: `#N` names this repository's own.
+      expect(resolveForCwdMock).toHaveBeenCalledWith("/repo");
+    });
+
+    it("asks for at most 50 numbers at once", async () => {
+      const findReferencesByNumbers = vi.fn(async () => new Map());
+      fakeImpl.batchLookups = { findReferencesByNumbers };
+      const numbers = Array.from({ length: 60 }, (_, i) => i + 1);
+      const result = await lookup({ cwd: "/repo", numbers });
+      expect(result).toHaveLength(50);
+      expect(findReferencesByNumbers.mock.calls[0]![1]).toEqual(numbers.slice(0, 50));
+    });
+
+    it("reports every number unanswered when the lookup throws", async () => {
+      fakeImpl.batchLookups = {
+        findReferencesByNumbers: vi.fn(async () => {
+          throw new Error("network down");
+        }),
+      };
+      expect(await lookup({ cwd: "/repo", numbers: [1, 2] })).toEqual([
+        { number: 1, status: "unresolved" },
+        { number: 2, status: "unresolved" },
+      ]);
+    });
+
+    it("asks nothing without a stored credential", async () => {
+      const findReferencesByNumbers = vi.fn(async () => new Map());
+      fakeImpl.batchLookups = { findReferencesByNumbers };
+      buildStoredCredentialsMock.mockReturnValueOnce(null);
+      expect(await lookup({ cwd: "/repo", numbers: [1] })).toBeNull();
+      expect(buildStoredCredentialsMock).toHaveBeenCalledWith("fake.provider");
+      expect(findReferencesByNumbers).not.toHaveBeenCalled();
+    });
+
+    it("is unavailable when the provider has no reference lookup", async () => {
+      fakeImpl.batchLookups = { findPRsByNumbers: vi.fn() };
+      expect(await lookup({ cwd: "/repo", numbers: [1] })).toBeNull();
+    });
+
+    it("is unavailable when the cwd resolves to no forge", async () => {
+      resolveForCwdMock.mockRejectedValueOnce(new Error("No remote URL found for this repository"));
+      expect(await lookup({ cwd: "/repo", numbers: [1] })).toBeNull();
+    });
+
+    it("asks nothing for a draft with no usable numbers", async () => {
+      expect(await lookup({ cwd: "/repo", numbers: [0, -3] })).toEqual([]);
+      expect(resolveForCwdMock).not.toHaveBeenCalled();
     });
   });
 });

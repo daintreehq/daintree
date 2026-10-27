@@ -41,6 +41,7 @@ import type {
   Issue,
   PR,
   PRLookupResult,
+  ForgeReferenceLookupResult,
   Page,
   ListOptions,
   ForgeUser,
@@ -2066,6 +2067,16 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * collapse to their first occurrence.
      */
     getPRsByNumbers(payload: { cwd: string; numbers: number[] }): Promise<PRLookupResult[]>;
+    /**
+     * What each bare `#N` names in the code forge's repository, issue or pull
+     * request, one entry per distinct number (the first 50). `null` when
+     * nothing can be looked up for this cwd: no remote, no provider, no stored
+     * credential, or a provider without the lookup.
+     */
+    getReferencesByNumbers(payload: {
+      cwd: string;
+      numbers: number[];
+    }): Promise<ForgeReferenceLookupResult[] | null>;
     /**
      * Opaque review threads for a PR via the provider's `reviews`
      * capability. `[]` when the capability is absent. Note this is the

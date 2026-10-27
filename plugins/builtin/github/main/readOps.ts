@@ -3,6 +3,7 @@ import type {
   CheckRun,
   CIStatus,
   FetchOptions,
+  ForgeNumberReference,
   Issue,
   IssueComment,
   IssueTooltipData,
@@ -35,6 +36,7 @@ import {
   GRAPHQL_BATCH_CHUNK_SIZE,
   buildBatchBranchPRQuery,
   buildBatchPRsQuery,
+  buildBatchReferencesQuery,
   buildBatchRequiredChecksQuery,
 } from "./GitHubQueries.js";
 import { gitHubRateLimitService } from "./GitHubRateLimitService.js";
@@ -72,6 +74,7 @@ import {
   toForgeIssue,
   toForgeIssueComment,
   toForgePR,
+  toForgeNumberReference,
   gitHubIssueToForgeIssue,
 } from "./mappers.js";
 import {
@@ -823,6 +826,81 @@ export async function findPRsByNumbersImpl(
 
     return result;
   });
+}
+
+/**
+ * The `repository` of a references response that failed only because some of
+ * its numbers name nothing. Each of those is a `NOT_FOUND` on its own alias,
+ * and the rest of the chunk's data is still there; any other error leaves the
+ * whole chunk unanswered.
+ */
+function repositoryDespiteMissingNumbers(error: unknown): Record<string, unknown> | null {
+  const cause = error instanceof Error ? error.cause : undefined;
+  if (!cause || typeof cause !== "object") return null;
+  const { errors, data } = cause as { errors?: unknown; data?: unknown };
+  if (!Array.isArray(errors) || errors.length === 0) return null;
+  if (!data || typeof data !== "object") return null;
+  const onlyMissingNumbers = errors.every((entry) => {
+    const { type, path } = (entry ?? {}) as { type?: unknown; path?: unknown };
+    return (
+      type === "NOT_FOUND" &&
+      Array.isArray(path) &&
+      path.length === 2 &&
+      path[0] === "repository" &&
+      typeof path[1] === "string" &&
+      /^r\d+$/.test(path[1])
+    );
+  });
+  if (!onlyMissingNumbers) return null;
+  gitHubRateLimitService.updateFromGraphQL(
+    data as Record<string, unknown>,
+    "BATCH_REFERENCES_QUERY"
+  );
+  const repository = (data as Record<string, unknown>).repository;
+  return repository && typeof repository === "object"
+    ? (repository as Record<string, unknown>)
+    : null;
+}
+
+export async function findReferencesByNumbersImpl(
+  repo: RepoRef,
+  numbers: number[]
+): Promise<Map<number, ForgeNumberReference | null>> {
+  const result = new Map<number, ForgeNumberReference | null>();
+  const unique = uniquePositiveIntegers(numbers);
+  if (unique.length === 0) return result;
+
+  const block = gitHubRateLimitService.shouldBlockRequest("graphql");
+  if (block.blocked) return result;
+
+  for (let start = 0; start < unique.length; start += GRAPHQL_BATCH_CHUNK_SIZE) {
+    const chunk = unique.slice(start, start + GRAPHQL_BATCH_CHUNK_SIZE);
+    const query = buildBatchReferencesQuery(repo.owner, repo.repo, chunk);
+    if (!query) continue;
+
+    let repository: Record<string, unknown> | null;
+    try {
+      const response = await runQuery(query, {}, "BATCH_REFERENCES_QUERY");
+      repository = (response?.repository as Record<string, unknown> | undefined) ?? null;
+    } catch (error) {
+      repository = repositoryDespiteMissingNumbers(error);
+    }
+    if (!repository) continue;
+
+    for (const number of chunk) {
+      const alias = `r${number}`;
+      if (!(alias in repository)) continue;
+      const node = repository[alias];
+      if (node === null) {
+        result.set(number, null);
+        continue;
+      }
+      const reference = toForgeNumberReference(node);
+      if (reference) result.set(number, reference);
+    }
+  }
+
+  return result;
 }
 
 export async function getCIStatusesImpl(

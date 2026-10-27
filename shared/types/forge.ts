@@ -824,6 +824,24 @@ export type PRLookupStatus = PRLookupResult["status"];
  */
 export type PRLookupUnresolvedReason = "provider_unsupported" | "provider_error";
 
+/**
+ * What a bare `#N` names in a repository: the issue or the pull request that
+ * holds that number. Only what a reference shows: its kind, title and state.
+ */
+export type ForgeNumberReference =
+  | { kind: "issue"; number: number; title: string; state: NormalizedIssueState }
+  | { kind: "pr"; number: number; title: string; state: NormalizedPRState; isDraft: boolean };
+
+/**
+ * One number's outcome in a reference lookup. `not_found` is an answer (the
+ * repository holds nothing by that number); `unresolved` is the lack of one,
+ * as in {@link PRLookupResult}.
+ */
+export type ForgeReferenceLookupResult =
+  | { number: number; status: "found"; reference: ForgeNumberReference }
+  | { number: number; status: "not_found" }
+  | { number: number; status: "unresolved" };
+
 export interface ReviewCapability {
   getReviewThreads(repo: RepoRef, prNumber: number): Promise<ReviewThread[]>;
   /**
@@ -958,6 +976,15 @@ export interface BatchLookupCapability {
     options?: FetchOptions
   ): Promise<Map<number, PR | null>>;
   findIssuesByNumbers?(repo: RepoRef, issueNumbers: number[]): Promise<Map<number, Issue | null>>;
+  /**
+   * What each bare `#N` names, for a forge whose issues and pull requests share
+   * one number sequence. A number may name either, so neither of the lookups
+   * above can answer for a mixed set; this one asks once per chunk for both.
+   */
+  findReferencesByNumbers?(
+    repo: RepoRef,
+    numbers: number[]
+  ): Promise<Map<number, ForgeNumberReference | null>>;
   /**
    * Optional cheap conditional probe of the repo's open-PR list. Given the
    * caller's current {@link PRSnapshot}s of the PRs it tracks, return only

@@ -1703,6 +1703,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { cwd: string }];
     result: import("../forge.js").RateLimitDetails | null;
   };
+  "forge:get-references-by-numbers": {
+    args: [payload: { cwd: string; numbers: number[] }];
+    result: import("../forge.js").ForgeReferenceLookupResult[] | null;
+  };
   "forge:get-repo-stats": {
     args: [payload: { cwd: string; bypassCache?: boolean | undefined }];
     result: import("./forge.js").ForgeRepositoryStats;

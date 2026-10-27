@@ -1980,6 +1980,131 @@ describe("batchLookups.findPRsByNumbers", () => {
   });
 });
 
+describe("batchLookups.findReferencesByNumbers", () => {
+  beforeEach(() => mockGraphQLClient.mockReset());
+
+  const findReferences = (numbers: number[]) =>
+    githubForgeProvider.batchLookups!.findReferencesByNumbers!(repo, numbers);
+
+  /** The error Octokit throws when a response carries `errors` beside its data. */
+  function responseError(data: Record<string, unknown>, errors: Array<Record<string, unknown>>) {
+    return Object.assign(new Error("Request failed due to following response errors"), {
+      name: "GraphqlResponseError",
+      data,
+      errors,
+    });
+  }
+
+  const missing = (alias: string) => ({
+    type: "NOT_FOUND",
+    path: ["repository", alias],
+    message: `Could not resolve to an issue or pull request with the number of ${alias.slice(1)}.`,
+  });
+
+  it("tells issues from pull requests in one request", async () => {
+    mockGraphQLClient.mockResolvedValueOnce({
+      repository: {
+        r12: { __typename: "Issue", number: 12, title: "Crash on start", state: "CLOSED" },
+        r13: {
+          __typename: "PullRequest",
+          number: 13,
+          title: "Fix the crash",
+          state: "OPEN",
+          isDraft: true,
+        },
+        r14: { __typename: "PullRequest", number: 14, title: "Old", state: "MERGED", isDraft: false },
+      },
+      rateLimit: { cost: 1, remaining: 4999, resetAt: "" },
+    });
+
+    const result = await findReferences([12, 13, 14, 12]);
+
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(1);
+    const query = mockGraphQLClient.mock.calls[0]![0] as string;
+    expect(query).toContain("r12: issueOrPullRequest(number: 12)");
+    expect(result.get(12)).toEqual({ kind: "issue", number: 12, title: "Crash on start", state: "closed" });
+    expect(result.get(13)).toEqual({
+      kind: "pr",
+      number: 13,
+      title: "Fix the crash",
+      state: "open",
+      isDraft: true,
+    });
+    expect(result.get(14)).toMatchObject({ kind: "pr", state: "merged", isDraft: false });
+  });
+
+  it("keeps the rest of a chunk when some of its numbers name nothing", async () => {
+    mockGraphQLClient.mockRejectedValueOnce(
+      responseError(
+        {
+          repository: {
+            r1: { __typename: "Issue", number: 1, title: "First", state: "OPEN" },
+            r999: null,
+          },
+          rateLimit: { cost: 1, remaining: 4999, resetAt: "" },
+        },
+        [missing("r999")]
+      )
+    );
+
+    const result = await findReferences([1, 999]);
+
+    expect(result.get(1)).toMatchObject({ kind: "issue", number: 1 });
+    expect(result.has(999)).toBe(true);
+    expect(result.get(999)).toBeNull();
+  });
+
+  it("leaves a chunk unanswered when the failure is anything but missing numbers", async () => {
+    mockGraphQLClient.mockRejectedValueOnce(
+      responseError({ repository: null }, [
+        { type: "NOT_FOUND", path: ["repository"], message: "Could not resolve to a Repository" },
+      ])
+    );
+
+    const result = await findReferences([1, 2]);
+
+    expect(result.size).toBe(0);
+  });
+
+  it("leaves a chunk unanswered when the request itself fails", async () => {
+    mockGraphQLClient.mockRejectedValueOnce(new Error("socket hang up"));
+
+    const result = await findReferences([1, 2]);
+
+    expect(result.size).toBe(0);
+  });
+
+  it("asks in chunks and answers each chunk on its own", async () => {
+    const numbers = Array.from({ length: 21 }, (_, i) => i + 1);
+    const firstRepo: Record<string, unknown> = {};
+    for (let i = 1; i <= 20; i++) {
+      firstRepo[`r${i}`] = { __typename: "Issue", number: i, title: `Issue ${i}`, state: "OPEN" };
+    }
+    mockGraphQLClient
+      .mockResolvedValueOnce({ repository: firstRepo, rateLimit: { cost: 1, remaining: 1, resetAt: "" } })
+      .mockRejectedValueOnce(new Error("timeout"));
+
+    const result = await findReferences(numbers);
+
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
+    expect(result.size).toBe(20);
+    expect(result.has(21)).toBe(false);
+  });
+
+  it("skips the network when the GraphQL budget gate is closed", async () => {
+    mockShouldBlockRequest.mockReturnValue({
+      blocked: true,
+      reason: "primary",
+      resumeAt: Date.now() + 1000,
+    } as ShouldBlockResult);
+
+    const result = await findReferences([1, 2]);
+
+    expect(result.size).toBe(0);
+    expect(mockGraphQLClient).not.toHaveBeenCalled();
+  });
+});
+
 function requiredChecksBatchResponse(
   entries: Record<number, { state: string; contexts: Array<Record<string, unknown>> } | null>
 ) {
