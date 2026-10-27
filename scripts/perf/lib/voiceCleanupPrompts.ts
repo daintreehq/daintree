@@ -370,7 +370,7 @@ const NAMES_2 = revise(NAMES_REPAIR, {
       '("and send me a summary of what you find in."), goes, rather than becoming another word that would end the sentence ("what you find inside");',
     ],
     [
-      'A word left hanging at the very end of the passage,',
+      "A word left hanging at the very end of the passage,",
       'A sentence the speaker restarts partway keeps only the restart ("what I want to do is I want to rename it" becomes "what I want to do is rename it"). A word left hanging at the very end of the passage,',
     ],
   ],
@@ -445,7 +445,7 @@ export const PROMPT_VARIANTS: Readonly<Record<string, PromptVariant>> = {
   },
   names2: {
     description:
-      "round 2: names-repair, with a name cased as in a sentence, a package still typed, \"obviously\" kept and a restarted clause mended",
+      'round 2: names-repair, with a name cased as in a sentence, a package still typed, "obviously" kept and a restarted clause mended',
     instructionsFor: fixed(NAMES_2),
   },
   "names2-core": {
@@ -453,7 +453,7 @@ export const PROMPT_VARIANTS: Readonly<Record<string, PromptVariant>> = {
     instructionsFor: fixed(NAMES_2_CORE),
   },
   names3: {
-    description: "round 3: names2, with a hanging last word never read as a misheard \"too\"",
+    description: 'round 3: names2, with a hanging last word never read as a misheard "too"',
     instructionsFor: fixed(NAMES_3),
   },
   names4: {

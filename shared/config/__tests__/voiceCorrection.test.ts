@@ -43,7 +43,9 @@ describe("CORE_CORRECTION_PROMPT", () => {
     // #14873: a term the sentence means is written, but an ordinary word or another name stays.
     expect(CORE_CORRECTION_PROMPT).toMatch(/plausibly matches that term and the sentence means it/);
     expect(CORE_CORRECTION_PROMPT).toMatch(/Keep the transcribed word when it is an ordinary word/);
-    expect(LITERAL_CORRECTION_PROMPT).toMatch(/only when the existing word does not fit the context/i);
+    expect(LITERAL_CORRECTION_PROMPT).toMatch(
+      /only when the existing word does not fit the context/i
+    );
   });
 
   it("keeps the static prefix long enough to clear OpenAI's prompt-cache floor", () => {
@@ -583,10 +585,16 @@ describe("buildCorrectionSystemPrompt contextNames", () => {
 
   it("rewrites only the project, dictionary and workspace blocks when names are spellings", () => {
     const tiebreak = blocks(
-      buildCorrectionSystemPrompt(context, { ...LITERAL_CORRECTION_INSTRUCTIONS, contextNames: "tiebreak" })
+      buildCorrectionSystemPrompt(context, {
+        ...LITERAL_CORRECTION_INSTRUCTIONS,
+        contextNames: "tiebreak",
+      })
     );
     const spelling = blocks(
-      buildCorrectionSystemPrompt(context, { ...LITERAL_CORRECTION_INSTRUCTIONS, contextNames: "spelling" })
+      buildCorrectionSystemPrompt(context, {
+        ...LITERAL_CORRECTION_INSTRUCTIONS,
+        contextNames: "spelling",
+      })
     );
     expect(spelling).toHaveLength(tiebreak.length);
     const changed = tiebreak.flatMap((block, index) =>
@@ -598,7 +606,9 @@ describe("buildCorrectionSystemPrompt contextNames", () => {
       expect.stringMatching(/^Use the worktree and repository names above/),
     ]);
     // Each still says what the names it spells are: words to spell, never words to add.
-    const evidence = spelling.find((block) => block.startsWith("The worktree and repository names"));
+    const evidence = spelling.find((block) =>
+      block.startsWith("The worktree and repository names")
+    );
     expect(evidence).toMatch(/never a source of words, names or facts to add/);
   });
 
@@ -606,7 +616,10 @@ describe("buildCorrectionSystemPrompt contextNames", () => {
     const { target, knownNames, heardAs, language } = context;
     const bare = { target, knownNames, heardAs, language };
     expect(
-      buildCorrectionSystemPrompt(bare, { ...LITERAL_CORRECTION_INSTRUCTIONS, contextNames: "spelling" })
+      buildCorrectionSystemPrompt(bare, {
+        ...LITERAL_CORRECTION_INSTRUCTIONS,
+        contextNames: "spelling",
+      })
     ).toBe(buildCorrectionSystemPrompt(bare, LITERAL_CORRECTION_INSTRUCTIONS));
   });
 });

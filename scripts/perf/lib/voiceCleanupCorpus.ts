@@ -1096,7 +1096,8 @@ const NAMES: readonly AuthoredCase[] = [
     raw: "It's a pain to reproduce, so add logging before you change anything.",
     reference: "It's a pain to reproduce, so add logging before you change anything.",
     keep: ["a pain to reproduce"],
-    terminalOutput: "pty-host: pane 3 resized 120x40 -> 121x40\npty-host: pane 3 SIGWINCH x12 in 0.4s",
+    terminalOutput:
+      "pty-host: pane 3 resized 120x40 -> 121x40\npty-host: pane 3 SIGWINCH x12 in 0.4s",
   },
   // A spelling the speaker is talking about as a spelling: the letters stay
   // the letters they said, however close the name on screen is.
