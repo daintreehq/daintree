@@ -996,6 +996,11 @@ describe("useReEntrySummary across a screen lock (#14885)", () => {
     now += 60_000;
     hasFocusSpy.mockReturnValue(false);
     setScreenLocked(false);
+    act(() => {
+      for (const frame of frames.splice(0)) frame(0);
+    });
+    expect(result.current.visible).toBe(false);
+
     // Stale inside the handler; current by the frame.
     act(() => {
       window.dispatchEvent(new Event("focus"));
