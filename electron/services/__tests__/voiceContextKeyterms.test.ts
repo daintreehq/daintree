@@ -1194,21 +1194,37 @@ describe("assembleTaggedKeyterms", () => {
 
 describe("keyterms from a pane read elsewhere", () => {
   it("gives the same list from a host's reads as from reading the pane here", async () => {
-    const ptyClient = makePtyClient(["const myVariable = handleRequest();", "myVariable"]);
-    const local = { customDictionary: ["zodSchema"], terminalId: TARGET };
-    const readHere = await assembleTaggedKeyterms({
-      ...local,
-      ptyClient: asPtyClient(ptyClient),
-    });
-    const paneReads = await readPaneKeytermReads({
-      terminalId: TARGET,
-      ptyClient: asPtyClient(makePtyClient(["const myVariable = handleRequest();", "myVariable"])),
-    });
-    const readElsewhere = await assembleTaggedKeyterms({
-      customDictionary: ["zodSchema"],
-      paneReads: Promise.resolve(paneReads),
-    });
-    expect(readElsewhere).toEqual(readHere);
+    const projectPath = await mkdtemp(join(tmpdir(), "voice-pane-reads-"));
+    try {
+      await writeFile(
+        join(projectPath, "package.json"),
+        JSON.stringify({ name: "@acme/quartzline-widgets" })
+      );
+      const lines = ["const myVariable = handleRequest();", "myVariable"];
+      const readHere = await assembleTaggedKeyterms({
+        customDictionary: ["zodSchema"],
+        projectPath,
+        terminalId: TARGET,
+        ptyClient: asPtyClient(makePtyClient(lines)),
+      });
+      const paneReads = await readPaneKeytermReads({
+        projectPath,
+        terminalId: TARGET,
+        ptyClient: asPtyClient(makePtyClient(lines)),
+      });
+      const readElsewhere = await assembleTaggedKeyterms({
+        customDictionary: ["zodSchema"],
+        paneReads: Promise.resolve(paneReads),
+      });
+      expect(readElsewhere).toEqual(readHere);
+      const bySource = (source: string) =>
+        readElsewhere.filter((t) => t.source === source).map((t) => t.term);
+      expect(bySource("repository")).toEqual(expect.arrayContaining(["quartzline", "widgets"]));
+      expect(bySource("branch")).toContain("auth");
+      expect(bySource("terminal")).toContain("myVariable");
+    } finally {
+      await rm(projectPath, { recursive: true, force: true });
+    }
   });
 
   it("reads nothing here once given a pane's reads", async () => {

@@ -1096,7 +1096,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       sender,
       webContentsId: ctx.webContentsId,
       projectId: ctx.projectId,
-      projectInfo: getProjectInfo(ctx.projectId),
+      // A host's project is resolved on the host.
+      projectInfo: hostPaneOf(ctx.projectId) ? {} : getProjectInfo(ctx.projectId),
       outsideView: options?.outsideView === true,
       terminalId: options?.terminalId,
       intent: options?.intent ?? "dictation",

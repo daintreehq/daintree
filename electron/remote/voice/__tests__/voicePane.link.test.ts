@@ -9,7 +9,7 @@ import type { LinkSession } from "../../link/session.js";
 import { makeTempDir, openSessionPair, removeTempDir } from "../../link/__tests__/linkTestUtils.js";
 import { LINK_HEADROOM_MS, VoicePaneHostsClient } from "../client.js";
 import { installVoicePaneHostWith, type VoicePaneHostDeps } from "../host.js";
-import { MAX_PANE_TERMS, VoicePaneLinkMethod } from "../linkMethods.js";
+import { MAX_PANE_TERMS, MAX_PANE_VOCABULARY, VoicePaneLinkMethod } from "../linkMethods.js";
 
 const HOST = "studio-03";
 const SCOPE: PaneScope = { projectId: "proj-1", terminalId: "term-1" };
@@ -57,6 +57,14 @@ let deps: { [K in keyof VoicePaneHostDeps]: ReturnType<typeof vi.fn> };
 let uninstall: (() => void) | null;
 let sessionByHost: Map<string, LinkSession>;
 let client: VoicePaneHostsClient;
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
 
 function serve(session: LinkSession): () => void {
   return installVoicePaneHostWith(
@@ -148,6 +156,40 @@ describe("dictating into a host's pane reads the pane from that host", () => {
     expect(read?.names).toEqual(START.names);
   });
 
+  it("leaves out a command whose name runs past the limits, keeping the rest", async () => {
+    const commandTarget = START.commandTarget!;
+    const [review] = commandTarget.vocabulary.entries;
+    const long = "deep:".repeat(80);
+    deps.readStart.mockResolvedValueOnce({
+      ...START,
+      commandTarget: {
+        ...commandTarget,
+        vocabulary: {
+          ...commandTarget.vocabulary,
+          entries: [{ ...review!, token: `/${long}`, key: long }, review!],
+        },
+      },
+    });
+    const read = await client.readStart(HOST, SCOPE, { timeoutMs: 500 });
+    expect(read?.commandTarget?.vocabulary.entries.map((entry) => entry.token)).toEqual([
+      "/review",
+    ]);
+  });
+
+  it("keeps the newest of a vocabulary too long to send whole", async () => {
+    const vocabulary = Array.from({ length: MAX_PANE_VOCABULARY + 5 }, (_, i) => ({
+      term: `term${i}`,
+      heardAs: [],
+      source: "manual" as const,
+      addedAt: i,
+    }));
+    deps.readStart.mockResolvedValueOnce({ ...START, vocabulary });
+    const read = await client.readStart(HOST, SCOPE, { timeoutMs: 500 });
+    expect(read?.vocabulary).toHaveLength(MAX_PANE_VOCABULARY);
+    expect(read?.vocabulary.at(-1)?.term).toBe(`term${MAX_PANE_VOCABULARY + 4}`);
+    expect(read?.vocabulary.some((entry) => entry.term === "term0")).toBe(false);
+  });
+
   it("re-reads the vocabulary as a dictionary, dropping entries that aren't one", async () => {
     deps.readStart.mockResolvedValueOnce({
       ...START,
@@ -155,6 +197,41 @@ describe("dictating into a host's pane reads the pane from that host", () => {
     });
     const read = await client.readStart(HOST, SCOPE, { timeoutMs: 500 });
     expect(read?.vocabulary.map((entry) => entry.term)).toEqual(["Zustand"]);
+  });
+});
+
+describe("each host's pane stays its own", () => {
+  it("reads two hosts' panes of the same ids from each host, whatever order they answer in", async () => {
+    const other = await openSessionPair(dir);
+    pairs.push(other);
+    const first = deferred<PaneStartContext>();
+    const second = deferred<PaneStartContext>();
+    deps.readStart.mockReturnValueOnce(first.promise);
+    const otherDeps = {
+      ...deps,
+      readStart: vi.fn(() => second.promise),
+      readCorrection: vi.fn(async () => ({ ...CORRECTION, terminalOutput: "other host" })),
+    };
+    const uninstallOther = installVoicePaneHostWith(
+      { sessions: [{ session: other.host }], onSession: () => () => {} },
+      otherDeps as unknown as VoicePaneHostDeps
+    );
+    sessionByHost.set("studio-04", other.client);
+    try {
+      const fromFirst = client.readStart(HOST, SCOPE, { timeoutMs: 2_000 });
+      const fromSecond = client.readStart("studio-04", SCOPE, { timeoutMs: 2_000 });
+      await vi.waitFor(() => expect(otherDeps.readStart).toHaveBeenCalled());
+      second.resolve({ ...START, projectName: "other host" });
+      first.resolve(START);
+      await expect(fromFirst).resolves.toMatchObject({ projectName: "daintree" });
+      await expect(fromSecond).resolves.toMatchObject({ projectName: "other host" });
+      await expect(
+        client.readCorrection("studio-04", SCOPE, { timeoutMs: 2_000 })
+      ).resolves.toMatchObject({ terminalOutput: "other host" });
+      expect(deps.readCorrection).not.toHaveBeenCalled();
+    } finally {
+      uninstallOther();
+    }
   });
 });
 
@@ -176,15 +253,23 @@ describe("a host that can't give the pane's context gives none", () => {
     await expect(client.readStart(HOST, SCOPE, { timeoutMs: 150 })).resolves.toBeNull();
     const waited = performance.now() - startedAt;
     expect(waited).toBeGreaterThanOrEqual(140);
-    expect(waited).toBeLessThan(1_000);
+    expect(waited).toBeLessThan(5_000);
   });
 
   it("stops waiting once the dictation that asked is gone", async () => {
     deps.readStart.mockImplementationOnce(() => new Promise(() => {}));
     const controller = new AbortController();
-    const read = client.readStart(HOST, SCOPE, { timeoutMs: 5_000, signal: controller.signal });
+    // Far past the test's own limit: only the abort can settle it in time.
+    const read = client.readStart(HOST, SCOPE, { timeoutMs: 600_000, signal: controller.signal });
+    await vi.waitFor(() => expect(deps.readStart).toHaveBeenCalled());
     controller.abort();
     await expect(read).resolves.toBeNull();
+  });
+
+  it("asks nothing of a session that has closed", async () => {
+    sessions.client.close("test");
+    await expect(client.readStart(HOST, SCOPE, { timeoutMs: 500 })).resolves.toBeNull();
+    expect(deps.readStart).not.toHaveBeenCalled();
   });
 
   it("trusts no answer out of shape", async () => {

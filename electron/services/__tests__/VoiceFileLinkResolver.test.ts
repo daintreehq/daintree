@@ -236,7 +236,13 @@ describe("VoiceFileLinkResolver", () => {
   describe("choosing among candidates a search elsewhere found", () => {
     const { cwd: _cwd, ...request } = BASE_PAYLOAD;
 
-    it("takes a confident match without searching here", async () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it("takes a confident match without searching here or asking the reranker", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
       const resolver = new VoiceFileLinkResolver();
       const result = await resolver.pick({
         ...request,
@@ -245,6 +251,7 @@ describe("VoiceFileLinkResolver", () => {
 
       expect(result).toBe("src/components/HybridInputBar.tsx");
       expect(searchNaturalLanguageMock).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
     });
 
     it("asks the reranker to choose only among the candidates given", async () => {

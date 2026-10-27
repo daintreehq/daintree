@@ -147,7 +147,7 @@ export function fitPaneStart(context: PaneStartContext): PaneStartContext {
   const { branchName } = context.keyterms;
   return {
     ...context,
-    vocabulary: context.vocabulary.slice(0, MAX_PANE_VOCABULARY),
+    vocabulary: newestVocabulary(context.vocabulary),
     names: {
       hosts: fitTerms(context.names.hosts),
       projects: fitTerms(context.names.projects),
@@ -165,9 +165,14 @@ export function fitPaneStart(context: PaneStartContext): PaneStartContext {
 export function fitPaneCorrection(context: PaneCorrectionContext): PaneCorrectionContext {
   return {
     ...context,
-    vocabulary: context.vocabulary.slice(0, MAX_PANE_VOCABULARY),
+    vocabulary: newestVocabulary(context.vocabulary),
     commandTarget: fitCommandTarget(context.commandTarget),
   };
+}
+
+// Oldest first, and the newest terms count most.
+function newestVocabulary<T>(vocabulary: readonly T[]): T[] {
+  return vocabulary.slice(-MAX_PANE_VOCABULARY);
 }
 
 function fitCommandTarget(target: VoiceCommandTarget | null): VoiceCommandTarget | null {
@@ -176,9 +181,15 @@ function fitCommandTarget(target: VoiceCommandTarget | null): VoiceCommandTarget
     ...target,
     vocabulary: {
       ...target.vocabulary,
-      // Most likely first, so the cut drops the least likely. A long
-      // description is cut rather than costing the answer.
+      // Most likely first, so the cut drops the least likely. A command whose
+      // name runs past the wire's limits is left out, since cutting it would
+      // write a command that doesn't exist; a long description is cut.
       entries: target.vocabulary.entries
+        .filter((entry) =>
+          [entry.token, entry.prefix, entry.spokenName, entry.key].every(
+            (field) => field.length <= MAX_ID_LENGTH
+          )
+        )
         .slice(0, MAX_PANE_COMMANDS)
         .map((entry) =>
           entry.description.length > MAX_TEXT_LENGTH

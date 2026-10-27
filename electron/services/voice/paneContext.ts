@@ -140,8 +140,9 @@ export interface HostPaneDeps {
 }
 
 // A read still running at the deadline gives its fallback; the read itself
-// isn't cancelled.
+// isn't cancelled, and a failure it ends with later is still observed.
 async function byDeadline<T>(read: Promise<T>, fallback: T, deadline: number): Promise<T> {
+  const settled = read.catch(() => fallback);
   const remaining = Math.ceil(deadline - performance.now());
   if (remaining <= 0) return fallback;
   let timer: NodeJS.Timeout | undefined;
@@ -150,7 +151,7 @@ async function byDeadline<T>(read: Promise<T>, fallback: T, deadline: number): P
       timer = setTimeout(() => resolve(fallback), remaining);
       timer.unref();
     });
-    return await Promise.race([read.catch(() => fallback), timeout]);
+    return await Promise.race([settled, timeout]);
   } finally {
     if (timer) clearTimeout(timer);
   }
@@ -204,13 +205,10 @@ export async function answerPaneStart(
       NO_DICTATION_NAMES,
       deadline
     ),
-    byDeadline(
-      readPaneKeytermReads(
-        { projectPath: target.projectPath, terminalId: target.terminalId, ptyClient },
-        budgetMs
-      ),
-      NO_PANE_KEYTERM_READS,
-      deadline
+    // Bounds each of its reads itself, so a slow one costs only its own.
+    readPaneKeytermReads(
+      { projectPath: target.projectPath, terminalId: target.terminalId, ptyClient },
+      budgetMs
     ),
     resolveVoiceCommandTarget(ptyClient, target.terminalId, budgetMs),
   ]);

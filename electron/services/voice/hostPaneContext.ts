@@ -78,6 +78,12 @@ async function withinHostDeadline<T>(
 ): Promise<T | null> {
   const reader = getRemoteService("voicePaneHosts");
   if (!reader || signal?.aborted) return null;
+  let reading: Promise<T | null>;
+  try {
+    reading = read(reader).catch(() => null);
+  } catch {
+    return null;
+  }
   let timer: NodeJS.Timeout | undefined;
   let onAbort: (() => void) | undefined;
   try {
@@ -87,7 +93,7 @@ async function withinHostDeadline<T>(
       onAbort = () => resolve(null);
       signal?.addEventListener("abort", onAbort, { once: true });
     });
-    return await Promise.race([read(reader).catch(() => null), gaveUp]);
+    return await Promise.race([reading, gaveUp]);
   } finally {
     if (timer) clearTimeout(timer);
     if (onAbort) signal?.removeEventListener("abort", onAbort);

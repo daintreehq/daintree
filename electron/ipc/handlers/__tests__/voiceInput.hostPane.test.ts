@@ -117,6 +117,8 @@ vi.mock("../../../window/webContentsRegistry.js", async (importOriginal) => ({
 }));
 
 import { registerVoiceInputHandlers } from "../voiceInput.js";
+import { projectStore } from "../../../services/ProjectStore.js";
+import { fileSearchService } from "../../../services/FileSearchService.js";
 import { CHANNELS } from "../../channels.js";
 import { registerRemoteService } from "../../../remote/runtime.js";
 import type { HostPaneContextReader } from "../../../services/voice/hostPaneContext.js";
@@ -210,7 +212,7 @@ function completions(sender: FakeSender) {
 
 function throwingLocalReads() {
   const refuse = (name: string) =>
-    vi.fn(() => {
+    vi.fn((..._args: unknown[]): unknown => {
       throw new Error(`read this machine's ${name} for a host's pane`);
     });
   return {
@@ -233,6 +235,13 @@ function deferred<T>() {
 }
 
 describe("voiceInput — dictating into a host's pane", () => {
+  function expectNoLocalReads() {
+    for (const read of Object.values(local.ptyClient)) expect(read).not.toHaveBeenCalled();
+    expect(local.worktreeService.getAllStatesForProjectAsync).not.toHaveBeenCalled();
+    expect(projectStore.getProjectById).not.toHaveBeenCalled();
+    expect(fileSearchService.searchNaturalLanguage).not.toHaveBeenCalled();
+  }
+
   let cleanup: () => void;
   let unregister: () => void;
   let reader: { [K in keyof HostPaneContextReader]: ReturnType<typeof vi.fn> };
@@ -297,8 +306,7 @@ describe("voiceInput — dictating into a host's pane", () => {
     ]) {
       expect(keyterms).toContain(term);
     }
-    for (const read of Object.values(local.ptyClient)) expect(read).not.toHaveBeenCalled();
-    expect(local.worktreeService.getAllStatesForProjectAsync).not.toHaveBeenCalled();
+    expectNoLocalReads();
   });
 
   it("writes a spoken command as the host's agent takes it", async () => {
@@ -330,6 +338,7 @@ describe("voiceInput — dictating into a host's pane", () => {
       knownNames: ["feature-voice-hosts"],
     });
     expect(settings.customDictionary).toEqual(expect.arrayContaining(["Zustand", "Wispr"]));
+    expectNoLocalReads();
   });
 
   it("resolves a spoken reference among the host's files, chosen here", async () => {
@@ -355,6 +364,7 @@ describe("voiceInput — dictating into a host's pane", () => {
       ["voice input handler"],
       expect.objectContaining({ timeoutMs: expect.any(Number) })
     );
+    expectNoLocalReads();
   });
 
   it("names the host's project to a spoken rewrite", async () => {
@@ -367,6 +377,15 @@ describe("voiceInput — dictating into a host's pane", () => {
       projectName: "Daintree",
       projectPath: "/home/greg/daintree",
     });
+    expectNoLocalReads();
+  });
+
+  it("starts without the pane's context when reading the host throws outright", async () => {
+    reader.readStart.mockImplementationOnce(() => {
+      throw new Error("reader broke");
+    });
+    await expect(start(view)).resolves.toEqual({ status: "started" });
+    expect(shared.startCalls[0]?.keyterms).toEqual(["Wispr"]);
   });
 
   it("starts on time without the pane's context when the host doesn't answer", async () => {
@@ -374,6 +393,10 @@ describe("voiceInput — dictating into a host's pane", () => {
     reader.readStart.mockReturnValueOnce(late.promise);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const started = start(view);
+    // The wait starts once the host is asked, after the service has loaded.
+    while (reader.readStart.mock.calls.length === 0) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
     await vi.advanceTimersByTimeAsync(499);
     expect(shared.startCalls).toHaveLength(0);
     await vi.advanceTimersByTimeAsync(1);
