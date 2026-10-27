@@ -6,6 +6,7 @@ import {
   readTerminalOutputForCorrection,
 } from "../voiceTerminalContext.js";
 import type { PtyClient } from "../PtyClient.js";
+import { CURSOR_GAP } from "../voiceKeytermSecrets.js";
 
 const clientWith = (getTerminalSnapshot: unknown) =>
   ({ getTerminalSnapshot }) as unknown as PtyClient;
@@ -86,6 +87,10 @@ describe("boundTerminalOutput", () => {
     expect(boundTerminalOutput([row, "", "kept"])).toBe("kept");
     const joinedCopy = "caFe12\x1b[Cbeef34\x1b[Cdead caFe12beef34dead\x1b[CRouter";
     expect(boundTerminalOutput([joinedCopy, "", "kept"])).toBe("kept");
+  });
+
+  it("reads a literal gap marker in the output as a character, not a gap", () => {
+    expect(boundTerminalOutput([`password=${CURSOR_GAP}hunter.two`, "", "kept"])).toBe("kept");
   });
 
   it("is null when nothing readable remains", () => {

@@ -347,7 +347,10 @@ function terminalText(text: string): string {
   const body = text.endsWith(SEMANTIC_BUFFER_TRUNCATION_MARKER)
     ? text.slice(0, SEMANTIC_BUFFER_MAX_LINE_LENGTH)
     : text;
+  // Output has no reason to hold the gap marker, but one it does hold stays a
+  // character, so every gap the redactor sees is one this read made.
   return body
+    .replaceAll(CURSOR_GAP, "\uFFFD")
     .replace(OSC_RE, "")
     .replace(CSI_RE, (_sequence, params: string, intermediates: string, final: string) =>
       csiMovesCursor(params, intermediates, final) ? CURSOR_GAP : ""
