@@ -14,6 +14,7 @@ import {
   createTerminalChipTooltip,
   createSelectionChipTooltip,
   createContextReferenceChipTooltip,
+  createForgeReferenceTooltip,
 } from "../inputEditorExtensions";
 import type { SlashCommand } from "@shared/types";
 
@@ -53,6 +54,7 @@ interface UseCompartmentDriverParams {
   terminalChipTooltipCompartmentRef: React.RefObject<Compartment>;
   selectionChipTooltipCompartmentRef: React.RefObject<Compartment>;
   contextChipTooltipCompartmentRef: React.RefObject<Compartment>;
+  forgeReferenceTooltipCompartmentRef: React.RefObject<Compartment>;
   isAutocompleteOpen: boolean;
 }
 
@@ -74,6 +76,7 @@ export function useCompartmentDriver({
   terminalChipTooltipCompartmentRef,
   selectionChipTooltipCompartmentRef,
   contextChipTooltipCompartmentRef,
+  forgeReferenceTooltipCompartmentRef,
   isAutocompleteOpen,
 }: UseCompartmentDriverParams) {
   // Each compartment is reconfigured on exactly the prop changes its own
@@ -130,6 +133,7 @@ export function useCompartmentDriver({
         [terminalChipTooltipCompartmentRef, createTerminalChipTooltip],
         [selectionChipTooltipCompartmentRef, createSelectionChipTooltip],
         [contextChipTooltipCompartmentRef, createContextReferenceChipTooltip],
+        [forgeReferenceTooltipCompartmentRef, createForgeReferenceTooltip],
       ];
       for (const [ref, create] of chipTooltips) {
         effects.push(ref.current.reconfigure(tooltipsSuppressed ? [] : create()));
@@ -155,5 +159,6 @@ export function useCompartmentDriver({
     terminalChipTooltipCompartmentRef,
     selectionChipTooltipCompartmentRef,
     contextChipTooltipCompartmentRef,
+    forgeReferenceTooltipCompartmentRef,
   ]);
 }

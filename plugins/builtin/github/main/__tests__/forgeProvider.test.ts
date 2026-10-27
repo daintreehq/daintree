@@ -2066,6 +2066,37 @@ describe("batchLookups.findReferencesByNumbers", () => {
     expect(result.size).toBe(0);
   });
 
+  it("leaves a chunk unanswered when a NOT_FOUND names an alias it did not null", async () => {
+    mockGraphQLClient.mockRejectedValueOnce(
+      responseError(
+        {
+          repository: { r1: { __typename: "Issue", number: 1, title: "First", state: "OPEN" } },
+        },
+        [missing("r1")]
+      )
+    );
+
+    const result = await findReferences([1]);
+
+    expect(result.size).toBe(0);
+  });
+
+  it("stops between chunks once the GraphQL budget gate closes", async () => {
+    const numbers = Array.from({ length: 21 }, (_, i) => i + 1);
+    const firstRepo: Record<string, unknown> = {};
+    for (let i = 1; i <= 20; i++) firstRepo[`r${i}`] = null;
+    mockGraphQLClient.mockResolvedValueOnce({ repository: firstRepo });
+    mockShouldBlockRequest
+      .mockReturnValueOnce({ blocked: false, reason: null })
+      .mockReturnValue({ blocked: true, reason: "primary", resumeAt: Date.now() + 1000 } as ShouldBlockResult);
+
+    const result = await findReferences(numbers);
+
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(1);
+    expect(result.size).toBe(20);
+    expect(result.has(21)).toBe(false);
+  });
+
   it("leaves a chunk unanswered when the request itself fails", async () => {
     mockGraphQLClient.mockRejectedValueOnce(new Error("socket hang up"));
 

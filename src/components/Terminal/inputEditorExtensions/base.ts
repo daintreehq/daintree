@@ -120,6 +120,15 @@ export function buildInputBarTheme(theme: ITheme): Extension {
         overflowWrap: "anywhere",
         verticalAlign: "top",
       },
+      // A `#N` that names an issue or pull request: still text the caret walks
+      // through, so weight and a quiet underline set it apart, not a chip's ink.
+      ".cm-forge-ref": {
+        fontWeight: 600,
+        textDecorationLine: "underline",
+        textDecorationThickness: "1px",
+        textDecorationColor: "color-mix(in oklab, currentColor 45%, transparent)",
+        textUnderlineOffset: "3px",
+      },
       ".cm-chip-label": {
         whiteSpace: "break-spaces",
         overflowWrap: "anywhere",

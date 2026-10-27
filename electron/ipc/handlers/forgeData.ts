@@ -16,7 +16,6 @@ import {
 } from "./forgeResolution.js";
 import { auditForgeCall, summarizeForgeArgs } from "../../services/forge/forgeAuditService.js";
 import { getForgeProviderBaseImpl } from "../../services/forgeProviderRegistry.js";
-import { buildStoredCredentials } from "../../services/forge/forgeCredentialUtils.js";
 import { getCommitCount } from "../../utils/git.js";
 import { logWarn } from "../../utils/logger.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
@@ -1105,11 +1104,13 @@ async function handleForgeGetChecks(payload: {
 
 /** The distinct numbers one reference lookup answers; a longer draft keeps its first ones. */
 const MAX_REFERENCE_NUMBERS = 50;
+/** GraphQL's `Int`: a bigger number names nothing and would fail the whole query. */
+const MAX_REFERENCE_NUMBER = 2_147_483_647;
 
 /**
  * What each bare `#N` in a draft names (#14849). An ambient read: `null` says
- * nothing can be looked up here (no remote, no provider, no stored credential,
- * or a provider without the lookup), and is answered without asking the forge.
+ * nothing can be looked up here (no remote, no provider, no credential, or a
+ * provider without the lookup), and is answered without asking the forge.
  * The code forge answers even when the project's issues live elsewhere,
  * because `#N` names the repository's own issues and pull requests.
  */
@@ -1124,7 +1125,10 @@ async function handleForgeGetReferencesByNumbers(payload: {
   const numbers: number[] = [];
   for (const n of payload.numbers) {
     if (numbers.length >= MAX_REFERENCE_NUMBERS) break;
-    if (typeof n !== "number" || !Number.isInteger(n) || n <= 0 || numbers.includes(n)) continue;
+    if (typeof n !== "number" || !Number.isInteger(n) || n <= 0 || n > MAX_REFERENCE_NUMBER) {
+      continue;
+    }
+    if (numbers.includes(n)) continue;
     numbers.push(n);
   }
   if (numbers.length === 0) return [];
@@ -1136,9 +1140,11 @@ async function handleForgeGetReferencesByNumbers(payload: {
     return null;
   }
   const batch = context.impl.batchLookups;
-  if (!batch?.findReferencesByNumbers || !buildStoredCredentials(context.namespaceId)) {
-    return null;
-  }
+  if (!batch?.findReferencesByNumbers) return null;
+  // The provider's own credential, wherever it keeps it: the stored record
+  // isn't the only place a token can come from.
+  const credentials = await context.impl.getCredentials().catch(() => null);
+  if (!credentials) return null;
 
   let found: Map<number, ForgeNumberReference | null>;
   try {

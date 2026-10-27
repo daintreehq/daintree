@@ -32,6 +32,7 @@ import { splitContextProviderQuery } from "@shared/utils/pluginContextReference"
 import type { ContextProviderItem } from "@shared/types/pluginContextProvider";
 import { usePluginContextProvidersStore } from "@/store/pluginContextProvidersStore";
 import { useContextProviderSearch } from "./hooks/useContextProviderSearch";
+import { useForgeReferenceMarks } from "./hooks/useForgeReferenceMarks";
 import { contextItemKey, type ContextProviderClaim } from "./hooks/useAutocompleteItems";
 import {
   applyContextReferenceProviders,
@@ -513,6 +514,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       terminalChipTooltipCompartmentRef,
       selectionChipTooltipCompartmentRef,
       contextChipTooltipCompartmentRef,
+      forgeReferenceTooltipCompartmentRef,
       autoSizeCompartmentRef,
       themeCompartmentRef,
     } = compartments;
@@ -763,6 +765,14 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       const view = editorViewRef.current;
       if (view) applyContextReferenceProviders(view, contextChipProviders);
     }, [contextChipProviders, editorViewRef, terminalId]);
+    // Nor are references marked there: this machine can't ask about its repository.
+    useForgeReferenceMarks({
+      editorViewRef,
+      terminalId,
+      cwd: thisMachineOff || !cwd ? null : cwd,
+      paused: disabled,
+      value,
+    });
 
     const {
       items: contextSearchItems,
@@ -1635,6 +1645,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       terminalChipTooltipCompartmentRef,
       selectionChipTooltipCompartmentRef,
       contextChipTooltipCompartmentRef,
+      forgeReferenceTooltipCompartmentRef,
       isAutocompleteOpen,
     });
 

@@ -49,3 +49,19 @@ export function getPrStateColor(state: string | undefined, isDraft?: boolean): s
   if (state === undefined || state === "open") return "text-pr-open";
   return "text-pr-closed";
 }
+
+/** The state in a word, as the badges' hover cards name it. */
+export function getPrStateLabel(state: string | undefined, isDraft: boolean): string {
+  if (state === "merged") return "Merged";
+  if (state === undefined || state === "open") return isDraft ? "Draft" : "Open";
+  return "Closed";
+}
+
+/** An issue's tone: a closed issue reads as done, in the merged PR's colour. */
+export function getIssueStateColor(state: string | undefined): string {
+  return state === "closed" ? "text-pr-merged" : "text-pr-open";
+}
+
+export function getIssueStateLabel(state: string | undefined): string {
+  return state === "closed" ? "Closed" : "Open";
+}

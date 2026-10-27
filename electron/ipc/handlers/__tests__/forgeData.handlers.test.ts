@@ -30,6 +30,7 @@ const fakeImpl = vi.hoisted(
       getPR: vi.fn(),
       getCIStatus: vi.fn(),
       getRepoMetadata: vi.fn(),
+      getCredentials: vi.fn(async (): Promise<unknown> => ({ kind: "bearer", value: "token" })),
       // Optional on the provider contract, and the batch tests below toggle it
       // between present and absent to exercise both routes.
       batchLookups: undefined as
@@ -45,6 +46,7 @@ const fakeImpl = vi.hoisted(
       getPR: ReturnType<typeof vi.fn>;
       getCIStatus: ReturnType<typeof vi.fn>;
       getRepoMetadata: ReturnType<typeof vi.fn>;
+      getCredentials: ReturnType<typeof vi.fn>;
       batchLookups?: {
         findPRsByNumbers?: ReturnType<typeof vi.fn>;
         findReferencesByNumbers?: ReturnType<typeof vi.fn>;
@@ -128,14 +130,6 @@ const projectStoreMock = vi.hoisted(() => ({
 }));
 
 vi.mock("../../../services/ProjectStore.js", () => ({ projectStore: projectStoreMock }));
-
-const buildStoredCredentialsMock = vi.hoisted(() =>
-  vi.fn((_providerId: string): unknown => ({ kind: "bearer", value: "token" }))
-);
-
-vi.mock("../../../services/forge/forgeCredentialUtils.js", () => ({
-  buildStoredCredentials: buildStoredCredentialsMock,
-}));
 
 vi.mock("../../../utils/git.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../utils/git.js")>()),
@@ -1302,12 +1296,18 @@ describe("registerForgeDataHandlers", () => {
       ]);
     });
 
-    it("asks nothing without a stored credential", async () => {
+    it("asks nothing when the provider holds no credential", async () => {
       const findReferencesByNumbers = vi.fn(async () => new Map());
       fakeImpl.batchLookups = { findReferencesByNumbers };
-      buildStoredCredentialsMock.mockReturnValueOnce(null);
+      fakeImpl.getCredentials.mockResolvedValueOnce(null);
       expect(await lookup({ cwd: "/repo", numbers: [1] })).toBeNull();
-      expect(buildStoredCredentialsMock).toHaveBeenCalledWith("fake.provider");
+      expect(findReferencesByNumbers).not.toHaveBeenCalled();
+    });
+
+    it("asks nothing for numbers past a GraphQL Int", async () => {
+      const findReferencesByNumbers = vi.fn(async () => new Map());
+      fakeImpl.batchLookups = { findReferencesByNumbers };
+      expect(await lookup({ cwd: "/repo", numbers: [2_147_483_648] })).toEqual([]);
       expect(findReferencesByNumbers).not.toHaveBeenCalled();
     });
 

@@ -22,7 +22,13 @@ import { forgeNotConnectedLabel, useRemoteHostName } from "@/hooks/useSettingsOw
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, avatarUrlAtSize } from "@/components/ui/Avatar";
-import { getPrStateColor, getPrStateGlyph } from "@/lib/prStateGlyph";
+import {
+  getIssueStateColor,
+  getIssueStateLabel,
+  getPrStateColor,
+  getPrStateGlyph,
+  getPrStateLabel,
+} from "@/lib/prStateGlyph";
 import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
 
 /**
@@ -253,15 +259,11 @@ function CardHeader({
 }
 
 function issueStateVisual(state: NormalizedIssueState | undefined) {
-  return state === "closed"
-    ? { Glyph: CircleCheck, colorClass: "text-pr-merged", label: "Closed" }
-    : { Glyph: CircleDot, colorClass: "text-pr-open", label: "Open" };
-}
-
-function prStateLabel(state: string | undefined, isDraft: boolean): string {
-  if (state === "merged") return "Merged";
-  if (state === undefined || state === "open") return isDraft ? "Draft" : "Open";
-  return "Closed";
+  return {
+    Glyph: state === "closed" ? CircleCheck : CircleDot,
+    colorClass: getIssueStateColor(state),
+    label: getIssueStateLabel(state),
+  };
 }
 
 /** The CI rollup, in words, for the status line of a PR card. */
@@ -450,7 +452,7 @@ export function PRTooltipContent({ data, freshness, ciStatus }: PRTooltipContent
       <CardHeader
         Glyph={getPrStateGlyph(data.state, data.isDraft)}
         colorClass={getPrStateColor(data.state, data.isDraft)}
-        stateLabel={prStateLabel(data.state, data.isDraft)}
+        stateLabel={getPrStateLabel(data.state, data.isDraft)}
         number={data.number}
         title={data.title}
         trailing={showCI ? <CIStatusItem status={ciStatus} /> : undefined}
@@ -511,7 +513,7 @@ export function TooltipFallback({
       ? {
           Glyph: getPrStateGlyph(prState),
           colorClass: getPrStateColor(prState),
-          label: prStateLabel(prState, false),
+          label: getPrStateLabel(prState, false),
         }
       : // A badge knows an issue's number and title but not whether it's
         // still open, so the header claims neither.
@@ -623,7 +625,7 @@ export function describePRTooltip(
 ): string {
   const ci = getCIStatusVisual(ciStatus);
   return joinList([
-    `${prStateLabel(data.state, data.isDraft)} pull request #${data.number}`,
+    `${getPrStateLabel(data.state, data.isDraft)} pull request #${data.number}`,
     ci && (data.state === "open" || data.state === undefined) ? ci.ariaLabel : null,
     ...describeMeta(data, freshness, options),
   ]);

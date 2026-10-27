@@ -831,15 +831,21 @@ export async function findPRsByNumbersImpl(
 /**
  * The `repository` of a references response that failed only because some of
  * its numbers name nothing. Each of those is a `NOT_FOUND` on its own alias,
- * and the rest of the chunk's data is still there; any other error leaves the
- * whole chunk unanswered.
+ * one this chunk asked for and holding `null`, and the rest of the chunk's
+ * data is still there; any other error leaves the whole chunk unanswered.
  */
-function repositoryDespiteMissingNumbers(error: unknown): Record<string, unknown> | null {
+function repositoryDespiteMissingNumbers(
+  error: unknown,
+  aliases: ReadonlySet<string>
+): Record<string, unknown> | null {
   const cause = error instanceof Error ? error.cause : undefined;
   if (!cause || typeof cause !== "object") return null;
   const { errors, data } = cause as { errors?: unknown; data?: unknown };
   if (!Array.isArray(errors) || errors.length === 0) return null;
   if (!data || typeof data !== "object") return null;
+  const repository = (data as Record<string, unknown>).repository;
+  if (!repository || typeof repository !== "object") return null;
+  const answered = repository as Record<string, unknown>;
   const onlyMissingNumbers = errors.every((entry) => {
     const { type, path } = (entry ?? {}) as { type?: unknown; path?: unknown };
     return (
@@ -848,7 +854,8 @@ function repositoryDespiteMissingNumbers(error: unknown): Record<string, unknown
       path.length === 2 &&
       path[0] === "repository" &&
       typeof path[1] === "string" &&
-      /^r\d+$/.test(path[1])
+      aliases.has(path[1]) &&
+      answered[path[1]] === null
     );
   });
   if (!onlyMissingNumbers) return null;
@@ -856,10 +863,7 @@ function repositoryDespiteMissingNumbers(error: unknown): Record<string, unknown
     data as Record<string, unknown>,
     "BATCH_REFERENCES_QUERY"
   );
-  const repository = (data as Record<string, unknown>).repository;
-  return repository && typeof repository === "object"
-    ? (repository as Record<string, unknown>)
-    : null;
+  return answered;
 }
 
 export async function findReferencesByNumbersImpl(
@@ -870,10 +874,9 @@ export async function findReferencesByNumbersImpl(
   const unique = uniquePositiveIntegers(numbers);
   if (unique.length === 0) return result;
 
-  const block = gitHubRateLimitService.shouldBlockRequest("graphql");
-  if (block.blocked) return result;
-
   for (let start = 0; start < unique.length; start += GRAPHQL_BATCH_CHUNK_SIZE) {
+    // Per chunk: the response before this one may have spent the budget.
+    if (gitHubRateLimitService.shouldBlockRequest("graphql").blocked) break;
     const chunk = unique.slice(start, start + GRAPHQL_BATCH_CHUNK_SIZE);
     const query = buildBatchReferencesQuery(repo.owner, repo.repo, chunk);
     if (!query) continue;
@@ -883,7 +886,7 @@ export async function findReferencesByNumbersImpl(
       const response = await runQuery(query, {}, "BATCH_REFERENCES_QUERY");
       repository = (response?.repository as Record<string, unknown> | undefined) ?? null;
     } catch (error) {
-      repository = repositoryDespiteMissingNumbers(error);
+      repository = repositoryDespiteMissingNumbers(error, new Set(chunk.map((n) => `r${n}`)));
     }
     if (!repository) continue;
 

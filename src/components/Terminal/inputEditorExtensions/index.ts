@@ -52,6 +52,15 @@ export {
   setContextReferenceProviders,
 } from "./contextReferenceChip";
 export {
+  applyForgeReferences,
+  createForgeReferenceTooltip,
+  eligibleIssueReferences,
+  forgeReferenceField,
+  onForgeReferenceRescan,
+  rescanForgeReferences,
+} from "./forgeReference";
+export type { ForgeReferenceMap } from "./forgeReference";
+export {
   chipPendingDeleteField,
   setChipPendingDelete,
   createChipBackspaceKeymap,
