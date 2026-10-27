@@ -25,6 +25,7 @@ import { useVoiceRecordingStore, type VoiceRecordingTarget } from "@/store/voice
 import { initBuiltInPanelKinds } from "@/panels/registry";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
 import { canopyReplyVoiceId } from "@/services/canopyReplyDictation";
+import { recordCorrectionLanded, takeLandedCorrection } from "@/services/voiceCorrectionLanding";
 import { isolatedComposerScope } from "@/lib/draftKey";
 import { HybridInputBar, type HybridInputBarHandle } from "../HybridInputBar";
 import { createRef } from "react";
@@ -77,6 +78,8 @@ beforeEach(() => {
     focusedId: panel.id,
   });
   useTerminalInputStore.setState({ draftInputs: new Map() });
+  takeLandedCorrection("term-1", undefined, "");
+  takeLandedCorrection(REPLY.panelId, undefined, "");
   useVoiceRecordingStore.setState({
     panelBuffers: {},
     status: "idle",
@@ -135,6 +138,25 @@ function dictating(target: VoiceRecordingTarget) {
   });
 }
 
+/** A correction swapped into `target`'s draft, as the voice service lands one. */
+async function landCorrectionIn(target: VoiceRecordingTarget, sessionId: string) {
+  await act(async () => {
+    const voice = useVoiceRecordingStore.getState();
+    voice.beginSession(target, sessionId);
+    voice.finishSession();
+    const inputs = useTerminalInputStore.getState();
+    inputs.setDraftInput(target.panelId, "Open the Zustand store.");
+    recordCorrectionLanded(target.panelId, undefined, {
+      from: 0,
+      rawText: "open the zoo stand store",
+      correctedText: "Open the Zustand store.",
+      baseline: null,
+      sessionId,
+    });
+    inputs.bumpExternalDraftRevision({ keepsSelection: true });
+  });
+}
+
 async function sendFrom(view: EditorView, text: string) {
   await act(async () => {
     view.dispatch({ changes: { from: 0, insert: text }, userEvent: "input.type" });
@@ -171,6 +193,21 @@ describe("HybridInputBar — Canopy's reply beside the pane's own composer", () 
     dictating(PANE);
     expect(surface("reply").listening).toBe(false);
     expect(surface("pane").listening).toBe(true);
+  });
+
+  it("ends each composer's correction review only when its own next dictation begins (#14875)", async () => {
+    const { surface } = await mountBoth();
+    const restore = (testId: string) =>
+      surface(testId).root.querySelector(".cm-voice-restore") !== null;
+    await landCorrectionIn(PANE, "pane-1");
+    await landCorrectionIn(REPLY, "reply-1");
+    expect([restore("pane"), restore("reply")]).toEqual([true, true]);
+
+    await act(async () => useVoiceRecordingStore.getState().beginSession(PANE, "pane-2"));
+    expect([restore("pane"), restore("reply")]).toEqual([false, true]);
+
+    await act(async () => useVoiceRecordingStore.getState().beginSession(REPLY, "reply-2"));
+    expect([restore("pane"), restore("reply")]).toEqual([false, false]);
   });
 
   it("shows what the voice service writes under the reply's id in the reply, never in the pane", async () => {

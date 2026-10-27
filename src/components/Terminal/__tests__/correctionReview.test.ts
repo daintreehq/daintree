@@ -369,6 +369,7 @@ describe("correction review", () => {
   it("ends on request, leaving the text, the caret and the undo step as they were (#14875)", () => {
     const view = mount(INTRO + RAW);
     land(view, review);
+    view.dispatch({ selection: { anchor: 2, head: 5 } });
     const { doc, selection } = view.state;
     const depth = undoDepth(view.state);
     const dispatch = vi.spyOn(view, "dispatch");
@@ -390,6 +391,18 @@ describe("correction review", () => {
     undoKey(view);
     expect(view.state.doc.toString()).toBe(INTRO + RAW);
     expect(onSwapped).toHaveBeenLastCalledWith(review, "raw");
+  });
+
+  it("ends a review whose marks already faded, taking the restore control with it", () => {
+    const view = mount(INTRO + RAW);
+    land(view, review);
+    vi.advanceTimersByTime(VOICE_CORRECTION_MARK_DWELL_MS + VOICE_CORRECTION_MARK_FADE_MS);
+    expect(restoreControl(view)).not.toBeNull();
+
+    endCorrectionReview(view);
+
+    expect(restoreControl(view)).toBeNull();
+    expect(view.state.doc.toString()).toBe(INTRO + CORRECTED);
   });
 
   it("lands a correction out of review on request, and brings the review back on redo", () => {

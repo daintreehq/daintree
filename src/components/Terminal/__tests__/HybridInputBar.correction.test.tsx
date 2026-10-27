@@ -221,8 +221,9 @@ describe("HybridInputBar after an AI correction lands", () => {
 
   it("ends the review as the next dictation begins, and keeps the correction in undo (#14875)", async () => {
     const { view } = await mount();
+    await beginDictation("session-1");
     await writeDraft(RAW);
-    await landCorrection();
+    await landCorrection("session-1");
     expect(restoreControl(view)).not.toBeNull();
 
     await beginDictation("session-2");
@@ -240,11 +241,28 @@ describe("HybridInputBar after an AI correction lands", () => {
   it("keeps a chunk's review while its own dictation carries on (#14772)", async () => {
     const { view } = await mount();
     await beginDictation("session-1");
+    await act(async () => useVoiceRecordingStore.getState().setStatus("recording"));
     await writeDraft(RAW);
     await landCorrection("session-1");
+    await act(async () => useVoiceRecordingStore.getState().appendDelta("And the", "item-2"));
     await writeDraft(CORRECTED + " And the next part.");
 
     expect(restoreControl(view)).not.toBeNull();
+    expect(view.contentDOM.querySelectorAll(".cm-voice-corrected")).not.toHaveLength(0);
+  });
+
+  it("keeps its review when a dictation begins on another panel", async () => {
+    const { view } = await mount();
+    await beginDictation("session-1");
+    await writeDraft(RAW);
+    await landCorrection("session-1");
+
+    await act(async () => {
+      useVoiceRecordingStore.getState().beginSession({ panelId: "term-2" }, "session-2");
+    });
+
+    expect(restoreControl(view)).not.toBeNull();
+    expect(view.contentDOM.querySelectorAll(".cm-voice-corrected")).not.toHaveLength(0);
   });
 
   it("lands a correction a newer dictation overtook without a review, still undoable", async () => {
@@ -253,6 +271,8 @@ describe("HybridInputBar after an AI correction lands", () => {
     await writeDraft(RAW);
     await beginDictation("session-2");
     await writeDraft(RAW + " And the next part.");
+    // The newer one may have stopped by the time the old cleanup lands.
+    await act(async () => useVoiceRecordingStore.getState().finishSession());
 
     await landCorrection("session-1");
     expect(view.state.doc.toString()).toBe(CORRECTED + " And the next part.");

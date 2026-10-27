@@ -334,6 +334,39 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611, #14780)", () =
     expect(view.state.doc.toString()).toBe("hello wrld");
   });
 
+  it.each([
+    ["its own dictation", false],
+    ["a newer dictation", true],
+  ])(
+    "replays a correction the composer already shows, reviewed only for %s's (#14875)",
+    async (_, overtaken) => {
+      correct.mockResolvedValueOnce({ action: "replace", correctedText: "Hello world." });
+      dictate(PANEL_ID, "hello wrld");
+      await act(async () => {
+        await voiceRecordingService.stop();
+      });
+      await vi.waitFor(() => expect(draft(PANEL_ID)).toBe("Hello world."));
+      if (overtaken) {
+        const voice = useVoiceRecordingStore.getState();
+        voice.beginSession({ panelId: PANEL_ID }, "session-next");
+        voice.finishSession();
+      }
+      const result = renderComposer({
+        extensions: [createComposerHistory(), createCorrectionReview()],
+        holdSend: true,
+      });
+
+      await act(async () => {
+        result.current.startVoiceWaitSubmit();
+      });
+
+      expect(view.state.doc.toString()).toBe("Hello world.");
+      expect(view.contentDOM.querySelector(".cm-voice-restore") === null).toBe(overtaken);
+      expect(undo(view)).toBe(true);
+      expect(view.state.doc.toString()).toBe("hello wrld");
+    }
+  );
+
   it("waits for a cleanup slower than two seconds and sends it cleaned", async () => {
     vi.useFakeTimers();
     const pending = deferred<CorrectResult>();

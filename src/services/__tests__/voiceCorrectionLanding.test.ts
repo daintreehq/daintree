@@ -77,6 +77,8 @@ describe("isLatestDictation", () => {
 
     voice.beginSession({ panelId: "term-1" }, "session-3");
     expect(isLatestDictation("term-1", correction)).toBe(false);
+    voice.finishSession();
+    expect(isLatestDictation("term-1", correction)).toBe(false);
   });
 
   it("holds when the panel keeps no dictation to compare with", () => {
