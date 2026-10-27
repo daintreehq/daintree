@@ -415,6 +415,38 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
     expect(landed).toBe(true);
   });
 
+  it("spans a send's progress from the first pass out to the last pass's landing", async () => {
+    const { service, say, pause, flush } = await setup();
+    const chunk = deferred<CorrectResult>();
+    const tail = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(chunk.promise).mockReturnValueOnce(tail.promise);
+    for (const sentence of OPENING) say(sentence);
+    pause();
+    say(NEXT);
+    const chunkStartedAt = clock;
+    expect(correct).toHaveBeenCalledTimes(1);
+    const chunkLanding = service.expectedCorrectionWindow(PANEL)!;
+    expect(chunkLanding.startedAt).toBe(chunkStartedAt);
+
+    clock += 700;
+    await service.stop();
+    const tailStartedAt = clock;
+    const both = service.expectedCorrectionWindow(PANEL)!;
+    expect(both.startedAt).toBe(chunkStartedAt);
+    expect(both.landsAt).toBeGreaterThanOrEqual(chunkLanding.landsAt);
+    expect(both.landsAt).toBeGreaterThan(tailStartedAt);
+    expect(service.expectedCorrectionWindow("panel-2")).toBeNull();
+
+    chunk.resolve({ action: "replace", correctedText: CLEANED_OPENING });
+    await flush();
+    const tailLanding = service.expectedCorrectionWindow(PANEL)!;
+    expect(tailLanding.startedAt).toBe(tailStartedAt);
+    expect(both.landsAt).toBe(Math.max(chunkLanding.landsAt, tailLanding.landsAt));
+    tail.resolve({ action: "no_change", correctedText: NEXT });
+    await flush();
+    expect(service.expectedCorrectionWindow(PANEL)).toBeNull();
+  });
+
   it("lets Restore on a chunk that landed while recording move it within the stop's baseline", async () => {
     const { service, voiceStore, say, pause, draft, flush, baseline } = await setup();
     const { takeLandedCorrection, rebaseCorrectionBaseline } =

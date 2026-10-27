@@ -1,0 +1,194 @@
+// @vitest-environment jsdom
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, render } from "@testing-library/react";
+import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
+import { polishingShareAt, VoiceSubmitProgress } from "../VoiceSubmitProgress";
+import type { VoiceSubmitWait } from "../hooks/useVoiceWaitSubmit";
+
+const polishing = (
+  beganAt: number | null,
+  expectedAt: number | null,
+  startedAt = 5_000
+): VoiceSubmitWait => ({
+  attempt: 1,
+  phase: "polishing",
+  startedAt,
+  beganAt,
+  expectedAt,
+  sessions: new Set(["s1"]),
+});
+const finishing: VoiceSubmitWait = { attempt: 1, phase: "finishing", startedAt: 0 };
+
+/** Share of the shell a keyframe's transform covers. */
+const shareOf = (keyframe: Keyframe | undefined) =>
+  1 + Number(/translateX\((-?[\d.e-]+)%\)/.exec(String(keyframe?.transform))?.[1]) / 100;
+
+describe("polishingShareAt", () => {
+  const wait = polishing(1_000, 3_000);
+  const landing = polishingShareAt(wait, 3_000);
+
+  it("keeps the landing's share short of full, for the overrun to creep into", () => {
+    expect(landing).toBeGreaterThan(0);
+    expect(landing).toBeLessThan(1);
+  });
+
+  it("opens near empty when Enter comes just after the request went out", () => {
+    expect(polishingShareAt(wait, 1_200)).toBeCloseTo(landing * 0.1);
+  });
+
+  it("opens at the elapsed share when Enter comes halfway", () => {
+    expect(polishingShareAt(wait, 2_000)).toBeCloseTo(landing / 2);
+  });
+
+  it("stops at the landing's share once the estimate has passed", () => {
+    expect(polishingShareAt(wait, 9_000)).toBe(landing);
+  });
+
+  it("is empty without an estimate, and never before the request", () => {
+    expect(polishingShareAt(polishing(null, null), 2_000)).toBe(0);
+    expect(polishingShareAt(wait, 500)).toBe(0);
+    expect(polishingShareAt(finishing, 2_000)).toBe(0);
+  });
+
+  it("counts a request that went out at time zero, and a window with no length", () => {
+    expect(polishingShareAt(polishing(0, 2_000), 1_000)).toBeCloseTo(landing / 2);
+    expect(polishingShareAt(polishing(2_000, 2_000), 2_000)).toBe(landing);
+  });
+});
+
+describe("VoiceSubmitProgress", () => {
+  let clock = 0;
+  /** How much of the shell the fill covers, as the browser would report it. */
+  let drawn = 0;
+  const animate =
+    vi.fn<(keyframes: Keyframe[], options: KeyframeAnimationOptions) => Partial<Animation>>();
+
+  beforeEach(() => {
+    clock = 0;
+    drawn = 0;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
+    );
+    vi.stubGlobal(
+      "DOMMatrixReadOnly",
+      class {
+        m41 = (drawn - 1) * 100;
+      }
+    );
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(100);
+    animate.mockReset().mockReturnValue({ cancel() {}, pause() {}, onfinish: null });
+    Object.assign(HTMLElement.prototype, { animate, getAnimations: () => [] });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  const lastAnimation = () => {
+    const [keyframes, options] = animate.mock.lastCall!;
+    return {
+      keyframes,
+      from: shareOf(keyframes[0]),
+      to: shareOf(keyframes[keyframes.length - 1]),
+      /** How long the fill takes to reach its second keyframe. */
+      firstMs: Number(keyframes[1]?.offset ?? 1) * Number(options.duration),
+    };
+  };
+
+  /** Renders the wait as Enter lands at `enterAt`, and opens the gate. */
+  const open = (wait: VoiceSubmitWait, enterAt: number, streamed: number | null = null) => {
+    clock = enterAt;
+    const view = render(
+      <VoiceSubmitProgress
+        wait={wait}
+        outcome={null}
+        streamed={streamed}
+        onPresentChange={vi.fn()}
+      />
+    );
+    clock = enterAt + UI_INLINE_LOADING_GATE_MS;
+    act(() => {
+      vi.advanceTimersByTime(UI_INLINE_LOADING_GATE_MS);
+    });
+    const rerender = (next: VoiceSubmitWait, nextStreamed: number | null = null) => {
+      view.rerender(
+        <VoiceSubmitProgress
+          wait={next}
+          outcome={null}
+          streamed={nextStreamed}
+          onPresentChange={vi.fn()}
+        />
+      );
+      return lastAnimation();
+    };
+    return { ...lastAnimation(), rerender, unmount: view.unmount };
+  };
+
+  const landing = polishingShareAt(polishing(1_000, 3_000), 3_000);
+
+  it("opens a bar shown halfway through the cleanup at its elapsed share, landing on time", () => {
+    const { from, keyframes, firstMs } = open(polishing(1_000, 3_000), 1_800);
+    // The gate opens 200ms later, at 2s: half the window gone.
+    expect(from).toBeCloseTo(landing / 2);
+    expect(shareOf(keyframes[1])).toBeCloseTo(landing);
+    expect(firstMs).toBeCloseTo(1_000);
+  });
+
+  it("opens a bar shown early near empty", () => {
+    expect(open(polishing(1_000, 3_000), 1_000).from).toBeCloseTo(landing * 0.1);
+  });
+
+  it("lands on time even when the landing is moments away", () => {
+    const { from, firstMs } = open(polishing(1_000, 3_000), 2_700);
+    expect(from).toBeCloseTo(landing * 0.95);
+    expect(firstMs).toBeCloseTo(100);
+  });
+
+  it("opens a bar shown past the estimate at the landing's share, creeping on", () => {
+    const { from, to } = open(polishing(1_000, 3_000), 4_000);
+    expect(from).toBeCloseTo(landing);
+    expect(to).toBeGreaterThan(landing);
+  });
+
+  it("opens an unestimated wait from empty, as before", () => {
+    const { from, firstMs } = open(polishing(null, null, 1_000), 1_000);
+    expect(from).toBe(0);
+    expect(firstMs).toBeGreaterThan(0);
+  });
+
+  it("opens a bar on a cleanup already writing where the words are", () => {
+    const half = open(polishing(1_000, 3_000), 1_800, 0.5);
+    half.unmount();
+    const whole = open(polishing(1_000, 3_000), 1_800, 1);
+    expect(half.from).toBeCloseTo(half.to);
+    expect(whole.from).toBeCloseTo(whole.to);
+    expect(half.from).toBeCloseTo(whole.from / 2);
+  });
+
+  it("never moves back as the wait goes from finishing to polishing to writing", () => {
+    const { rerender } = open(finishing, 1_000);
+
+    // Polishing begins with the drain's creep ahead of the cleanup's timeline.
+    drawn = 0.3;
+    const polished = rerender(polishing(1_000, 3_000));
+    expect(polished.from).toBeCloseTo(0.3);
+    expect(polished.to).toBeGreaterThan(0.3);
+
+    // Writing starts where the fill stands, not where a fresh bar would open.
+    drawn = 0.5;
+    const writing = rerender(polishing(1_000, 3_000), 0.2);
+    expect(writing.from).toBeCloseTo(0.5);
+    expect(writing.to).toBeGreaterThan(0.5);
+
+    // A streamed share that falls back holds the fill where it stands.
+    drawn = writing.to;
+    const fallen = rerender(polishing(1_000, 3_000), 0.1);
+    expect(fallen.from).toBeCloseTo(writing.to);
+    expect(fallen.to).toBeCloseTo(writing.to);
+  });
+});
