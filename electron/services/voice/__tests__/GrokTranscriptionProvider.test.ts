@@ -1405,15 +1405,17 @@ describe("GrokTranscriptionProvider", () => {
       expect(pausedOf(events)).toEqual([false]);
     });
 
-    // 2s of audio went out; the endpoint is 300ms.
+    // 2s of audio went out, and a 250ms endpoint, so each gap is exact.
     it.each([
-      [0.25, false],
-      [0.3, true],
-      [0.8, true],
+      [0.125, false],
+      [0.25, true],
+      [0.75, true],
     ])(
       "marks a final in flight at the stop paused when it ended %ss before it: %s",
       async (quiet, paused) => {
-        const { provider, events } = setup();
+        const provider = new GrokTranscriptionProvider({ endpointingMs: 250 });
+        const events: VoiceTranscriptionEvent[] = [];
+        provider.onEvent((e) => events.push(e));
         const socket = await bringSessionReady(provider);
         for (let i = 0; i < 12; i++) provider.sendAudioChunk(pcm(3_000));
         for (let i = 0; i < 8; i++) provider.sendAudioChunk(pcm(0));
