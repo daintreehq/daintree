@@ -657,7 +657,7 @@ describe("VoiceRecordingService — Escape cancels a dictation (#14631)", () => 
   });
 });
 
-describe("VoiceRecordingService — Escape cancels a dictation at the caret (#14631, #14634)", () => {
+describe("VoiceRecordingService — Escape cancels a dictation at the caret or over a selection (#14631, #14634, #14805)", () => {
   const draftKey = `${PROJECT}:${PANEL}`;
 
   beforeEach(() => {
@@ -684,10 +684,10 @@ describe("VoiceRecordingService — Escape cancels a dictation at the caret (#14
   });
 
   /** What the composer showed: its draft and caret. */
-  async function showComposer(doc: string, anchor: number) {
+  async function showComposer(doc: string, anchor: number, head = anchor) {
     const { EditorState } = await import("@codemirror/state");
     const { recordComposerState } = await import("@/lib/composerCaret");
-    recordComposerState(draftKey, {}, EditorState.create({ doc, selection: { anchor } }));
+    recordComposerState(draftKey, {}, EditorState.create({ doc, selection: { anchor, head } }));
   }
   const takeCaret = async (draft: string) =>
     (await import("@/lib/composerCaret")).takePendingComposerSelection(draftKey, draft);
@@ -798,5 +798,251 @@ describe("VoiceRecordingService — Escape cancels a dictation at the caret (#14
     const [earlier] = records();
     expect(earlier!.sessionId).toBe(SESSION_ID);
     expect(earlier!.utterances[0]!.insertion).toEqual({ from: 6, to: 13, edited: false });
+  });
+
+  it("puts back the text the dictation replaced, selected as it was", async () => {
+    const { service, draft, records, announcement, settled } = await setup("Keep old text.");
+    await showComposer("Keep old text.", 5, 8);
+
+    complete("new", "item-a");
+    expect(draft()).toBe("Keep new text.");
+
+    expect(service.handleEscape(PANEL)).toBe(true);
+    await settled();
+
+    expect(draft()).toBe("Keep old text.");
+    expect(records()).toEqual([]);
+    expect(await takeCaret(draft())).toEqual({ from: 5, to: 8 });
+    expect(announcement()).toMatch(/discarded/i);
+  });
+
+  it("puts back a longer selection from further into the draft", async () => {
+    const { service, draft, settled } = await setup("Say hello there, friend.");
+    await showComposer("Say hello there, friend.", 4, 15);
+
+    complete("hi", "item-a");
+    expect(draft()).toBe("Say hi, friend.");
+
+    service.handleEscape(PANEL);
+    await settled();
+
+    expect(draft()).toBe("Say hello there, friend.");
+    expect(await takeCaret(draft())).toEqual({ from: 4, to: 15 });
+  });
+
+  it("selects the text again when the dictated word was the one selected", async () => {
+    const { useTerminalInputStore } = await import("@/store/terminalInputStore");
+    const { takeScratchLanded } = await import("@/services/voiceScratchCommand");
+    const { service, draft, records, settled } = await setup("Keep old text.");
+    await showComposer("Keep old text.", 5, 8);
+
+    complete("old", "item-a");
+    // Nothing changed, so the composer is only told where the selection goes.
+    expect(draft()).toBe("Keep old text.");
+    const revision = useTerminalInputStore.getState().externalDraftRevision;
+
+    service.handleEscape(PANEL);
+    await settled();
+
+    expect(draft()).toBe("Keep old text.");
+    expect(records()).toEqual([]);
+    expect(useTerminalInputStore.getState().externalDraftRevision).toBeGreaterThan(revision);
+    expect(await takeCaret(draft())).toEqual({ from: 5, to: 8 });
+    // The draft did not change, so the composer has no edit to undo.
+    expect(takeScratchLanded(PANEL, PROJECT, draft())).toBe(false);
+  });
+
+  it("restores the selection a later session replaced and leaves the earlier session alone", async () => {
+    const { service, begin, draft, records, settled } = await setup("Keep old text.");
+
+    complete("Done.", "item-a");
+    await service.stop("Dictation stopped.");
+    expect(draft()).toBe("Keep old text. Done.");
+
+    // The composer keeps publishing its selection after it loses focus, and
+    // the next dictation replaces what it holds.
+    await showComposer(draft(), 5, 8);
+    begin("session-2");
+    complete("new", "item-b", "session-2");
+    expect(draft()).toBe("Keep new text. Done.");
+
+    service.handleEscape(PANEL);
+    await settled();
+
+    expect(draft()).toBe("Keep old text. Done.");
+    expect(await takeCaret(draft())).toEqual({ from: 5, to: 8 });
+    expect(records().map((record) => record.sessionId)).toEqual([SESSION_ID]);
+  });
+
+  it("puts the selection back under a spoken break and later utterances", async () => {
+    const { service, draft, records, settled } = await setup("Keep old text.");
+    await showComposer("Keep old text.", 5, 8);
+
+    boundary();
+    complete("one", "item-a");
+    complete("two", "item-b");
+    expect(draft()).toBe("Keep \none two text.");
+
+    service.handleEscape(PANEL);
+    await settled();
+
+    expect(draft()).toBe("Keep old text.");
+    expect(records()).toEqual([]);
+    expect(await takeCaret(draft())).toEqual({ from: 5, to: 8 });
+  });
+
+  it("puts the selection back under a spoken break when the words were the selected ones", async () => {
+    const { service, draft, settled } = await setup("Keep old text.");
+    await showComposer("Keep old text.", 5, 8);
+
+    boundary();
+    complete("old", "item-a");
+    expect(draft()).toBe("Keep \nold text.");
+
+    service.handleEscape(PANEL);
+    await settled();
+
+    expect(draft()).toBe("Keep old text.");
+    expect(await takeCaret(draft())).toEqual({ from: 5, to: 8 });
+  });
+
+  it("puts back a replaced selection that had a space put after the words", async () => {
+    const { service, draft, settled } = await setup("Keep oldtext.");
+    await showComposer("Keep oldtext.", 5, 8);
+
+    complete("new", "item-a");
+    expect(draft()).toBe("Keep new text.");
+
+    service.handleEscape(PANEL);
+    await settled();
+
+    expect(draft()).toBe("Keep oldtext.");
+    expect(await takeCaret(draft())).toEqual({ from: 5, to: 8 });
+  });
+
+  it("leaves a caret the user moved elsewhere on its text", async () => {
+    const { service, draft, settled } = await setup("Keep old text.");
+    await showComposer("Keep old text.", 5, 8);
+
+    complete("brand new", "item-a");
+    expect(draft()).toBe("Keep brand new text.");
+    await takeCaret(draft());
+    await showComposer(draft(), 18);
+
+    service.handleEscape(PANEL);
+    await settled();
+
+    expect(draft()).toBe("Keep old text.");
+    expect(await takeCaret(draft())).toEqual({ from: 12, to: 12 });
+  });
+
+  it("keeps the words and not the selection when the dictated words were edited", async () => {
+    const { service, draft, records, setDraft, announcement, settled } =
+      await setup("Keep old text.");
+    await showComposer("Keep old text.", 5, 8);
+
+    complete("brand new", "item-a");
+    expect(records()[0]!.utterances[0]!.replaced).toBe("old");
+    setDraft("Keep brand knew text.");
+
+    service.handleEscape(PANEL);
+    await settled();
+
+    expect(draft()).toBe("Keep brand knew text.");
+    expect(announcement()).toMatch(/kept/i);
+  });
+
+  it("leaves a caret the user placed ahead of the dictated words where it is", async () => {
+    const { service, draft, setDraft, settled } = await setup("Keep old text.");
+    await showComposer("Keep old text.", 5, 8);
+
+    complete("new", "item-a");
+    await takeCaret(draft());
+    setDraft("Keep typed new text.");
+    await showComposer(draft(), 11);
+
+    service.handleEscape(PANEL);
+    await settled();
+
+    expect(draft()).toBe("Keep typed old text.");
+    expect(await takeCaret(draft())).toEqual({ from: 11, to: 11 });
+  });
+
+  it("selects the text again when the caret was inside the dictated words", async () => {
+    const { service, draft, settled } = await setup("Keep old text.");
+    await showComposer("Keep old text.", 5, 8);
+
+    complete("brand new", "item-a");
+    await takeCaret(draft());
+    await showComposer(draft(), 9);
+
+    service.handleEscape(PANEL);
+    await settled();
+
+    expect(draft()).toBe("Keep old text.");
+    expect(await takeCaret(draft())).toEqual({ from: 5, to: 8 });
+  });
+
+  it("keeps a selection that reaches past the dictated words where it was", async () => {
+    const { service, draft, settled } = await setup("Keep old text.");
+    await showComposer("Keep old text.", 5, 8);
+
+    complete("brand new", "item-a");
+    await takeCaret(draft());
+    await showComposer(draft(), 7, 18);
+
+    service.handleEscape(PANEL);
+    await settled();
+
+    expect(draft()).toBe("Keep old text.");
+    expect(await takeCaret(draft())).toEqual({ from: 5, to: 12 });
+  });
+
+  it("keeps a selection across words that were the selected ones", async () => {
+    const { service, draft, settled } = await setup("Keep old text.");
+    await showComposer("Keep old text.", 5, 8);
+
+    complete("old", "item-a");
+    complete("again", "item-b");
+    expect(draft()).toBe("Keep old again text.");
+    await takeCaret(draft());
+    await showComposer(draft(), 6, 20);
+
+    service.handleEscape(PANEL);
+    await settled();
+
+    expect(draft()).toBe("Keep old text.");
+    expect(await takeCaret(draft())).toEqual({ from: 6, to: 14 });
+  });
+
+  it("keeps the dictated words when the dictation is stopped rather than cancelled", async () => {
+    const { service, draft } = await setup("Keep old text.");
+    await showComposer("Keep old text.", 5, 8);
+
+    complete("new", "item-a");
+    await service.stop("Dictation stopped.");
+
+    expect(draft()).toBe("Keep new text.");
+  });
+
+  it("puts back the earlier session's words when a second session replaced them", async () => {
+    const { service, begin, draft, records, settled } = await setup("Keep old text.");
+    await showComposer("Keep old text.", 5, 8);
+
+    complete("new", "item-a");
+    await service.stop("Dictation stopped.");
+    expect(draft()).toBe("Keep new text.");
+
+    begin("session-2");
+    await showComposer(draft(), 5, 8);
+    complete("fresh", "item-b", "session-2");
+    expect(draft()).toBe("Keep fresh text.");
+
+    service.handleEscape(PANEL);
+    await settled();
+
+    expect(draft()).toBe("Keep new text.");
+    expect(await takeCaret(draft())).toEqual({ from: 5, to: 8 });
+    expect(records().map((record) => record.sessionId)).toEqual([SESSION_ID]);
   });
 });

@@ -898,6 +898,7 @@ describe("cancelling a dictation at the caret (#14631, #14634)", () => {
         insertion: plan.insertion,
         words: plan.words,
         ...(plan.separatorAfter ? { separatorAfter: plan.separatorAfter } : {}),
+        ...(plan.replaced ? { replaced: plan.replaced } : {}),
       });
     } else {
       store.recordParagraphBreak(target, plan.insertion);
@@ -909,7 +910,11 @@ describe("cancelling a dictation at the caret (#14631, #14634)", () => {
   const cancelled = () => {
     const spans = dictatedSpans(only(), draft());
     return (
-      spans && spans.reduce((text, { from, to }) => text.slice(0, from) + text.slice(to), draft())
+      spans &&
+      spans.reduce(
+        (text, { from, to, restore = "" }) => text.slice(0, from) + restore + text.slice(to),
+        draft()
+      )
     );
   };
 
@@ -958,6 +963,87 @@ describe("cancelling a dictation at the caret (#14631, #14634)", () => {
     expect(draft()).toBe("Intro. One.Outro.");
 
     expect(cancelled()).toBe("Intro. Outro.");
+  });
+
+  describe("over a selection (#14805)", () => {
+    beforeEach(() => {
+      useDictationRangeStore.getState().setAnchor(target, { from: 7, to: 13 });
+    });
+
+    it("puts the selection back where the words that replaced it stood", () => {
+      speak("One.");
+      expect(draft()).toBe("Intro. One.");
+
+      expect(cancelled()).toBe("Intro. Outro.");
+      expect(only().utterances[0]!.replaced).toBe("Outro.");
+    });
+
+    it("hands the selection to the first words only", () => {
+      speak("One.");
+      speak("Two.");
+      expect(draft()).toBe("Intro. One. Two.");
+
+      const spans = dictatedSpans(only(), draft())!;
+      expect(spans.map((span) => span.restore)).toEqual([undefined, "Outro."]);
+      expect(cancelled()).toBe("Intro. Outro.");
+    });
+
+    it("puts it back under a paragraph break spoken ahead of the words", () => {
+      breakLine();
+      speak("One.");
+      expect(draft()).toBe("Intro. \nOne.");
+
+      expect(cancelled()).toBe("Intro. Outro.");
+    });
+
+    it("puts it back when the words were the selection", () => {
+      speak("Outro.");
+      expect(draft()).toBe("Intro. Outro.");
+
+      expect(cancelled()).toBe("Intro. Outro.");
+      expect(dictatedSpans(only(), draft())!.map((span) => span.restore)).toEqual(["Outro."]);
+    });
+
+    it("keeps it through a heard-as rewrite of the words that replaced it", () => {
+      speak("add zoo stand");
+      const { id } = only();
+      const [passage] = collectCorrectionPassages(only(), draft());
+      expect(
+        useDictationRangeStore.getState().rewritePassage(id, passage!, "add Zustand", passage!.text)
+      ).not.toBeNull();
+      expect(draft()).toBe("Intro. add Zustand");
+
+      expect(cancelled()).toBe("Intro. Outro.");
+    });
+
+    it("keeps it through a rewrite that merges several utterances", () => {
+      speak("add zoo");
+      speak("stand");
+      const record = only();
+      const ids = record.utterances.map((u) => u.id);
+      expect(
+        useDictationRangeStore
+          .getState()
+          .rewritePassage(
+            record.id,
+            { utteranceIds: ids, text: "add zoo stand" },
+            "add Zustand",
+            "add zoo stand"
+          )
+      ).not.toBeNull();
+      expect(only().utterances.map((u) => u.replaced)).toEqual(["Outro."]);
+
+      expect(cancelled()).toBe("Intro. Outro.");
+    });
+
+    it("leaves the selection out once the words are edited, as the words stay too", () => {
+      speak("One two.");
+      expect(draft()).toBe("Intro. One two.");
+      expect(only().utterances[0]!.replaced).toBe("Outro.");
+      edit(11, 14, "too");
+
+      expect(dictatedSpans(only(), draft())).toBeNull();
+    });
   });
 
   describe("once the stop-time heard-as pass rewrote a passage (#14737)", () => {

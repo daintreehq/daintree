@@ -46,12 +46,19 @@ describe("planVoiceWords", () => {
     expect(plan.next).toBe("open the Zustand store");
     expect(plan.at).toEqual({ from: 9, to: 18 });
     expect(plan.anchor).toEqual({ from: 16, to: 16 });
+    expect(plan.replaced).toBe("zoo stand");
+  });
+
+  it("reports nothing replaced where the words only went in", () => {
+    expect(planVoiceWords("open the store", point(8), "big").replaced).toBeUndefined();
+    expect(planVoiceWords("open the store", null, "big").replaced).toBeUndefined();
   });
 
   it("leaves a selection the user changed and writes after it", () => {
     const plan = planVoiceWords("open the zoo store", { from: 9, to: 12, edited: true }, "now");
     expect(plan.next).toBe("open the zoo now store");
     expect(plan.at).toEqual({ from: 12, to: 12 });
+    expect(plan.replaced).toBeUndefined();
   });
 
   it("clamps an anchor past the end of the draft", () => {
