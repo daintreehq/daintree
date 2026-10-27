@@ -777,11 +777,29 @@ describe("VoiceRecordingToolbarButton — waveform (#14911)", () => {
     const { container } = renderStatus("recording");
     useVoiceRecordingStore.setState({ audioLevel: 0.9 });
     runFrames(30);
+    expect(Math.max(...barScales(container))).toBeGreaterThan(0.8);
     // The window is hidden for five seconds and the room goes quiet.
     now += 5000;
     useVoiceRecordingStore.setState({ audioLevel: 0 });
     runFrames(1);
-    expect(Math.max(...barScales(container))).toBeLessThanOrEqual(0.31);
+    const after = barScales(container);
+    expect(after).toHaveLength(4);
+    expect(Math.max(...after)).toBeLessThanOrEqual(0.31);
+  });
+
+  it("never drops below rest when the first frame predates the loop's start", () => {
+    now = 1000;
+    const { container } = renderStatus("recording");
+    useVoiceRecordingStore.setState({ audioLevel: 0.8 });
+    const pending = [...frames.values()];
+    frames.clear();
+    act(() => {
+      pending.forEach((cb) => cb(990));
+    });
+    runFrames(5);
+    const scales = barScales(container);
+    expect(scales).toHaveLength(4);
+    expect(Math.min(...scales)).toBeGreaterThanOrEqual(0.3);
   });
 
   it("holds one still shape under reduced motion, whatever the level", () => {

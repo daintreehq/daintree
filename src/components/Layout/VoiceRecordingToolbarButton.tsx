@@ -243,7 +243,8 @@ function VoiceWave({ mode }: { mode: VoiceWaveMode }) {
     let rafId = 0;
 
     const tick = (now: number) => {
-      const gap = (now - lastTime) / 1000;
+      // A frame's timestamp can precede the snapshot the loop started from.
+      const gap = Math.max(0, (now - lastTime) / 1000);
       lastTime = now;
 
       const rawLevel = useVoiceRecordingStore.getState().audioLevel;
