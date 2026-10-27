@@ -286,8 +286,11 @@ describe("checkVoiceCommandEdit", () => {
     expect(checkVoiceCommandEdit("compact it", "/compact.", claude, true)).toBe("unknown_command");
   });
 
-  it("rejects a command introduced anywhere but the start of the prompt", () => {
-    expect(checkVoiceCommandEdit("run the compact command", "/compact", claude, false)).toBe(
+  it("lets a passage partway into a prompt open with a command only where it named one", () => {
+    expect(
+      checkVoiceCommandEdit("compact command next", "/compact command next", claude, false)
+    ).toBeNull();
+    expect(checkVoiceCommandEdit("tidy things up a bit", "/compact", claude, false)).toBe(
       "unprompted_command"
     );
   });
@@ -543,6 +546,151 @@ describe("a bare imperative that shares a command's name", () => {
         true
       )
     ).toBeNull();
+  });
+});
+
+describe("checkVoiceCommandEdit for a command named partway into the prompt", () => {
+  const skills = buildVoiceCommandVocabulary(
+    [
+      ...getBuiltinSlashCommands("claude"),
+      custom("claude", "/design-review", { kind: "skill" }),
+      custom("claude", "/commit", { kind: "skill" }),
+      custom("claude", "/config"),
+      custom("claude", "/memory"),
+    ],
+    sourcesOf("claude")
+  );
+  const codexSkills = buildVoiceCommandVocabulary(
+    [
+      ...getBuiltinSlashCommands("codex"),
+      custom("codex", "$design-review", { kind: "skill" }),
+      custom("codex", "$plugin-creator", { kind: "skill" }),
+    ],
+    sourcesOf("codex")
+  );
+
+  it.each([
+    [
+      "From there, I think we should do a full design review workflow, using the design review skill.",
+      "From there, I think we should do a full design review workflow, using the /design-review skill.",
+    ],
+    [
+      "Fix the header, then ship it with the commit command.",
+      "Fix the header, then ship it with the /commit command.",
+    ],
+    [
+      "Once that's done, use design review on the header.",
+      "Once that's done, use /design-review on the header.",
+    ],
+    ["After that, run slash commit on the branch.", "After that, run /commit on the branch."],
+    [
+      "Check whether the design review skill is broken.",
+      "Check whether the /design-review skill is broken.",
+    ],
+  ])("writes a listed Claude Code command the dictation named: %j", (raw, corrected) => {
+    expect(checkVoiceCommandEdit(raw, corrected, skills, true)).toBeNull();
+    expect(checkVoiceCommandEdit(raw, corrected, skills, false)).toBeNull();
+  });
+
+  it.each([
+    [
+      "When the header's done, use the design review skill on it.",
+      "When the header's done, use the $design-review skill on it.",
+    ],
+    ["Then use plugin creator for a linter.", "Then use $plugin-creator for a linter."],
+    ["Then use dollar plugin creator for a linter.", "Then use $plugin-creator for a linter."],
+  ])("writes a listed Codex skill the dictation named: %j", (raw, corrected) => {
+    expect(checkVoiceCommandEdit(raw, corrected, codexSkills, true)).toBeNull();
+  });
+
+  it.each([
+    ["Review the design of the header.", "Review the /design-review of the header."],
+    ["Okay, commit the fix and push it.", "Okay, /commit the fix and push it."],
+    ["Okay, do a design review of the header.", "Okay, do a /design-review of the header."],
+    ["Then use the config file from the repo.", "Then use the /config file from the repo."],
+    ["Then use the memory pressure numbers.", "Then use the /memory pressure numbers."],
+    ["I'm happy with the design review.", "I'm happy with the /design-review."],
+  ])("leaves words that only share a name as words: %j", (raw, corrected) => {
+    expect(checkVoiceCommandEdit(raw, corrected, skills, true)).toBe("unprompted_command");
+  });
+
+  it("writes a command once for each time the dictation named it", () => {
+    const raw = "Run the commit skill, then commit the docs.";
+    expect(
+      checkVoiceCommandEdit(raw, "Run the /commit skill, then commit the docs.", skills, false)
+    ).toBeNull();
+    expect(
+      checkVoiceCommandEdit(raw, "Run the /commit skill, then /commit the docs.", skills, false)
+    ).toBe("unprompted_command");
+  });
+
+  it("finds the token inside quotes and backticks, and only the exact token", () => {
+    const raw = "Then try the design review approach.";
+    expect(
+      checkVoiceCommandEdit(raw, "Then try the `/design-review` approach.", skills, true)
+    ).toBe("unprompted_command");
+    expect(
+      checkVoiceCommandEdit(
+        "Use the design review skill.",
+        'Use the "/design-review" skill.',
+        skills,
+        true
+      )
+    ).toBeNull();
+    expect(
+      checkVoiceCommandEdit(raw, "Then try the /design-review-v2 approach.", skills, true)
+    ).toBeNull();
+  });
+
+  it("takes the longest name the words say", () => {
+    const raw = "Next, use the design review skill.";
+    expect(checkVoiceCommandEdit(raw, "Next, use the design /review skill.", skills, true)).toBe(
+      "unprompted_command"
+    );
+  });
+
+  it("names neither of two commands that sound the same", () => {
+    const twins = buildVoiceCommandVocabulary(
+      [custom("codex", "/design-review"), custom("codex", "$design-review", { kind: "skill" })],
+      codexSources
+    );
+    const raw = "Then use the design review skill.";
+    expect(checkVoiceCommandEdit(raw, "Then use the $design-review skill.", twins, true)).toBe(
+      "unprompted_command"
+    );
+  });
+
+  it("leaves unlisted command-shaped words to the prompt", () => {
+    expect(
+      checkVoiceCommandEdit("Write the logs to slash tmp", "Write the logs to /tmp", skills, true)
+    ).toBeNull();
+    expect(
+      checkVoiceCommandEdit(
+        "Use the deploy skill next.",
+        "Use the /deploy skill next.",
+        skills,
+        true
+      )
+    ).toBeNull();
+  });
+
+  it("keeps an opening command's arguments as they were said", () => {
+    expect(
+      checkVoiceCommandEdit(
+        "slash review using the design review skill",
+        "/review using the /design-review skill",
+        skills,
+        true
+      )
+    ).toBe("arguments_reformatted");
+    expect(
+      checkVoiceCommandEdit(
+        "/review using the design review skill",
+        "/review using the /design-review skill",
+        skills,
+        true
+      )
+    ).toBe("arguments_reformatted");
   });
 });
 

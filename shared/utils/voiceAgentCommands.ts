@@ -107,6 +107,55 @@ const INVOCATION_VERBS = new Set([
 ]);
 // What may sit between the name and its arguments: "run the review skill on…".
 const INVOCATION_NOUNS = new Set(["skill", "command", "plugin", "prompt"]);
+// A command or skill named anywhere in a prompt is only written as its token
+// when the words say it's the command they mean: "using the design review
+// skill", "use plugin creator". "plugin" and "prompt" are left out here, since
+// "the model prompt" is ordinary speech.
+const REFERENCE_NOUNS = new Set(["skill", "skills", "command", "commands"]);
+const HANDOFF_VERBS = new Set([
+  "use",
+  "uses",
+  "using",
+  "used",
+  "run",
+  "runs",
+  "running",
+  "invoke",
+  "invokes",
+  "invoking",
+  "execute",
+  "executes",
+  "executing",
+  "trigger",
+  "triggers",
+  "triggering",
+]);
+const HANDOFF_FILLERS = new Set(["the", "a", "an", "my", "our", "your", "that", "this"]);
+// After a bare handoff verb, the name has to end its phrase: "use plugin
+// creator for a linter" hands work to it, "use the model output" doesn't.
+const CLAUSE_WORDS = new Set([
+  "on",
+  "for",
+  "to",
+  "in",
+  "against",
+  "over",
+  "and",
+  "then",
+  "so",
+  "before",
+  "after",
+  "once",
+  "when",
+  "again",
+  "too",
+  "here",
+  "now",
+  "first",
+]);
+const CLAUSE_END_RE = /[.,;:!?…)]$/u;
+// What may wrap a token in prose: quotes, brackets, and the punctuation after it.
+const TOKEN_WRAPPER_RE = /^[("'`[\u2018\u201C]+|[)"'`\]\u2019\u201D.,;:!?…]+$/gu;
 
 function toWords(text: string): string[] {
   return text.toLowerCase().split(NON_WORD_RE).filter(Boolean);
@@ -197,6 +246,7 @@ interface WordSpan {
   word: string;
   /** Whether it opens with something other than a letter or digit: a flag, path or reference. */
   symbolic: boolean;
+  start: number;
   end: number;
 }
 
@@ -208,6 +258,7 @@ function wordSpans(text: string, from: number): WordSpan[] {
     spans.push({
       word: toKey(match[0]),
       symbolic: !/^[\p{L}\p{N}]/u.test(match[0]),
+      start: match.index,
       end: match.index + match[0].length,
     });
   }
@@ -488,49 +539,154 @@ function sameWords(a: readonly string[], b: readonly string[]): boolean {
 export type VoiceCommandEditRejection =
   "command_changed" | "arguments_reformatted" | "unknown_command" | "unprompted_command";
 
+/** Where a listed command or skill is named in `raw` in so many words, as one it means. */
+interface SpokenReference {
+  entry: VoiceCommandEntry;
+  end: number;
+}
+
+function hasHandoffVerb(spans: readonly WordSpan[], nameStart: number): boolean {
+  for (let at = nameStart - 1, fillers = 0; at >= 0; at--) {
+    const word = spans[at]!.word;
+    if (HANDOFF_VERBS.has(word)) return true;
+    if (!HANDOFF_FILLERS.has(word) || ++fillers > 2) return false;
+  }
+  return false;
+}
+
 /**
- * Checks a cleanup's handling of commands. A command `raw` opens with comes
- * back exactly, and so do its arguments, word for word, but for hesitation
- * sounds. A command cleanup introduces must be one the target has, may open
- * only the prompt itself, must have been asked for by the dictation's opening
- * words (its trigger, or a verb like "run"), and keeps every word that followed
- * them, or none when the whole phrase named it.
+ * The listed commands `text` names as commands: with a trigger ("slash
+ * review"), with a noun ("the design review skill"), or handed work by a verb
+ * ("use plugin creator for a linter"). Read left to right, longest name first,
+ * each word claimed once. A name two commands answer to names neither.
  */
-export function checkVoiceCommandEdit(
+function spokenReferences(text: string, vocabulary: VoiceCommandVocabulary): SpokenReference[] {
+  const spans = wordSpans(text, 0).filter((span) => !HESITATIONS.has(span.word));
+  const references: SpokenReference[] = [];
+  for (let start = 0; start < spans.length;) {
+    const found = referenceAt(text, spans, start, vocabulary);
+    if (found) {
+      references.push({ entry: found.entry, end: spans[found.last]!.end });
+      start = found.last + 1;
+    } else {
+      start++;
+    }
+  }
+  return references;
+}
+
+function referenceAt(
+  text: string,
+  spans: readonly WordSpan[],
+  start: number,
+  vocabulary: VoiceCommandVocabulary
+): { entry: VoiceCommandEntry; last: number } | null {
+  const first = spans[start]!;
+  if (first.symbolic) return null;
+  for (const prefix of vocabulary.prefixes) {
+    // A word, not a symbol, so only a spoken trigger matches: a typed token
+    // is counted as one already said.
+    for (const nameStart of matchPrefix(text, first.start, prefix)) {
+      const match = matchName(text, nameStart, prefix, vocabulary);
+      if (!match) continue;
+      const last = spans.findIndex((span) => span.end === match.end);
+      if (last >= start) return { entry: match.entry, last };
+    }
+  }
+  let joined = "";
+  // Null where the words name more than one command.
+  const named: Array<{ entry: VoiceCommandEntry | null; last: number }> = [];
+  for (let last = start; last < spans.length && last - start < MAX_NAME_WORDS; last++) {
+    const span = spans[last]!;
+    if (span.symbolic) break;
+    joined += span.word;
+    const entries = vocabulary.entries.filter((entry) => entry.key === joined);
+    if (entries.length > 0) named.push({ entry: entries.length === 1 ? entries[0]! : null, last });
+    if (CLAUSE_END_RE.test(text.slice(span.start, span.end))) break;
+  }
+  for (const { entry, last } of named.reverse()) {
+    if (!entry) return null;
+    const next = spans[last + 1];
+    if (next && REFERENCE_NOUNS.has(next.word)) return { entry, last };
+    if (!hasHandoffVerb(spans, start)) continue;
+    const endsPhrase =
+      !next ||
+      CLAUSE_END_RE.test(text.slice(spans[last]!.start, spans[last]!.end)) ||
+      CLAUSE_WORDS.has(next.word);
+    if (endsPhrase) return { entry, last };
+  }
+  return null;
+}
+
+function tokenCounts(words: readonly string[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const word of words) {
+    const bare = word.replace(TOKEN_WRAPPER_RE, "");
+    counts.set(bare, (counts.get(bare) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/**
+ * Whether `corrected` writes a listed command more often than `raw` either
+ * typed it or named it as a command, so cleanup turned plain words into one.
+ * Command-shaped words the target doesn't list ("/tmp") are paths and the like,
+ * and stay the prompt's business.
+ */
+function writesUnnamedCommand(
+  raw: string,
+  corrected: string,
+  vocabulary: VoiceCommandVocabulary
+): boolean {
+  const written = tokenCounts(corrected.split(/\s+/u).filter(Boolean));
+  const typed = tokenCounts(raw.split(/\s+/u).filter(Boolean));
+  const named = new Map<string, number>();
+  for (const { entry } of spokenReferences(raw, vocabulary)) {
+    named.set(entry.token, (named.get(entry.token) ?? 0) + 1);
+  }
+  for (const [token, count] of written) {
+    if (!knownToken(token, vocabulary)) continue;
+    if (count > (typed.get(token) ?? 0) + (named.get(token) ?? 0)) return true;
+  }
+  return false;
+}
+
+/**
+ * Checks the opening of a cleanup and says how much of each side it settled.
+ * A command `raw` opens with comes back exactly, and so do its arguments; one
+ * cleanup opens the prompt with must have been asked for by the opening words.
+ */
+function checkOpening(
   raw: string,
   corrected: string,
   vocabulary: VoiceCommandVocabulary,
   startsPrompt: boolean
-): VoiceCommandEditRejection | null {
-  const trimmedRaw = raw.trim();
-  const trimmedCorrected = corrected.trim();
-  const rawLead = leadingWord(trimmedRaw);
-  const correctedLead = leadingWord(trimmedCorrected);
+): VoiceCommandEditRejection | "settled" | "open" {
+  const rawLead = leadingWord(raw);
+  const correctedLead = leadingWord(corrected);
   const argumentsOf = (text: string, token: string) =>
     withoutHesitations(text.slice(token.length).split(/\s+/u).filter(Boolean));
 
   if (knownToken(rawLead, vocabulary)) {
     if (correctedLead !== rawLead) return "command_changed";
-    const kept = sameWords(
-      argumentsOf(trimmedCorrected, rawLead),
-      argumentsOf(trimmedRaw, rawLead)
-    );
-    return kept ? null : "arguments_reformatted";
+    const kept = sameWords(argumentsOf(corrected, rawLead), argumentsOf(raw, rawLead));
+    return kept ? "settled" : "arguments_reformatted";
   }
 
   // "/etc/hosts" fixed up from "slash etc slash hosts" is a path, not a command.
-  if (correctedLead === rawLead) return null;
+  if (correctedLead === rawLead) return "open";
   // A skill the target has is checked even when it's named in capitals like a
   // shell variable ("$README"); a token with punctuation stuck to it is still
   // not one the composer has.
   const entry = knownToken(correctedLead, vocabulary);
-  if (!entry) return commandShape(correctedLead) ? "unknown_command" : null;
-  if (!startsPrompt) return "unprompted_command";
-  const argumentsAt = invocationArgumentsAt(trimmedRaw, entry, vocabulary);
+  if (!entry) return commandShape(correctedLead) ? "unknown_command" : "open";
+  // Partway into a prompt the passage's first word is any other word.
+  if (!startsPrompt) return "open";
+  const argumentsAt = invocationArgumentsAt(raw, entry, vocabulary);
   if (argumentsAt < 0) return "unprompted_command";
   const words = (text: string) => withoutHesitations(text.split(/\s+/u).filter(Boolean));
-  const correctedArguments = words(trimmedCorrected.slice(correctedLead.length));
-  const rawArguments = words(trimmedRaw.slice(argumentsAt));
+  const correctedArguments = words(corrected.slice(correctedLead.length));
+  const rawArguments = words(raw.slice(argumentsAt));
   // The sentence's own closing punctuation may go: it ended prose, not the arguments.
   const last = rawArguments.length - 1;
   if (last >= 0)
@@ -540,6 +696,33 @@ export function checkVoiceCommandEdit(
   const kept =
     correctedArguments.length === 0 ||
     sameWords(correctedArguments, rawArguments) ||
-    sameWords(correctedArguments, words(trimmedRaw.slice(argumentsAt)));
-  return kept ? null : "arguments_reformatted";
+    sameWords(correctedArguments, words(raw.slice(argumentsAt)));
+  return kept ? "settled" : "arguments_reformatted";
+}
+
+/**
+ * Checks a cleanup's handling of commands. A command `raw` opens with comes
+ * back exactly, and so do its arguments, word for word, but for hesitation
+ * sounds. A command cleanup opens the prompt with must be one the target has
+ * and must have been asked for by the dictation's opening words (its trigger,
+ * or a verb like "run"), keeping every word that followed them, or none when
+ * the whole phrase named it. Anywhere else, a listed command may stand only
+ * where the dictation named it as one ("using the design review skill").
+ */
+export function checkVoiceCommandEdit(
+  raw: string,
+  corrected: string,
+  vocabulary: VoiceCommandVocabulary,
+  startsPrompt: boolean
+): VoiceCommandEditRejection | null {
+  const trimmedRaw = raw.trim();
+  const trimmedCorrected = corrected.trim();
+  const opening = checkOpening(trimmedRaw, trimmedCorrected, vocabulary, startsPrompt);
+  // A settled opening carried its arguments over word for word, so nothing
+  // after it can hold a command the dictation didn't.
+  if (opening === "settled") return null;
+  if (opening !== "open") return opening;
+  return writesUnnamedCommand(trimmedRaw, trimmedCorrected, vocabulary)
+    ? "unprompted_command"
+    : null;
 }
