@@ -2265,12 +2265,18 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       sessionId?: string;
       /** Dictated into a terminal outside the asking view: cleaned up without its project's vocabulary. */
       outsideView?: true;
+      /** Streams the reply: its text so far arrives through `onCorrectionProgress` under this id. */
+      streamId?: string;
     }): Promise<{
       action: "no_change" | "replace";
       correctedText: string;
       failed?: true;
       timing?: VoiceCorrectionTiming;
     }>;
+    /** A streaming correction's text so far, cut at a word boundary; only ever grows. */
+    onCorrectionProgress(
+      callback: (payload: { streamId: string; text: string }) => void
+    ): () => void;
     onFileTokenResolved(
       callback: (payload: {
         sessionId: string;

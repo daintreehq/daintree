@@ -163,6 +163,7 @@ function stubEnvironment(recordingMode: "toggle" | "push-to-talk") {
       callbacks.boundary = cb;
       return () => {};
     }),
+    onCorrectionProgress: vi.fn(() => () => {}),
     onFileTokenResolved: vi.fn((cb: (payload: FileTokenPayload) => void) => {
       callbacks.fileToken = cb;
       return () => {};

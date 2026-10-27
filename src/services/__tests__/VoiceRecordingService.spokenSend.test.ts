@@ -109,6 +109,7 @@ function stubElectron() {
           return () => {};
         }
       ),
+      onCorrectionProgress: vi.fn(() => () => {}),
       onFileTokenResolved: vi.fn(() => () => {}),
       onError: vi.fn(() => () => {}),
       onStatus: vi.fn(() => () => {}),

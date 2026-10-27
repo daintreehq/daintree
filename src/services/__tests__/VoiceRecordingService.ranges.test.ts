@@ -97,6 +97,7 @@ function stubElectron() {
         callbacks.boundary = cb;
         return () => {};
       }),
+      onCorrectionProgress: vi.fn(() => () => {}),
       onFileTokenResolved: vi.fn((cb: (payload: FileTokenPayload) => void) => {
         callbacks.fileToken = cb;
         return () => {};
@@ -361,6 +362,7 @@ describe("VoiceRecordingService — dictation ranges (#14597)", () => {
       startsPrompt: false,
       terminalId: "panel-1",
       sessionId: SESSION_ID,
+      streamId: expect.any(String),
     });
     expect(getDictation(id)).not.toBeNull();
 
@@ -488,6 +490,7 @@ describe("VoiceRecordingService — correction over dictated ranges (#14613)", (
       startsPrompt: true,
       terminalId: "panel-1",
       sessionId: SESSION_ID,
+      streamId: expect.any(String),
     });
     await vi.waitFor(() => expect(draft()).toBe("Hello, there."));
     const buffer = voiceStore.getState().panelBuffers[PANEL]!;
@@ -540,6 +543,7 @@ describe("VoiceRecordingService — correction over dictated ranges (#14613)", (
       startsPrompt: false,
       terminalId: "panel-1",
       sessionId: SESSION_ID,
+      streamId: expect.any(String),
     });
     await vi.waitFor(() =>
       expect(draft()).toBe("Note: the build fails when it runs on Windows. Thanks.")
@@ -765,6 +769,7 @@ describe("VoiceRecordingService — correction over dictated ranges (#14613)", (
       startsPrompt: false,
       terminalId: "panel-1",
       sessionId: SESSION_ID,
+      streamId: expect.any(String),
     });
     expect(draft()).toBe(`Intro.\n${expected} Thanks.`);
     expect(voiceStore.getState().panelBuffers[PANEL]!.sessionCorrectedText).toBe(expected);
@@ -785,6 +790,7 @@ describe("VoiceRecordingService — correction over dictated ranges (#14613)", (
       startsPrompt: false,
       terminalId: "panel-1",
       sessionId: SESSION_ID,
+      streamId: expect.any(String),
     });
   });
 
@@ -1478,6 +1484,7 @@ describe("VoiceRecordingService — correction and file links at the caret (#146
       terminalId: "panel-1",
       sessionId: SESSION_ID,
       startsPrompt: false,
+      streamId: expect.any(String),
     });
     await vi.waitFor(() => expect(draft()).toBe("Step one. Step two. Step three."));
     expect(voiceStore.getState().panelBuffers[PANEL]!.sessionDraftStart).toBe(10);

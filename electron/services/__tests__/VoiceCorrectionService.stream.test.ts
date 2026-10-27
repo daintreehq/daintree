@@ -1,0 +1,300 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../../utils/logger.js", () => ({
+  logDebug: vi.fn(),
+  logWarn: vi.fn(),
+  logInfo: vi.fn(),
+  logError: vi.fn(),
+}));
+
+import { logWarn } from "../../utils/logger.js";
+import { VoiceCorrectionService } from "../VoiceCorrectionService.js";
+
+const SETTINGS = { model: "gpt-6-luna", apiKey: "sk-test", customDictionary: [] as string[] };
+
+type Frame = Record<string, unknown> & { type: string };
+
+function reply(correctedText: string, action = "replace", confidence = "high"): string {
+  return JSON.stringify({ action, corrected_text: correctedText, confidence });
+}
+
+/** The reply as Responses API stream events: the JSON in small deltas, then its terminal event. */
+function replyFrames(json: string, terminal: Frame | null = completed(json)): Frame[] {
+  const frames: Frame[] = [];
+  for (let i = 0; i < json.length; i += 5) {
+    frames.push({ type: "response.output_text.delta", delta: json.slice(i, i + 5) });
+  }
+  frames.push({ type: "response.output_text.done", text: json });
+  if (terminal) frames.push(terminal);
+  return frames;
+}
+
+function completed(json: string, status = "completed"): Frame {
+  return {
+    type: status === "completed" ? "response.completed" : "response.incomplete",
+    response: {
+      status,
+      ...(status === "incomplete" ? { incomplete_details: { reason: "max_output_tokens" } } : {}),
+      output: [{ content: [{ text: json }] }],
+      usage: { input_tokens: 10, output_tokens: 5 },
+    },
+  };
+}
+
+/** A streamed response whose body arrives `chunkSize` bytes at a time. */
+function streamed(frames: Frame[], chunkSize = 17): Response {
+  const bytes = new TextEncoder().encode(
+    frames.map((f) => `event: ${f.type}\ndata: ${JSON.stringify(f)}\n\n`).join("")
+  );
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (let i = 0; i < bytes.length; i += chunkSize) {
+        controller.enqueue(bytes.slice(i, i + chunkSize));
+      }
+      controller.close();
+    },
+  });
+  return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+}
+
+function stubFetch(response: Response) {
+  const fetchMock = vi.fn().mockResolvedValue(response);
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+describe("VoiceCorrectionService streaming", () => {
+  beforeEach(() => {
+    // Every read is past the progress interval, so each chunk may report.
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => (now += 50));
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("streams only when asked, and lands the same result as an unstreamed reply", async () => {
+    const corrected = "Fix the bug in the parser, then run the tests.";
+    const fetchMock = stubFetch(streamed(replyFrames(reply(corrected))));
+    const heard: string[] = [];
+
+    const svc = new VoiceCorrectionService();
+    const result = await svc.correct(
+      { rawText: "fix the bug in the parser then run the tests" },
+      SETTINGS,
+      undefined,
+      (text) => heard.push(text)
+    );
+
+    expect(JSON.parse(fetchMock.mock.calls[0]![1].body as string).stream).toBe(true);
+    expect(result).toMatchObject({ action: "replace", correctedText: corrected });
+    expect(heard.length).toBeGreaterThan(3);
+    heard.forEach((text, i) => {
+      // Whole words only, growing, each a prefix of what landed.
+      expect(corrected.startsWith(text)).toBe(true);
+      expect(corrected.charAt(text.length)).toMatch(/\s/);
+      if (i > 0) expect(text.length).toBeGreaterThan(heard[i - 1]!.length);
+    });
+  });
+
+  it("reports at most once per interval however fast the reply arrives", async () => {
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => (now += 10));
+    const corrected = "Fix the bug in the parser, then run the tests and ship the release.";
+    stubFetch(streamed(replyFrames(reply(corrected)), 8));
+    const reportedAt: number[] = [];
+
+    await new VoiceCorrectionService().correct(
+      { rawText: "fix the bug in the parser then run the tests and ship the release" },
+      SETTINGS,
+      undefined,
+      () => reportedAt.push(now)
+    );
+
+    expect(reportedAt.length).toBeGreaterThan(1);
+    for (let i = 1; i < reportedAt.length; i++) {
+      expect(reportedAt[i]! - reportedAt[i - 1]!).toBeGreaterThanOrEqual(33);
+    }
+  });
+
+  it("leaves the request unstreamed without a listener", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ output_text: reply("Ship it.") }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await new VoiceCorrectionService().correct({ rawText: "ship it" }, SETTINGS);
+
+    expect(JSON.parse(fetchMock.mock.calls[0]![1].body as string)).not.toHaveProperty("stream");
+    expect(result.correctedText).toBe("Ship it.");
+  });
+
+  it("decodes escapes split across deltas and multi-byte text split across chunks", async () => {
+    const corrected = '1. Install the "deps" café\n2. Run the tests\n3. Ship it';
+    stubFetch(streamed(replyFrames(reply(corrected)), 3));
+    const heard: string[] = [];
+
+    const result = await new VoiceCorrectionService().correct(
+      { rawText: "first install the deps cafe second run the tests third ship it" },
+      SETTINGS,
+      undefined,
+      (text) => heard.push(text)
+    );
+
+    expect(result.correctedText).toBe(corrected);
+    expect(heard).toContain('1. Install the "deps" café\n2. Run the');
+    for (const text of heard) expect(corrected.startsWith(text)).toBe(true);
+  });
+
+  it("drops leading filler from the text it reports, as from the text it lands", async () => {
+    stubFetch(streamed(replyFrames(reply("Um, so we ship the release today."))));
+    const heard: string[] = [];
+
+    const result = await new VoiceCorrectionService().correct(
+      { rawText: "um so we ship the release today" },
+      SETTINGS,
+      undefined,
+      (text) => heard.push(text)
+    );
+
+    expect(result.correctedText).toBe("so we ship the release today.");
+    expect(heard.length).toBeGreaterThan(0);
+    for (const text of heard) expect(result.correctedText.startsWith(text)).toBe(true);
+  });
+
+  it("reports nothing for a reply that keeps the passage", async () => {
+    stubFetch(streamed(replyFrames(reply("ship it", "no_change"))));
+    const onText = vi.fn();
+
+    const result = await new VoiceCorrectionService().correct(
+      { rawText: "ship it today please" },
+      SETTINGS,
+      undefined,
+      onText
+    );
+
+    expect(onText).not.toHaveBeenCalled();
+    expect(result.action).toBe("no_change");
+  });
+
+  it("still judges the whole correction: a low-confidence one streams and is rejected", async () => {
+    stubFetch(streamed(replyFrames(reply("Fix the bug in the parser now.", "replace", "low"))));
+    const onText = vi.fn();
+
+    const result = await new VoiceCorrectionService().correct(
+      { rawText: "fix the bug in the parser now" },
+      SETTINGS,
+      undefined,
+      onText
+    );
+
+    expect(onText).toHaveBeenCalled();
+    expect(result).toMatchObject({
+      action: "no_change",
+      correctedText: "fix the bug in the parser now",
+    });
+    expect(result.failed).toBeUndefined();
+  });
+
+  it("discards a reply whose stream ends before its last event", async () => {
+    stubFetch(streamed(replyFrames(reply("Fix the parser now."), null)));
+
+    const result = await new VoiceCorrectionService().correct(
+      { rawText: "fix the parser now" },
+      SETTINGS,
+      undefined,
+      vi.fn()
+    );
+
+    expect(result).toMatchObject({ action: "no_change", failed: true });
+    expect(logWarn).toHaveBeenCalledWith(
+      expect.stringContaining("Correction failed"),
+      expect.objectContaining({ errorCode: "incomplete" })
+    );
+  });
+
+  it("discards a reply the stream reports cut off", async () => {
+    const json = reply("Fix the parser now.");
+    stubFetch(streamed(replyFrames(json, completed(json, "incomplete"))));
+
+    const result = await new VoiceCorrectionService().correct(
+      { rawText: "fix the parser now" },
+      SETTINGS,
+      undefined,
+      vi.fn()
+    );
+
+    expect(result).toMatchObject({ action: "no_change", failed: true });
+  });
+
+  it("reads its text from the first part only, as an unstreamed reply is read", async () => {
+    const json = reply("Fix the parser now.");
+    const frames = replyFrames(json).map((frame) =>
+      frame.type === "response.output_text.delta"
+        ? { ...frame, output_index: 0, content_index: 0 }
+        : frame
+    );
+    frames.splice(2, 0, {
+      type: "response.output_text.delta",
+      output_index: 1,
+      content_index: 0,
+      delta: "stray",
+    });
+    stubFetch(streamed(frames));
+
+    const result = await new VoiceCorrectionService().correct(
+      { rawText: "fix the parser now" },
+      SETTINGS,
+      undefined,
+      vi.fn()
+    );
+
+    expect(result.correctedText).toBe("Fix the parser now.");
+  });
+
+  it("takes an error event's code from the top level too", async () => {
+    const frames = replyFrames(reply("Fix the parser now."), null).slice(0, 3);
+    frames.push({ type: "error", code: "rate_limit_exceeded", message: "fix the parser now" });
+    stubFetch(streamed(frames));
+
+    const result = await new VoiceCorrectionService().correct(
+      { rawText: "fix the parser now" },
+      SETTINGS,
+      undefined,
+      vi.fn()
+    );
+
+    expect(result).toMatchObject({ failed: true });
+    expect(logWarn).toHaveBeenCalledWith(
+      expect.stringContaining("Correction failed"),
+      expect.objectContaining({ code: "rate_limit_exceeded" })
+    );
+  });
+
+  it("fails on an error event mid-stream, logging its code and nothing else", async () => {
+    const frames = replyFrames(reply("Fix the parser now."), null).slice(0, 3);
+    frames.push({
+      type: "error",
+      error: { code: "server_error", message: "fix the parser now" },
+    });
+    stubFetch(streamed(frames));
+
+    const result = await new VoiceCorrectionService().correct(
+      { rawText: "fix the parser now" },
+      SETTINGS,
+      undefined,
+      vi.fn()
+    );
+
+    expect(result).toMatchObject({ action: "no_change", failed: true });
+    expect(logWarn).toHaveBeenCalledWith(
+      expect.stringContaining("Correction failed"),
+      expect.objectContaining({ code: "server_error" })
+    );
+    expect(JSON.stringify(vi.mocked(logWarn).mock.calls)).not.toContain("parser");
+  });
+});

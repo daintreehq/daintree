@@ -810,6 +810,8 @@ export const VoiceInputCorrectPayloadSchema = z.object({
     .catch(undefined),
   /** Dictated into a terminal outside the asking view: cleaned up without its project's vocabulary. */
   outsideView: z.literal(true).optional(),
+  /** Streams the reply, reporting its text so far under this id. */
+  streamId: z.string().min(1).max(64).optional(),
 });
 
 export const VoiceInputRewritePayloadSchema = z.object({

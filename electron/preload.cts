@@ -3034,7 +3034,10 @@ function buildElectronApi(): ElectronAPI {
         terminalId?: string;
         startsPrompt?: boolean;
         sessionId?: string;
+        streamId?: string;
       }) => _unwrappingInvoke(CHANNELS.VOICE_INPUT_CORRECT, request),
+      onCorrectionProgress: (callback: (payload: { streamId: string; text: string }) => void) =>
+        _typedOn(CHANNELS.VOICE_INPUT_CORRECTION_PROGRESS, callback),
       onFileTokenResolved: (
         callback: (payload: {
           sessionId: string;

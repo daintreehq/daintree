@@ -2214,6 +2214,16 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       if (lifetime.signal.aborted) {
         return { action: "no_change", correctedText: request.rawText, failed: true };
       }
+      // The text so far goes back only to the view that asked, under the id
+      // it asked with; it is dictated text, so it is never logged.
+      const { streamId } = request;
+      const onText =
+        streamId && sender
+          ? (text: string) => {
+              if (sender.isDestroyed()) return;
+              sender.send(CHANNELS.VOICE_INPUT_CORRECTION_PROGRESS, { streamId, text });
+            }
+          : undefined;
       const result = await svc.correct(
         {
           rawText: request.rawText,
@@ -2230,7 +2240,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           commandTarget,
           outsideView ? [] : (names?.names ?? [])
         ),
-        lifetime.signal
+        lifetime.signal,
+        onText
       );
       // Main's share of the wait, for the session summary: up to the request
       // going out, and the round trip, when there was one.

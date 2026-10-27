@@ -208,6 +208,7 @@ function buildElectronStub() {
       onTranscriptionDelta: vi.fn(() => () => {}),
       onTranscriptionComplete: vi.fn(() => () => {}),
       onParagraphBoundary: vi.fn(() => () => {}),
+      onCorrectionProgress: vi.fn(() => () => {}),
       onFileTokenResolved: vi.fn(() => () => {}),
       onError: vi.fn(() => () => {}),
       onStatus: vi.fn(() => () => {}),

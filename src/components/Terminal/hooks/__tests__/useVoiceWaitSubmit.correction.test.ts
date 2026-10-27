@@ -149,6 +149,7 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611, #14780)", () =
             return () => {};
           }),
           onParagraphBoundary: vi.fn(() => () => {}),
+          onCorrectionProgress: vi.fn(() => () => {}),
           onFileTokenResolved: vi.fn(() => () => {}),
           onError: vi.fn(() => () => {}),
           onStatus: vi.fn(() => () => {}),
@@ -242,6 +243,7 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611, #14780)", () =
       startsPrompt: true,
       terminalId: "panel-1",
       sessionId: expect.any(String),
+      streamId: expect.any(String),
     });
     expect(result.current.voiceSubmitPhase).toBe("polishing");
     expect(isEditable()).toBe(false);

@@ -1163,6 +1163,7 @@ export const CHANNEL_LOCALITY = {
   "voice-input:cancel": "shell",
   "voice-input:check-mic-permission": "shell",
   "voice-input:correct": "shell",
+  "voice-input:correction-progress": "shell",
   "voice-input:error": "shell",
   "voice-input:file-token-resolved": "shell",
   "voice-input:flush-paragraph": "shell",

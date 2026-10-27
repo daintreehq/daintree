@@ -15,7 +15,7 @@ vi.mock("@/lib/trustedTypesPolicy", () => ({
 
 import { EditorState } from "@codemirror/state";
 import type { Extension } from "@codemirror/state";
-import { EditorView, runScopeHandlers } from "@codemirror/view";
+import { EditorView, WidgetType, runScopeHandlers } from "@codemirror/view";
 import type { ITheme } from "@xterm/xterm";
 import {
   buildInputBarTheme,
@@ -1162,6 +1162,147 @@ describe("pendingAIField", () => {
     expect(iter.value).not.toBeNull();
     expect(iter.from).toBe(0);
     expect(iter.to).toBe(3);
+    view.destroy();
+  });
+
+  function spans(view: EditorView) {
+    const out: { from: number; to: number; widget: boolean }[] = [];
+    const iter = view.state.field(pendingAIField).iter();
+    while (iter.value) {
+      out.push({ from: iter.from, to: iter.to, widget: iter.value.spec.widget !== undefined });
+      iter.next();
+    }
+    return out;
+  }
+
+  it("draws a streamed rewrite over the words it replaced, leaving the doc as dictated", () => {
+    const doc = "um so fix the bug";
+    const view = makeView(doc);
+    view.dispatch({
+      effects: setPendingAIRanges.of([{ from: 0, to: 17, rewrite: { to: 9, text: "So fix" } }]),
+    });
+
+    expect(spans(view)).toEqual([
+      { from: 0, to: 9, widget: true },
+      { from: 9, to: 17, widget: false },
+    ]);
+    expect(view.state.doc.toString()).toBe(doc);
+    expect(view.contentDOM.querySelector(".cm-voice-rewrite")?.textContent).toBe("So fix");
+    expect(view.contentDOM.textContent).toBe("So fix the bug");
+    view.destroy();
+  });
+
+  it("draws a rewrite of the whole passage with no underline left after it", () => {
+    const view = makeView("fix the bug");
+    view.dispatch({
+      effects: setPendingAIRanges.of([
+        { from: 0, to: 11, rewrite: { to: 11, text: "Fix the bug." } },
+      ]),
+    });
+
+    expect(spans(view)).toEqual([{ from: 0, to: 11, widget: true }]);
+    expect(view.contentDOM.textContent).toBe("Fix the bug.");
+    view.destroy();
+  });
+
+  it("drops the rewrite in the same transaction as typing inside the words it hides", () => {
+    const view = makeView("um so fix the bug");
+    view.dispatch({
+      effects: setPendingAIRanges.of([{ from: 0, to: 17, rewrite: { to: 9, text: "So fix" } }]),
+    });
+    view.dispatch({ changes: { from: 6, insert: "x" } });
+
+    expect(spans(view).filter((span) => span.widget)).toEqual([]);
+    expect(view.contentDOM.textContent).toBe("um so xfix the bug");
+    view.destroy();
+  });
+
+  it("keeps the rewrite over typing at its edges", () => {
+    const view = makeView("um so fix the bug");
+    view.dispatch({
+      effects: setPendingAIRanges.of([{ from: 0, to: 17, rewrite: { to: 9, text: "So fix" } }]),
+    });
+    view.dispatch({ changes: { from: 0, insert: "Hey " } });
+
+    expect(spans(view)).toEqual([
+      { from: 4, to: 13, widget: true },
+      { from: 13, to: 21, widget: false },
+    ]);
+    view.destroy();
+  });
+
+  it("lays a rewritten list out on its own lines", () => {
+    const view = makeView("first fix the parser second ship it");
+    view.dispatch({
+      effects: setPendingAIRanges.of([
+        { from: 0, to: 35, rewrite: { to: 27, text: "1. Fix the parser\n2." } },
+      ]),
+    });
+
+    expect(view.contentDOM.textContent).toBe("1. Fix the parser\n2. ship it");
+    const widget: unknown = view.state.field(pendingAIField).iter().value?.spec.widget;
+    expect(widget instanceof WidgetType ? widget.lineBreaks : null).toBe(1);
+    view.destroy();
+  });
+
+  it("shows the dictated words while the caret sits among the words a rewrite hides", () => {
+    const doc = "um so fix the bug";
+    const rewrite = { from: 0, to: 17, rewrite: { to: 9, text: "So fix" } };
+    const view = makeView(doc);
+    view.dispatch({ effects: setPendingAIRanges.of([rewrite]) });
+
+    view.dispatch({ selection: { anchor: 7 } });
+    expect(view.contentDOM.textContent).toBe(doc);
+    expect(spans(view)).toEqual([
+      { from: 0, to: 9, widget: false },
+      { from: 9, to: 17, widget: false },
+    ]);
+
+    // A rewrite that streams on meanwhile doesn't cover the caret again.
+    view.dispatch({ effects: setPendingAIRanges.of([rewrite]) });
+    expect(view.contentDOM.textContent).toBe(doc);
+
+    view.dispatch({ selection: { anchor: 17 } });
+    view.dispatch({ effects: setPendingAIRanges.of([rewrite]) });
+    expect(view.contentDOM.textContent).toBe("So fix the bug");
+    view.destroy();
+  });
+
+  it("covers a file chip inside the words it rewrote, and gives it back after", () => {
+    const parent = document.createElement("div");
+    const view = new EditorView({
+      parent,
+      state: EditorState.create({
+        doc: "open @src/a.ts now please",
+        extensions: [pendingAIField, createFileChipField()],
+      }),
+    });
+    view.dispatch({
+      effects: setPendingAIRanges.of([
+        { from: 0, to: 25, rewrite: { to: 18, text: "Open @src/a.ts now" } },
+      ]),
+    });
+
+    expect(view.contentDOM.querySelector(".cm-file-chip")).toBeNull();
+    expect(view.contentDOM.textContent).toBe("Open @src/a.ts now please");
+
+    view.dispatch({ effects: setPendingAIRanges.of([]) });
+    expect(view.contentDOM.querySelector(".cm-file-chip")?.textContent).toBe("@src/a.ts");
+    view.destroy();
+  });
+
+  it("drops the rewrite when the correction lands over it", () => {
+    const view = makeView("um so fix the bug");
+    view.dispatch({
+      effects: setPendingAIRanges.of([{ from: 0, to: 17, rewrite: { to: 9, text: "So fix" } }]),
+    });
+    view.dispatch({
+      changes: { from: 0, to: 17, insert: "So fix the bug." },
+      effects: setPendingAIRanges.of([]),
+    });
+
+    expect(spans(view)).toEqual([]);
+    expect(view.contentDOM.textContent).toBe("So fix the bug.");
     view.destroy();
   });
 

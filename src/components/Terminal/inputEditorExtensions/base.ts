@@ -1,5 +1,6 @@
 import { EditorView, Decoration, WidgetType, keymap, placeholder } from "@codemirror/view";
-import type { Extension } from "@codemirror/state";
+import type { DecorationSet } from "@codemirror/view";
+import type { ChangeDesc, EditorSelection, Extension, Range } from "@codemirror/state";
 import { StateField, StateEffect, Prec } from "@codemirror/state";
 import { insertNewline } from "@codemirror/commands";
 import type { ITheme } from "@xterm/xterm";
@@ -431,7 +432,85 @@ export const interimWidgetField = StateField.define<InterimPreview>({
 
 const pendingAIMark = Decoration.mark({ class: "cm-voice-pending-ai" });
 
-export const setPendingAIRanges = StateEffect.define<{ from: number; to: number }[]>();
+// The cleanup streamed so far, drawn over the dictated words it has replaced.
+// The draft keeps what was dictated until the whole correction lands.
+class CorrectionRewriteWidget extends WidgetType {
+  constructor(readonly text: string) {
+    super();
+  }
+  eq(other: CorrectionRewriteWidget): boolean {
+    return other.text === this.text;
+  }
+  toDOM(): HTMLElement {
+    const span = document.createElement("span");
+    span.className = "cm-voice-pending-ai cm-voice-rewrite";
+    span.textContent = this.text;
+    return span;
+  }
+  // The rewrite grows a stretch at a time; the same node takes each stretch.
+  updateDOM(dom: HTMLElement): boolean {
+    dom.textContent = this.text;
+    return true;
+  }
+  // A spoken list is laid out on lines of its own.
+  get lineBreaks(): number {
+    return this.text.split("\n").length - 1;
+  }
+  // A click lands at the edge of the rewritten words, as on any text.
+  ignoreEvent(): boolean {
+    return false;
+  }
+}
+
+/**
+ * Whether `changes` edit inside the range, not just at its edges: typing in
+ * the dictated words a rewrite hides drops the rewrite in the same
+ * transaction, so the keystroke is never hidden under it.
+ */
+function editsInside(changes: ChangeDesc, from: number, to: number): boolean {
+  let inside = false;
+  changes.iterChangedRanges((fromA, toA) => {
+    if (fromA === toA ? fromA > from && fromA < to : fromA < to && toA > from) inside = true;
+  });
+  return inside;
+}
+
+// A caret or selection end among the words a rewrite hides would sit where
+// nothing shows, so those words show as dictated while it's there.
+function selectionInside(selection: EditorSelection, from: number, to: number): boolean {
+  return selection.ranges.some(
+    (range) => (range.head > from && range.head < to) || (range.anchor > from && range.anchor < to)
+  );
+}
+
+function revealUnderSelection(value: DecorationSet, selection: EditorSelection): DecorationSet {
+  const revealed: Range<Decoration>[] = [];
+  value.between(0, Number.MAX_SAFE_INTEGER, (from, to, decoration) => {
+    if (
+      decoration.spec.widget instanceof CorrectionRewriteWidget &&
+      selectionInside(selection, from, to)
+    ) {
+      revealed.push(pendingAIMark.range(from, to));
+    }
+  });
+  if (revealed.length === 0) return value;
+  return value.update({
+    filter: (from, to, decoration) =>
+      !(decoration.spec.widget instanceof CorrectionRewriteWidget) ||
+      !selectionInside(selection, from, to),
+    add: revealed,
+    sort: true,
+  });
+}
+
+export interface PendingAIRange {
+  from: number;
+  to: number;
+  /** Show the draft from `from` to `rewrite.to` as `rewrite.text`. */
+  rewrite?: { to: number; text: string };
+}
+
+export const setPendingAIRanges = StateEffect.define<PendingAIRange[]>();
 
 export const pendingAIField = StateField.define({
   create() {
@@ -439,24 +518,40 @@ export const pendingAIField = StateField.define({
   },
   update(value, tr) {
     if (tr.docChanged) {
-      value = value.map(tr.changes);
+      value = value
+        .update({
+          filter: (from, to, decoration) =>
+            !(decoration.spec.widget instanceof CorrectionRewriteWidget) ||
+            !editsInside(tr.changes, from, to),
+        })
+        .map(tr.changes);
     }
     for (const effect of tr.effects) {
       if (effect.is(setPendingAIRanges)) {
         const ranges = effect.value;
         if (ranges.length === 0) return Decoration.none;
         const docLen = tr.state.doc.length;
-        const marks = ranges
-          .map((r) => ({
-            from: Math.max(0, r.from),
-            to: Math.min(docLen, r.to),
-          }))
-          .filter((r) => r.from < r.to)
-          .map((r) => pendingAIMark.range(r.from, r.to));
-        return marks.length > 0 ? Decoration.set(marks, true) : Decoration.none;
+        const decorations: Range<Decoration>[] = [];
+        for (const r of ranges) {
+          const from = Math.max(0, r.from);
+          const to = Math.min(docLen, r.to);
+          if (from >= to) continue;
+          let rewriteTo = r.rewrite ? Math.min(to, r.rewrite.to) : from;
+          if (selectionInside(tr.state.selection, from, rewriteTo)) rewriteTo = from;
+          if (r.rewrite && rewriteTo > from) {
+            decorations.push(
+              Decoration.replace({ widget: new CorrectionRewriteWidget(r.rewrite.text) }).range(
+                from,
+                rewriteTo
+              )
+            );
+          }
+          if (rewriteTo < to) decorations.push(pendingAIMark.range(rewriteTo, to));
+        }
+        return decorations.length > 0 ? Decoration.set(decorations, true) : Decoration.none;
       }
     }
-    return value;
+    return tr.selection || tr.docChanged ? revealUnderSelection(value, tr.state.selection) : value;
   },
   provide: (f) => EditorView.decorations.from(f),
 });
@@ -504,9 +599,12 @@ export function createAutoSize(config: AutoSizeConfig = {}) {
   return EditorView.updateListener.of((update) => {
     // Interim dictation is an effect-only change to a widget on an otherwise
     // empty doc, so none of the layout flags fire for it (#13103).
+    // A streamed cleanup's rewrite is the same: its words can change the
+    // passage's line count without touching the doc.
     const interimChanged =
       update.startState.field(interimWidgetField, false) !==
-      update.state.field(interimWidgetField, false);
+        update.state.field(interimWidgetField, false) ||
+      update.startState.field(pendingAIField, false) !== update.state.field(pendingAIField, false);
     if (!update.docChanged && !update.viewportChanged && !update.geometryChanged && !interimChanged)
       return;
 
