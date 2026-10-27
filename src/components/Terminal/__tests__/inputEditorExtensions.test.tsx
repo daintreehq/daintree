@@ -1205,6 +1205,53 @@ describe("pendingAIField", () => {
     view.destroy();
   });
 
+  function underlined(view: EditorView): string[] {
+    return Array.from(view.contentDOM.querySelectorAll(".cm-voice-pending-ai")).map(
+      (el) => el.textContent ?? ""
+    );
+  }
+
+  it("recedes the underline as the rewrite advances, never back under rewritten words", () => {
+    const view = makeView("um so fix the bug");
+    view.dispatch({ effects: setPendingAIRanges.of([{ from: 0, to: 17, rewrite: undefined }]) });
+    expect(underlined(view)).toEqual(["um so fix the bug"]);
+
+    view.dispatch({
+      effects: setPendingAIRanges.of([{ from: 0, to: 17, rewrite: { to: 9, text: "So fix" } }]),
+    });
+    expect(underlined(view)).toEqual([" the bug"]);
+    expect(
+      view.contentDOM.querySelector(".cm-voice-rewrite")?.classList.contains("cm-voice-pending-ai")
+    ).toBe(false);
+
+    view.dispatch({
+      effects: setPendingAIRanges.of([
+        { from: 0, to: 17, rewrite: { to: 13, text: "So fix the" } },
+      ]),
+    });
+    expect(underlined(view)).toEqual([" bug"]);
+
+    view.dispatch({
+      effects: setPendingAIRanges.of([
+        { from: 0, to: 17, rewrite: { to: 17, text: "So fix the bug." } },
+      ]),
+    });
+    expect(underlined(view)).toEqual([]);
+    view.destroy();
+  });
+
+  it("shows a finished passage clean beside one still streaming", () => {
+    const view = makeView("fix bug. add test now");
+    view.dispatch({
+      effects: setPendingAIRanges.of([
+        { from: 0, to: 8, rewrite: { to: 8, text: "Fix bug." } },
+        { from: 9, to: 21, rewrite: { to: 13, text: "Add" } },
+      ]),
+    });
+    expect(underlined(view)).toEqual(["test now"]);
+    view.destroy();
+  });
+
   it("drops the rewrite in the same transaction as typing inside the words it hides", () => {
     const view = makeView("um so fix the bug");
     view.dispatch({
