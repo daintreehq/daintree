@@ -208,7 +208,7 @@ describe("VoiceSessionTimeline", () => {
     t.beginCorrection();
     t.finish("user");
     clock = 1_600;
-    t.endCorrection("applied");
+    t.endCorrection("applied", countPassageFates(["applied"]));
     t.noteCorrectionChunk();
     expect(logged()).toMatchObject({ correctionChunks: 2, correctionMs: 600 });
   });
