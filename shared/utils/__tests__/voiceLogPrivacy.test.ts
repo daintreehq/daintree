@@ -53,6 +53,8 @@ const SENSITIVE = new Set([
   "customInstructions",
   "recentContext",
   "recentPrompts",
+  "terminalOutput",
+  "agentReply",
   "uncertain",
   "heardUncertain",
   "commandUncertain",

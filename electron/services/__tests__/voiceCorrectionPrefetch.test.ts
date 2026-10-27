@@ -171,4 +171,37 @@ describe("prefetchKey", () => {
     expect(prefetchKey({ ...request, recentPrompts: ["fix it"] }, { model: "m" })).not.toBe(key);
     expect(prefetchKey(request, { model: "n" })).not.toBe(key);
   });
+
+  it("tells apart agent replies by anything observed of them, and not by when they were read", () => {
+    const reply = {
+      text: "Shim or migration?",
+      truncated: false,
+      recordedAt: 1_000,
+      newerRecordsFollow: false,
+      observedState: { state: "waiting", lastStateChangeAt: 2_000 },
+    };
+    const key = prefetchKey({ ...request, agentReply: reply }, {});
+    expect(
+      prefetchKey(
+        {
+          ...request,
+          agentReply: {
+            observedState: { lastStateChangeAt: 2_000, state: "waiting" },
+            newerRecordsFollow: false,
+            recordedAt: 1_000,
+            truncated: false,
+            text: "Shim or migration?",
+          },
+        },
+        {}
+      )
+    ).toBe(key);
+    for (const changed of [
+      { ...reply, newerRecordsFollow: true },
+      { ...reply, observedState: { ...reply.observedState, state: "working" } },
+      { ...reply, observedState: { ...reply.observedState, lastStateChangeAt: 3_000 } },
+    ]) {
+      expect(prefetchKey({ ...request, agentReply: changed }, {})).not.toBe(key);
+    }
+  });
 });

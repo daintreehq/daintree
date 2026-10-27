@@ -19,8 +19,9 @@ import {
   NO_DICTATION_NAMES,
   type DictationNames,
 } from "../voiceContextNames.js";
+import type { VoiceAgentReply } from "../voiceAgentReply.js";
 import {
-  readTerminalOutputForCorrection,
+  readTerminalContextForCorrection,
   TERMINAL_READ_BUDGET_MS,
 } from "../voiceTerminalContext.js";
 
@@ -122,6 +123,8 @@ export interface PaneCorrectionContext {
   commandTarget: VoiceCommandTarget | null;
   /** Bounded and redacted as for a local pane. */
   terminalOutput: string | null;
+  /** The terminal's agent's last reply, read as for a local pane; absent when there is none, and from a host before #14900. */
+  agentReply?: VoiceAgentReply;
 }
 
 export const NO_PANE_START_CONTEXT: PaneStartContext = {
@@ -228,20 +231,26 @@ export async function answerPaneCorrection(
   const deadline = performance.now() + budgetMs;
   const terminalId = hostTerminalId(scope, ptyClient);
   const target = resolveKeytermTarget(scope.projectId, terminalId, ptyClient);
-  const [vocabulary, commandTarget, terminalOutput] = await Promise.all([
+  const [vocabulary, commandTarget, { terminalOutput, agentReply }] = await Promise.all([
     byDeadline(
       readVocabulary(resolveVocabularyProject(scope.projectId, terminalId, ptyClient)),
       [],
       deadline
     ),
     resolveVoiceCommandTarget(ptyClient, target.terminalId, budgetMs),
-    readTerminalOutputForCorrection(
+    readTerminalContextForCorrection(
       ptyClient,
       target.terminalId,
       Math.min(TERMINAL_READ_BUDGET_MS, budgetMs)
     ),
   ]);
-  return { project: projectInfo(scope.projectId), vocabulary, commandTarget, terminalOutput };
+  return {
+    project: projectInfo(scope.projectId),
+    vocabulary,
+    commandTarget,
+    terminalOutput,
+    ...(agentReply ? { agentReply } : {}),
+  };
 }
 
 /**

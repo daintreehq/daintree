@@ -10,6 +10,10 @@ import { makeTempDir, openSessionPair, removeTempDir } from "../../link/__tests_
 import { LINK_HEADROOM_MS, VoicePaneHostsClient } from "../client.js";
 import { installVoicePaneHostWith, type VoicePaneHostDeps } from "../host.js";
 import { MAX_PANE_TERMS, MAX_PANE_VOCABULARY, VoicePaneLinkMethod } from "../linkMethods.js";
+import {
+  MAX_CORRECTION_REPLY_CHARS,
+  type VoiceAgentReply,
+} from "../../../services/voiceAgentReply.js";
 
 const HOST = "studio-03";
 const SCOPE: PaneScope = { projectId: "proj-1", terminalId: "term-1" };
@@ -48,6 +52,18 @@ const CORRECTION: PaneCorrectionContext = {
   vocabulary: START.vocabulary,
   commandTarget: START.commandTarget,
   terminalOutput: "$ npm test\nAll green",
+};
+
+const REPLY: VoiceAgentReply = {
+  text: "Should I add a shim that reads both keys?",
+  truncated: false,
+  recordedAt: 1_800_000_000_000,
+  newerRecordsFollow: false,
+  observedState: {
+    state: "waiting",
+    waitingReason: "question",
+    lastStateChangeAt: 1_800_000_000_000,
+  },
 };
 
 let dir: string;
@@ -275,6 +291,27 @@ describe("a host that can't give the pane's context gives none", () => {
   it("trusts no answer out of shape", async () => {
     deps.readCorrection.mockResolvedValueOnce({ ...CORRECTION, terminalOutput: 42 });
     await expect(client.readCorrection(HOST, SCOPE, { timeoutMs: 500 })).resolves.toBeNull();
+  });
+
+  it("carries the agent's last reply and the state the host observed", async () => {
+    const answer = { ...CORRECTION, agentReply: REPLY };
+    deps.readCorrection.mockResolvedValueOnce(answer);
+    await expect(client.readCorrection(HOST, SCOPE, { timeoutMs: 500 })).resolves.toEqual(answer);
+  });
+
+  it.each([
+    ["too long", { ...REPLY, text: "x".repeat(MAX_CORRECTION_REPLY_CHARS + 1) }],
+    ["empty", { ...REPLY, text: "" }],
+    [
+      "in a state this Shell doesn't know",
+      { ...REPLY, observedState: { state: "pondering", lastStateChangeAt: null } },
+    ],
+    ["stamped with no time", { ...REPLY, recordedAt: -1 }],
+  ])("drops a reply %s, and keeps the rest of the answer", async (_name, agentReply) => {
+    deps.readCorrection.mockResolvedValueOnce({ ...CORRECTION, agentReply });
+    const read = await client.readCorrection(HOST, SCOPE, { timeoutMs: 500 });
+    expect(read).toEqual(CORRECTION);
+    expect(read?.agentReply).toBeUndefined();
   });
 
   it("trusts no candidate lists that don't line up with the references asked", async () => {

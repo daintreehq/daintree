@@ -427,6 +427,39 @@ describe("voiceInput — dictating into a host's pane", () => {
     expectNoLocalReads();
   });
 
+  it("cleans up a stopped dictation with the agent reply its host read as the stop landed (#14900)", async () => {
+    const agentReply = {
+      text: "Should I add a shim that reads both keys?",
+      truncated: false,
+      recordedAt: 1_800_000_000_000,
+      newerRecordsFollow: false,
+    };
+    reader.readCorrection.mockResolvedValueOnce({ ...CORRECTION, agentReply });
+    await start(view, TERMINAL, "replied");
+    await stop(view, "replied");
+    for (const rawText of ["go with the shin", "and the second passage"]) {
+      await getHandler(CHANNELS.VOICE_INPUT_CORRECT)(
+        { sender: view },
+        { rawText, terminalId: TERMINAL, sessionId: "replied" }
+      );
+    }
+    expect(reader.readCorrection).toHaveBeenCalledTimes(1);
+    expect(shared.correctCalls.map(({ request }) => request.agentReply)).toEqual([
+      agentReply,
+      agentReply,
+    ]);
+    expectNoLocalReads();
+  });
+
+  it("sends no agent reply when its host gave none", async () => {
+    await start(view);
+    await getHandler(CHANNELS.VOICE_INPUT_CORRECT)(
+      { sender: view },
+      { rawText: "fix the zoo stand store", terminalId: TERMINAL }
+    );
+    expect(shared.correctCalls[0]?.request).not.toHaveProperty("agentReply");
+  });
+
   describe("a cleanup a pause prefetched", () => {
     const passage = { rawText: "run the tests", terminalId: TERMINAL, sessionId: "paused" };
     const prefetch = () =>
@@ -445,6 +478,31 @@ describe("voiceInput — dictating into a host's pane", () => {
 
       await expect(askAtStop()).resolves.toMatchObject({ correctedText: "run the tests" });
       expect(shared.correctCalls).toHaveLength(1);
+    });
+
+    it("gives way to the stop's own when the agent's reply changed since, the screen alike", async () => {
+      const reply = {
+        text: "Shim or migration?",
+        truncated: false,
+        recordedAt: 1,
+        newerRecordsFollow: false,
+      };
+      reader.readCorrection
+        .mockResolvedValueOnce({ ...CORRECTION, agentReply: reply })
+        .mockResolvedValueOnce({
+          ...CORRECTION,
+          agentReply: { ...reply, newerRecordsFollow: true },
+        });
+      await start(view, TERMINAL, "paused");
+      await prefetch();
+      await vi.waitFor(() => expect(shared.correctCalls).toHaveLength(1));
+      await stop(view, "paused");
+      await askAtStop();
+
+      expect(shared.correctCalls.map(({ request }) => request.agentReply)).toEqual([
+        reply,
+        { ...reply, newerRecordsFollow: true },
+      ]);
     });
 
     it("gives way to the stop's own when the host printed more since", async () => {

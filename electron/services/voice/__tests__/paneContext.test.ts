@@ -59,6 +59,13 @@ vi.mock("../../voiceCommandTarget.js", () => ({
   ),
 }));
 
+const readLastMessage = vi.hoisted(() =>
+  vi.fn(async (): Promise<unknown> => ({ status: "unavailable", reason: "provider-mismatch" }))
+);
+vi.mock("../../mcp-server/terminalLastMessage.js", () => ({
+  handleTerminalReadLastMessageOwned: readLastMessage,
+}));
+
 vi.mock("../../../utils/gitUtils.js", () => ({
   getGitBranch: vi.fn(async () => "feature/voice-hosts"),
 }));
@@ -128,6 +135,7 @@ function deps() {
 }
 
 beforeEach(() => {
+  readLastMessage.mockClear();
   shared.vocabularyReads = [];
   shared.vocabularyRead = null;
   shared.commandReads = [];
@@ -178,6 +186,46 @@ describe("a host answering for a pane in its own project", () => {
     expect(shared.commandReads).toEqual([{ terminalId: OWN, timeoutMs: 1400 }]);
   });
 
+  it("reads the agent's last reply on the host, redacted, with the state it observed", async () => {
+    readLastMessage.mockResolvedValueOnce({
+      status: "ok",
+      provider: "claude",
+      message: {
+        id: "m-1",
+        text: `Set it up with TOKEN=${SECRET}\n\nShould I push the branch?`,
+        truncated: false,
+        recordedAt: 1_800_000_000_000,
+        stopReason: "end_turn",
+        nextCursor: null,
+      },
+      unansweredToolUses: [],
+      newerRecordsFollow: false,
+      fileUpdatedAt: 1_800_000_000_000,
+    });
+    pty.getTerminalAsync.mockResolvedValueOnce({
+      id: OWN,
+      cwd: `/worktrees/${OWN}`,
+      kind: "terminal",
+      agentState: "waiting",
+      lastStateChange: 1_800_000_000_500,
+    } as never);
+    const read = await answerPaneCorrection(deps(), { projectId: "proj-a", terminalId: OWN }, 1400);
+    expect(readLastMessage).toHaveBeenCalledWith(OWN, expect.anything(), expect.any(AbortSignal));
+    expect(read.agentReply).toEqual({
+      text: "Should I push the branch?",
+      truncated: false,
+      recordedAt: 1_800_000_000_000,
+      newerRecordsFollow: false,
+      observedState: { state: "waiting", lastStateChangeAt: 1_800_000_000_500 },
+    });
+  });
+
+  it("answers in its old shape when the agent's reply can't be read", async () => {
+    const read = await answerPaneCorrection(deps(), { projectId: "proj-a", terminalId: OWN }, 1400);
+    expect(read).not.toHaveProperty("agentReply");
+    expect(read.terminalOutput).toContain("hostPaneOf reads the view key");
+  });
+
   it("searches the terminal's worktree for spoken references", async () => {
     const candidates = await answerPaneFileCandidates(
       deps(),
@@ -214,9 +262,11 @@ describe("nothing from another project's pane reaches the Shell", () => {
       1400
     );
     expect(read.terminalOutput).toBeNull();
+    expect(read).not.toHaveProperty("agentReply");
     expect(read.commandTarget).toBeNull();
     expect(read.vocabulary).toEqual([]);
     expect(pty.getTerminalSnapshot).not.toHaveBeenCalled();
+    expect(readLastMessage).not.toHaveBeenCalled();
   });
 
   it("reads a terminal filed under no project as no terminal", async () => {

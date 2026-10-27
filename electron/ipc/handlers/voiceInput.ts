@@ -58,7 +58,10 @@ import {
   screenDictationWorktree,
   withinBudget,
 } from "../../services/voiceContextKeyterms.js";
-import { readTerminalOutputForCorrection } from "../../services/voiceTerminalContext.js";
+import {
+  readTerminalContextForCorrection,
+  type TerminalCorrectionContext,
+} from "../../services/voiceTerminalContext.js";
 import {
   flattenDictationNames,
   gatherDictationContext,
@@ -965,12 +968,17 @@ interface CorrectionPrep {
   readonly projectInfo: Promise<{ name?: string; path?: string }>;
   readonly vocabulary: Promise<VoiceDictionaryEntry[]>;
   readonly commandTarget: Promise<VoiceCommandTarget | null>;
-  // What the terminal showed as the stop landed, read while the stop drains.
-  // Read only then: it goes to OpenAI with the passages and nothing earlier.
-  terminalOutput: Promise<string | null> | null;
+  // What the terminal showed, and its agent's transcript last recorded, as
+  // the stop landed, read while the stop drains. Read only then: it goes to
+  // OpenAI with the passages and nothing earlier.
+  terminalContext: Promise<TerminalCorrectionContext> | null;
   // A host's pane as the stop landed: the host answers with its terminal's
-  // output and the commands it takes by then in one read.
+  // output, its agent's reply and the commands it takes by then in one read.
   hostStop: Promise<PaneCorrectionContext | null> | null;
+}
+
+function terminalContextOf(read: PaneCorrectionContext | null): TerminalCorrectionContext {
+  return { terminalOutput: read?.terminalOutput ?? null, agentReply: read?.agentReply ?? null };
 }
 
 let correctionPreps: CorrectionPrep[] = [];
@@ -1183,16 +1191,14 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     session.fileLinkJobs.add(job);
   };
 
-  // What a prepared session's terminal shows now. The output follows the
-  // keyterms' ownership rule: none for a terminal another project owns. A
-  // host's pane is read on the host.
-  const readStopOutput = (prep: CorrectionPrep): Promise<string | null> => {
+  // What a prepared session's terminal shows now, and its agent's last
+  // reply. Both follow the keyterms' ownership rule: none for a terminal
+  // another project owns. A host's pane is read on the host.
+  const readStopContext = (prep: CorrectionPrep): Promise<TerminalCorrectionContext> => {
     const hostPane = hostPaneFor(prep.projectId, prep.outsideView);
-    if (hostPane) {
-      return readHostStop(prep, hostPane).then((read) => read?.terminalOutput ?? null);
-    }
+    if (hostPane) return readHostStop(prep, hostPane).then(terminalContextOf);
     const target = resolveKeytermTarget(prep.projectId, prep.terminalId, deps.ptyClient);
-    return readTerminalOutputForCorrection(deps.ptyClient, target.terminalId);
+    return readTerminalContextForCorrection(deps.ptyClient, target.terminalId);
   };
 
   // Drains the provider a session owns, keeping its subscription up so the
@@ -1202,7 +1208,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     reason: "stopped" | "superseded"
   ): Promise<{ rawText: string | null }> => {
     // The renderer cleans up what was dictated once this resolves, so its
-    // socket and the terminal's output are got ready while the drain runs.
+    // socket and the terminal's context are got ready while the drain runs.
     const readyCorrection = (): boolean => {
       if (reason !== "stopped" || session.intent !== "dictation" || session.ended) return false;
       if (!mayCorrect(getVoiceSettings())) return false;
@@ -1211,8 +1217,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       return true;
     };
     const prep = session.correctionPrep;
-    if (readyCorrection() && prep && !prep.terminalOutput) {
-      prep.terminalOutput = readStopOutput(prep);
+    if (readyCorrection() && prep && !prep.terminalContext) {
+      prep.terminalContext = readStopContext(prep);
     }
     session.stopPromise = (async () => {
       // The renderer sends every chunk it captured before this stop, so audio
@@ -1431,7 +1437,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
             resolveKeytermTarget(session.projectId, terminalId, deps.ptyClient).terminalId,
             COMMAND_TARGET_CORRECTION_BUDGET_MS
           ),
-      terminalOutput: null,
+      terminalContext: null,
       hostStop: null,
     };
     session.correctionPrep = prep;
@@ -2327,7 +2333,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     projectInfo: { name?: string; path?: string };
     vocabulary: VoiceDictionaryEntry[];
     commandTarget: VoiceCommandTarget | null;
-    terminalOutput: string | null;
+    terminalContext: TerminalCorrectionContext;
   }> => {
     const hostPane = hostPaneFor(viewProjectId, outsideView);
     if (hostPane) {
@@ -2339,26 +2345,26 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         projectInfo: projectInfoOf(read?.project),
         vocabulary: read?.vocabulary ?? [],
         commandTarget: read?.commandTarget ?? null,
-        terminalOutput: read?.terminalOutput ?? null,
+        terminalContext: terminalContextOf(read),
       };
     }
-    // The terminal's output follows the keyterms' ownership rule: terminalId
-    // is empty for a terminal another project owns.
+    // The terminal's output and its agent's reply follow the keyterms'
+    // ownership rule: terminalId is empty for a terminal another project owns.
     const { terminalId } = resolveKeytermTarget(viewProjectId, requestedTerminalId, deps.ptyClient);
-    const [vocabulary, commandTarget, terminalOutput] = await Promise.all([
+    const [vocabulary, commandTarget, terminalContext] = await Promise.all([
       readVocabulary(
         outsideView
           ? null
           : resolveVocabularyProject(viewProjectId, requestedTerminalId, deps.ptyClient)
       ),
       resolveVoiceCommandTarget(deps.ptyClient, terminalId, COMMAND_TARGET_CORRECTION_BUDGET_MS),
-      readTerminalOutputForCorrection(deps.ptyClient, terminalId),
+      readTerminalContextForCorrection(deps.ptyClient, terminalId),
     ]);
     return {
       projectInfo: outsideView ? {} : getProjectInfo(viewProjectId),
       vocabulary,
       commandTarget,
-      terminalOutput,
+      terminalContext,
     };
   };
 
@@ -2570,33 +2576,33 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     let projectInfo: { name?: string; path?: string };
     let vocabulary: VoiceDictionaryEntry[];
     let commandTarget: VoiceCommandTarget | null;
-    let terminalOutput: string | null;
+    let terminalContext: TerminalCorrectionContext;
     if (prep) {
       // A chunk of a dictation still running (#14772) reads a host's pane as
       // it is now; only the read taken as the stop lands is kept, for the
       // stop-time pass.
       const hostPane = hostPaneFor(prep.projectId, prep.outsideView);
       const hostNow =
-        hostPane && !prep.terminalOutput && !prep.hostStop
+        hostPane && !prep.terminalContext && !prep.hostStop
           ? readHostPaneCorrection(hostPane, prep.terminalId, {
               timeoutMs: COMMAND_TARGET_CORRECTION_BUDGET_MS,
             })
           : undefined;
-      [projectInfo, vocabulary, commandTarget, terminalOutput] = await Promise.all([
+      [projectInfo, vocabulary, commandTarget, terminalContext] = await Promise.all([
         prep.projectInfo,
         prep.vocabulary,
         currentCommandTarget(prep, hostNow),
-        prep.terminalOutput ??
-          (hostNow ? hostNow.then((read) => read?.terminalOutput ?? null) : readStopOutput(prep)),
+        prep.terminalContext ?? (hostNow ? hostNow.then(terminalContextOf) : readStopContext(prep)),
       ]);
     } else {
-      ({ projectInfo, vocabulary, commandTarget, terminalOutput } = await readCorrectionContext(
+      ({ projectInfo, vocabulary, commandTarget, terminalContext } = await readCorrectionContext(
         ctx.projectId,
         request.terminalId,
         outsideView
       ));
     }
     const context = sessionContext ? await sessionContext : NO_SESSION_CONTEXT;
+    const { terminalOutput, agentReply } = terminalContext;
     const recentPrompts = ownRecentPrompts(ctx.projectId, request);
     // Read where the repository names were, and only for rules that say what
     // code names are: Luna's never learned of them.
@@ -2615,6 +2621,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         recentContext: request.recentContext,
         ...(recentPrompts ? { recentPrompts } : {}),
         ...(terminalOutput ? { terminalOutput } : {}),
+        ...(agentReply ? { agentReply } : {}),
         ...(codeNames.length > 0 ? { codeNames } : {}),
         reason: "stop",
         startsPrompt: request.startsPrompt === true,
