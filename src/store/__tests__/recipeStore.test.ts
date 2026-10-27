@@ -4163,12 +4163,12 @@ describe("plugin recipe panels, variables and agent tools (#13797)", () => {
     );
 
     expect(addTerminalMock).toHaveBeenCalledTimes(2);
-    expect(addTerminalMock.mock.calls[0]?.[0].firstPrompt).toEqual({
+    expect(addTerminalMock.mock.calls[0]?.[0].launchPrompt).toEqual({
       text: "Review Invoice 42\n\nReport back.",
       via: "launch",
       at: expect.any(Number),
     });
-    expect(addTerminalMock.mock.calls[1]?.[0]).not.toHaveProperty("firstPrompt");
+    expect(addTerminalMock.mock.calls[1]?.[0]).not.toHaveProperty("launchPrompt");
   });
 
   it("refuses a panel kind that is no longer the contributing plugin's", async () => {

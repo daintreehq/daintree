@@ -1456,7 +1456,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
               agentPresetColor: preset?.color,
               env: finalEnv,
               exitBehavior: terminal.exitBehavior,
-              ...(firstPrompt && { firstPrompt }),
+              ...(firstPrompt && { launchPrompt: firstPrompt }),
               spawnedBy,
               focusPolicy,
               bypassLimits: true,

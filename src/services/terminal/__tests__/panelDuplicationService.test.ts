@@ -203,7 +203,7 @@ describe("buildPanelSnapshotOptions", () => {
     const reopened = buildPanelSnapshotOptions(
       makePanel({ launchAgentId: "claude", command: "claude 'Port the parser'", firstPrompt })
     );
-    expect(reopened?.firstPrompt).toEqual(firstPrompt);
+    expect(reopened?.launchPrompt).toEqual(firstPrompt);
 
     const sent = buildPanelSnapshotOptions(
       makePanel({
@@ -212,7 +212,7 @@ describe("buildPanelSnapshotOptions", () => {
         firstPrompt: { text: "Port the parser", via: "send", at: 1_000 },
       })
     );
-    expect(sent).not.toHaveProperty("firstPrompt");
+    expect(sent).not.toHaveProperty("launchPrompt");
   });
 
   it("keeps a recipe agent's required plugin tools on the reopened pane (#14096)", () => {
@@ -337,8 +337,8 @@ describe("panelDuplicationService", () => {
     );
 
     expect(result.command).toBe("claude 'Port the parser'");
-    expect(result.firstPrompt).toMatchObject({ text: "Port the parser", via: "launch" });
-    expect(result.firstPrompt?.at).toBeGreaterThan(firstPrompt.at);
+    expect(result.launchPrompt).toMatchObject({ text: "Port the parser", via: "launch" });
+    expect(result.launchPrompt?.at).toBeGreaterThan(firstPrompt.at);
   });
 
   it("gives a copy rebuilt from settings no record, since it was never handed the prompt (#14592)", async () => {
@@ -355,7 +355,7 @@ describe("panelDuplicationService", () => {
     );
 
     expect(result.command).toBe("generated-claude-command");
-    expect(result).not.toHaveProperty("firstPrompt");
+    expect(result).not.toHaveProperty("launchPrompt");
   });
 
   it("uses existing command for unregistered agents", async () => {

@@ -260,11 +260,17 @@ export interface AddPanelOptionsBase {
    */
   scratchpad?: TerminalScratchpad;
   /**
-   * PTY-only. The first prompt Daintree delivered to the run (#14592), from a
-   * launch that carried one or carried by restore. A live panel's own record
-   * outranks this when the call lands on an existing record.
+   * PTY-only. The first prompt a run already has (#14592), carried by restore,
+   * a resume or a rollback. A live panel's own record outranks this when the
+   * call lands on an existing record.
    */
   firstPrompt?: TerminalFirstPrompt;
+  /**
+   * PTY-only. The first prompt this launch hands its agent (#14592), recorded
+   * on the pane only once its process starts, so a launch that never starts
+   * claims nothing.
+   */
+  launchPrompt?: TerminalFirstPrompt;
   /**
    * User-initiated focus timestamp from the saved snapshot, propagated
    * from the hydration boundary (`statePatcher.ts:buildArgsFor*` →

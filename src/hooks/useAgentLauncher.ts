@@ -549,7 +549,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               agentModelId: launchOptions?.modelId,
               agentSessionId: assignedSessionId,
               handbackCode: launchOptions?.handbackCode,
-              ...(firstPrompt && { firstPrompt }),
+              ...(firstPrompt && { launchPrompt: firstPrompt }),
               agentPresetId: preset?.id,
               agentPresetColor: preset?.color,
               env: plan.env,
@@ -608,7 +608,8 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               agentPresetColor: preset?.color,
               spawnStatus: "missing-cli",
               // "Run anyway" replays the gate's command, prompt included, so
-              // the gate holds the launch's record until then.
+              // the gate holds the launch's record for it. Review Hub shows
+              // none for a gate, where nothing ran.
               ...(firstPrompt && { firstPrompt }),
               startedAt: Date.now(),
               isVisible: true,

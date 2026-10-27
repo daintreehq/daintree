@@ -339,7 +339,7 @@ describe("useAgentLauncher — the launch prompt record (#14592)", () => {
       });
     });
 
-    expect(launchedOptions().firstPrompt).toEqual({
+    expect(launchedOptions().launchPrompt).toEqual({
       text: "Fix the flaky test",
       via: "launch",
       at: expect.any(Number),
@@ -353,7 +353,7 @@ describe("useAgentLauncher — the launch prompt record (#14592)", () => {
       await result.current.launchAgent("claude", { force: true, prompt: "Line one\nline two" });
     });
 
-    expect(launchedOptions().firstPrompt).toMatchObject({ text: "Line one\nline two" });
+    expect(launchedOptions().launchPrompt).toMatchObject({ text: "Line one\nline two" });
   });
 
   it("writes no record for a launch with no prompt, or one that starts no agent", async () => {
@@ -367,7 +367,7 @@ describe("useAgentLauncher — the launch prompt record (#14592)", () => {
     });
 
     expect(addPanel).toHaveBeenCalledTimes(2);
-    expect(addPanel.mock.calls[0]?.[0]).not.toHaveProperty("firstPrompt");
-    expect(addPanel.mock.calls[1]?.[0]).not.toHaveProperty("firstPrompt");
+    expect(addPanel.mock.calls[0]?.[0]).not.toHaveProperty("launchPrompt");
+    expect(addPanel.mock.calls[1]?.[0]).not.toHaveProperty("launchPrompt");
   });
 });

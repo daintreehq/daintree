@@ -176,25 +176,11 @@ describe("ReviewHubContext", () => {
     expect(brief?.querySelector(".line-clamp-4")).toBeNull();
   });
 
-  it("claims nothing for a launch whose first spawn failed", () => {
-    worktrees.set("wt-1", { id: "wt-1", path: "/repo/wt" });
+  it("still shows what a run was asked when a later restart of it fails", () => {
     panelsById.a = terminal("a", {
       spawnStatus: "failed",
-      firstPrompt: { text: "Never started", via: "launch", at: NOW },
-    });
-    const { container } = render(<ReviewHubContext worktreePath="/repo/wt" worktreeId="wt-1" />);
-    expect(container.firstChild).toBeNull();
-  });
-
-  it.each([
-    ["was restarted", { restartKey: 1 }],
-    ["was restored", { restoreProvenance: { at: NOW, disposition: "resume" } }],
-    ["was seen running its agent", { everDetectedAgent: true }],
-  ])("still shows the prompt of a run that %s when a later spawn fails", (_label, ran) => {
-    panelsById.a = terminal("a", {
-      spawnStatus: "failed",
+      restartKey: 1,
       firstPrompt: { text: "Delivered earlier", via: "launch", at: NOW },
-      ...ran,
     });
     const { getByTestId } = render(<ReviewHubContext worktreePath="/repo/wt" worktreeId="wt-1" />);
     expect(getByTestId("review-hub-first-prompt").textContent).toContain("Delivered earlier");

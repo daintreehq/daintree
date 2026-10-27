@@ -1,7 +1,7 @@
 import type { AgentId } from "@shared/types/agent";
 import type { PanelRegistryStoreApi } from "./types";
 import type { AddPanelOptions } from "@shared/types/addPanelOptions";
-import { isPtyPanel, type PanelLocation } from "@shared/types/panel";
+import { isPtyPanel, type PanelLocation, type PtyPanelData } from "@shared/types/panel";
 import { terminalClient } from "@/clients";
 import {
   load as loadTerminalService,
@@ -177,6 +177,17 @@ export function enqueuePtyStartup(
   // Any pane waits for control of its project (#13913), save the assistant
   // and dialog panes, whose own surfaces handle a launch that didn't start.
   const holdsForDriveLease = location !== "overlay" && location !== "dialog";
+  // The launch's prompt becomes the pane's record once its process is running
+  // (#14592); a spawn that fails or is refused never delivered it.
+  const started = <T extends PtyPanelData>(current: T): T =>
+    options.launchPrompt && !current.firstPrompt
+      ? { ...current, firstPrompt: options.launchPrompt }
+      : current;
+  const persistLaunchPrompt = (): void => {
+    if (!options.launchPrompt) return;
+    const after = get();
+    saveNormalized(after.panelsById, after.panelIds);
+  };
   const isStillStarting = (): boolean => {
     const current = get().panelsById[id];
     return (
@@ -194,9 +205,10 @@ export function enqueuePtyStartup(
       if (!current || !isPtyPanel(current) || current.spawnStatus !== "spawning") return state;
       adopted = true;
       return {
-        panelsById: { ...state.panelsById, [id]: { ...current, spawnStatus: "ready" } },
+        panelsById: { ...state.panelsById, [id]: { ...started(current), spawnStatus: "ready" } },
       };
     });
+    if (adopted) persistLaunchPrompt();
     // What it printed before this pane attached comes from the host's record.
     if (adopted) {
       fetchAndRestoreTerminal(id).catch((error: unknown) => {
@@ -449,9 +461,13 @@ export function enqueuePtyStartup(
             if (!isPtyPanel(current) || current.spawnStatus !== "spawning") return state;
             mountedPanel = true;
             return {
-              panelsById: { ...state.panelsById, [id]: { ...current, spawnStatus: "ready" } },
+              panelsById: {
+                ...state.panelsById,
+                [id]: { ...started(current), spawnStatus: "ready" },
+              },
             };
           });
+          if (mountedPanel) persistLaunchPrompt();
           if (orphaned) {
             terminalClient.kill(id).catch((killError) => {
               logWarn("[TerminalStore] Compensating kill after orphan spawn failed", {

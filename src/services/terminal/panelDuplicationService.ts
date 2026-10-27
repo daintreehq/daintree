@@ -317,7 +317,7 @@ export function buildPanelSnapshotOptions(panel: PanelInstance): AddPanelOptions
       callerLaunchFlags: panel.callerLaunchFlags ? [...panel.callerLaunchFlags] : undefined,
       // A reopened recipe agent is still held to its plugin's tools (#14096).
       requiredPluginTools: panel.requiredPluginTools ? [...panel.requiredPluginTools] : undefined,
-      ...(firstPrompt && { firstPrompt }),
+      ...(firstPrompt && { launchPrompt: firstPrompt }),
     };
   }
 
@@ -453,7 +453,7 @@ export async function buildPanelDuplicateOptions(
       requiredPluginTools: sourcePanel.requiredPluginTools
         ? [...sourcePanel.requiredPluginTools]
         : undefined,
-      ...(replaysSourceCommand && launchPrompt && { firstPrompt: launchPrompt }),
+      ...(replaysSourceCommand && launchPrompt && { launchPrompt }),
     };
   }
 

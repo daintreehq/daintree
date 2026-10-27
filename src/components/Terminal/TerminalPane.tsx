@@ -519,7 +519,7 @@ function TerminalPaneComponent({
     // The notes belong to the pane the user was looking at; the launch that
     // replaces it takes them over (#12835). It replays the gate's command, so
     // the launch's first prompt goes with it (#14592).
-    void addPanel({ ...options, scratchpad: panel.scratchpad, firstPrompt: panel.firstPrompt });
+    void addPanel({ ...options, scratchpad: panel.scratchpad, launchPrompt: panel.firstPrompt });
   };
 
   /**

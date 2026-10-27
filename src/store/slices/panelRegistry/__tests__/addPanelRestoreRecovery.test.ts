@@ -390,6 +390,59 @@ describe("addPanel — scratchpad carry onto an existing record (#12835)", () =>
   });
 });
 
+describe("addPanel — a launch's prompt is recorded once its process starts (#14592)", () => {
+  const launchPrompt = { text: "Port the parser", via: "launch" as const, at: 1_000 };
+
+  beforeEach(async () => {
+    await usePanelStore.getState().reset();
+    spawn.mockReset();
+    spawn.mockImplementation(async ({ id }) => id ?? "spawn-id");
+    usePanelLimitStore.setState({ softWarningLimit: 100, confirmationLimit: 200, hardLimit: 300 });
+  });
+
+  function launch(id: string) {
+    return usePanelStore.getState().addPanel({
+      kind: "terminal",
+      requestedId: id,
+      launchAgentId: "claude",
+      command: "claude 'Port the parser'",
+      cwd: "/repo",
+      launchPrompt,
+      bypassLimits: true,
+    });
+  }
+
+  it("records it when the spawn starts the agent", async () => {
+    let release: () => void = () => {};
+    spawn.mockImplementation(
+      ({ id }) =>
+        new Promise((resolve) => {
+          release = () => resolve(id ?? "spawn-id");
+        })
+    );
+    await launch("p1");
+    await drainMicrotasks();
+    // Committed and spawning, but nothing has been handed the prompt yet.
+    expect(ptyPanel("p1")?.spawnStatus).toBe("spawning");
+    expect(ptyPanel("p1")?.firstPrompt).toBeUndefined();
+
+    release();
+    await drainMicrotasks();
+
+    expect(ptyPanel("p1")?.spawnStatus).toBe("ready");
+    expect(ptyPanel("p1")?.firstPrompt).toEqual(launchPrompt);
+  });
+
+  it("records nothing when the spawn fails", async () => {
+    spawn.mockRejectedValue(new Error("spawn failed"));
+    await launch("p1");
+    await drainMicrotasks();
+
+    expect(ptyPanel("p1")?.spawnStatus).toBe("failed");
+    expect(ptyPanel("p1")?.firstPrompt).toBeUndefined();
+  });
+});
+
 describe("addPanel — the run's first prompt on an existing record (#14592)", () => {
   const firstPrompt = { text: "Port the parser", via: "launch" as const, at: 1_000 };
 
