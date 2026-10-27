@@ -195,7 +195,8 @@ export function buildInputBarTheme(theme: ITheme): Extension {
         background: `color-mix(in oklab, ${c.foreground} 14%, ${c.shellBg})`,
       },
       // The dictation restore control borrows the remove control's quiet ink
-      // and hit area.
+      // and hit area, all of it to the right: the gap before it is where a
+      // click puts the caret after the passage.
       ".cm-voice-restore": {
         position: "relative",
         display: "inline-flex",
@@ -203,7 +204,7 @@ export function buildInputBarTheme(theme: ITheme): Extension {
         justifyContent: "center",
         width: "16px",
         height: "16px",
-        marginLeft: "4px",
+        marginLeft: "6px",
         verticalAlign: "-3px",
         borderRadius: "var(--radius-xs)",
         color: `color-mix(in oklab, ${c.foreground} 55%, ${c.shellBg})`,
@@ -213,7 +214,7 @@ export function buildInputBarTheme(theme: ITheme): Extension {
       ".cm-voice-restore::before": {
         content: '""',
         position: "absolute",
-        inset: "-4px",
+        inset: "-4px -4px -4px 0",
       },
       ".cm-voice-restore svg": {
         width: "12px",
@@ -263,10 +264,13 @@ export function buildInputBarTheme(theme: ITheme): Extension {
       "&.cm-chip-staging .cm-selectionBackground": {
         background: "transparent !important",
       },
+      // Italic is what sets words not yet written apart from the draft, so it
+      // can't rest on colour alone. The mono face ships no italic and the app
+      // turns synthesis off, so the ghost asks for a slanted regular.
       ".cm-voice-interim": {
-        opacity: "0.55",
+        color: c.interim,
         fontStyle: "italic",
-        transition: `opacity ${UI_ANIMATION_DURATION}ms ease-out`,
+        fontSynthesis: "style",
       },
       ".cm-voice-pending-ai": {
         textDecorationLine: "underline",
@@ -285,9 +289,10 @@ export function buildInputBarTheme(theme: ITheme): Extension {
         textDecorationThickness: "2px",
         textUnderlineOffset: "3px",
       },
-      // Words dropped with nothing written in their place: a short stroke of
-      // the same underline across the gap they left. Zero-width, so the text
-      // around it does not move.
+      // Words dropped with nothing written in their place: a caret pointing up
+      // at the gap they left, in the underline's hue. A flat stroke there read
+      // as an underscore joining the words. Zero-width, so the text around it
+      // does not move; drawn with borders, which forced colours keep.
       ".cm-voice-corrected-gap": {
         display: "inline-block",
         position: "relative",
@@ -297,14 +302,25 @@ export function buildInputBarTheme(theme: ITheme): Extension {
       ".cm-voice-corrected-gap::after": {
         content: '""',
         position: "absolute",
-        top: "3px",
+        top: "5px",
         left: "calc(0.5ch - 3px)",
         width: "6px",
-        height: "2px",
-        background: `color-mix(in oklab, ${c.successColor} 82%, transparent)`,
+        height: "6px",
+        boxSizing: "border-box",
+        borderLeft: `2px solid color-mix(in oklab, ${c.successColor} 82%, transparent)`,
+        borderTop: `2px solid color-mix(in oklab, ${c.successColor} 82%, transparent)`,
+        transform: "rotate(45deg)",
       },
       '.cm-voice-corrected-gap[data-side="before"]::after': {
         left: "calc(-0.5ch - 3px)",
+      },
+      "@media (prefers-contrast: more)": {
+        ".cm-voice-pending-ai, .cm-voice-corrected": {
+          textDecorationColor: c.successColor,
+        },
+        ".cm-voice-corrected-gap::after": {
+          borderColor: c.successColor,
+        },
       },
       '[data-voice-active="true"] & .cm-content': {
         caretColor: c.voiceCursor,
@@ -492,6 +508,28 @@ function selectionInside(selection: EditorSelection, from: number, to: number): 
   );
 }
 
+/** The rewrite already shown at `from`, if it still ends clear of the selection. */
+function heldRewrite(
+  value: DecorationSet,
+  from: number,
+  to: number,
+  selection: EditorSelection
+): Range<Decoration> | null {
+  let held: Range<Decoration> | null = null;
+  value.between(from, from, (start, end, decoration) => {
+    if (
+      !held &&
+      start === from &&
+      end <= to &&
+      decoration.spec.widget instanceof CorrectionRewriteWidget &&
+      !selectionInside(selection, start, end)
+    ) {
+      held = decoration.range(start, end);
+    }
+  });
+  return held;
+}
+
 function revealUnderSelection(value: DecorationSet, selection: EditorSelection): DecorationSet {
   const revealed: Range<Decoration>[] = [];
   value.between(0, Number.MAX_SAFE_INTEGER, (from, to, decoration) => {
@@ -546,21 +584,33 @@ export const pendingAIField = StateField.define({
           const to = Math.min(docLen, r.to);
           if (from >= to) continue;
           let rewriteTo = r.rewrite ? Math.min(to, r.rewrite.to) : from;
-          if (selectionInside(tr.state.selection, from, rewriteTo)) rewriteTo = from;
-          if (r.rewrite && rewriteTo > from) {
-            decorations.push(
-              Decoration.replace({ widget: new CorrectionRewriteWidget(r.rewrite.text) }).range(
-                from,
-                rewriteTo
-              )
-            );
+          let rewrite: Range<Decoration> | null =
+            r.rewrite && rewriteTo > from
+              ? Decoration.replace({ widget: new CorrectionRewriteWidget(r.rewrite.text) }).range(
+                  from,
+                  rewriteTo
+                )
+              : null;
+          // A locked composer draws no caret, so nothing would sit hidden.
+          if (
+            rewrite &&
+            !tr.state.readOnly &&
+            selectionInside(tr.state.selection, from, rewriteTo)
+          ) {
+            // The stream waits at the caret rather than taking back what it
+            // already wrote: a rewrite never steps backwards.
+            rewrite = heldRewrite(value, from, to, tr.state.selection);
+            rewriteTo = rewrite?.to ?? from;
           }
+          if (rewrite) decorations.push(rewrite);
           if (rewriteTo < to) decorations.push(pendingAIMark.range(rewriteTo, to));
         }
         return decorations.length > 0 ? Decoration.set(decorations, true) : Decoration.none;
       }
     }
-    return tr.selection || tr.docChanged ? revealUnderSelection(value, tr.state.selection) : value;
+    return (tr.selection || tr.docChanged || tr.reconfigured) && !tr.state.readOnly
+      ? revealUnderSelection(value, tr.state.selection)
+      : value;
   },
   provide: (f) => EditorView.decorations.from(f),
 });
@@ -618,6 +668,15 @@ export function createAutoSize(config: AutoSizeConfig = {}) {
       return;
 
     const view = update.view;
+    // A cleanup changes its passage's length as it streams; the composer keeps
+    // the height it had until the correction lands, scrolling inside it if the
+    // rewrite runs longer, so the pane above is resized once rather than a
+    // line at a time. Typing, and dictation still arriving, size it as ever.
+    const holdHeight =
+      lastHeight > 0 &&
+      !update.docChanged &&
+      (update.state.field(pendingAIField, false)?.size ?? 0) > 0 &&
+      !update.state.field(interimWidgetField, false)?.text;
 
     view.requestMeasure({
       read() {
@@ -634,12 +693,14 @@ export function createAutoSize(config: AutoSizeConfig = {}) {
         return computeAutoSize(view.contentHeight, lineHeight, maxHeightPx, isEmpty);
       },
       write(measured) {
-        if (measured.next !== lastHeight) {
-          lastHeight = measured.next;
-          view.dom.style.height = `${measured.next}px`;
+        const next = holdHeight ? lastHeight : measured.next;
+        if (next !== lastHeight) {
+          lastHeight = next;
+          view.dom.style.height = `${next}px`;
         }
 
-        const newOverflowY = measured.shouldScroll ? "auto" : "hidden";
+        const overflows = measured.shouldScroll || (holdHeight && measured.next > lastHeight);
+        const newOverflowY = overflows ? "auto" : "hidden";
         if (newOverflowY !== lastOverflowY) {
           lastOverflowY = newOverflowY;
           view.scrollDOM.style.overflowY = newOverflowY;

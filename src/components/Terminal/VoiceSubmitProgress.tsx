@@ -6,6 +6,7 @@ import {
   UI_EXIT_DURATION,
   UI_INLINE_LOADING_GATE_MS,
 } from "@/lib/animationUtils";
+import type { VoiceCorrectionRange } from "@/store/voiceRecordingStore";
 import type { VoiceSubmitOutcome, VoiceSubmitWait } from "./hooks/useVoiceWaitSubmit";
 
 /** How far the drain's creep reaches: the correction after it owns the rest of the bar. */
@@ -23,7 +24,6 @@ const OVERRUN_CREEP_MS = 6_000;
 const UNESTIMATED_MS = 1_200;
 const CREEP_EASING = "cubic-bezier(0.25, 0.6, 0.4, 1)";
 const MIN_SEGMENT_MS = UI_ANIMATION_DURATION;
-const WASH_FEATHER_PX = 32;
 const SENT_EXIT_MS = UI_ANIMATION_DURATION + UI_EXIT_DURATION;
 
 const at = (p: number): Keyframe => ({ transform: `translateX(${(p - 1) * 100}%)` });
@@ -42,13 +42,48 @@ function restart(el: HTMLElement, keyframes: Keyframe[], options: KeyframeAnimat
   return animation;
 }
 
-function waitCaption(wait: VoiceSubmitWait): string {
+/**
+ * A caption on the shell's top border, like a legend: it adds no row and
+ * covers none of the draft. Centred on the border, it masks only the border's
+ * own row, so whatever the shell paints beneath shows through its lower half.
+ */
+export const COMPOSER_BORDER_CAPTION_CLASS =
+  "pointer-events-none absolute -top-2 right-2.5 bg-[linear-gradient(transparent_6px,var(--ib-pane)_6px,var(--ib-pane)_8px,transparent_8px)] px-1.5 text-xs leading-4 whitespace-nowrap text-[var(--ib-wait-caption)]";
+
+/**
+ * How much of the passages being cleaned the cleanup has written so far, by
+ * dictated length, or null before any of it has streamed back. With
+ * `sessions`, only those sessions' passages count: a dictation started while
+ * a send waits is the next prompt's.
+ */
+export function correctionStreamShare(
+  ranges: readonly VoiceCorrectionRange[],
+  sessions?: ReadonlySet<string>
+): number | null {
+  let total = 0;
+  let written = 0;
+  let streaming = false;
+  for (const range of ranges) {
+    if (range.to <= range.from) continue;
+    if (sessions && range.session && !sessions.has(range.session)) continue;
+    total += range.to - range.from;
+    if (!range.rewrite) continue;
+    streaming = true;
+    written += Math.min(range.rewrite.to, range.to) - range.from;
+  }
+  return streaming && total > 0 ? Math.max(0, written / total) : null;
+}
+
+/** The wait's caption: what it waits on, and the way out. */
+export function voiceSubmitWaitCaption(wait: VoiceSubmitWait): string {
   return `${wait.phase === "polishing" ? "Polishing…" : "Finishing…"} · Esc to cancel`;
 }
 
 interface VoiceSubmitProgressProps {
   wait: VoiceSubmitWait | null;
   outcome: VoiceSubmitOutcome | null;
+  /** The cleanup's own progress once it streams (`correctionStreamShare`). */
+  streamed?: number | null;
   /**
    * Whether anything is on screen, exit included: the shell holds back its
    * focus ring meanwhile, which would otherwise strike through the caption.
@@ -57,25 +92,32 @@ interface VoiceSubmitProgressProps {
 }
 
 /**
- * The composer shell as the voice send's progress bar: a wash behind the
- * draft and a trace along its foot, the trace carrying the contrast, with a
- * caption on the top border. All of it paints from the shell's `--ib-wait-*`
- * colours.
+ * The voice send's progress: a thin bar along the shell's foot, with a
+ * caption on the top border. The draft above it is left alone, still and
+ * readable, while the cleanup writes over it. All of it paints from the
+ * shell's `--ib-wait-*` colours.
  *
- * The fill never moves back; each phase picks up where the last left it. The
+ * The bar never moves back; each phase picks up where the last left it. The
  * drain has no end anyone knows, so it creeps toward a ceiling. The
- * correction's wait lasts as long as its request does (#14780), so the fill
- * paces to when past corrections say it lands, most of the way there by then,
- * and creeps on toward a ceiling of its own past that. Only a send the
- * composer took brings it to full, the caption turning to a receipt as it
- * fades; one still being handed over holds where it stands, saying so. Escape,
- * or a send held back, lets it fade where it stands, caption and all. A wait
- * that ends inside the gate leaves nothing to take down; a handover that
- * outlasts it still shows. Mount one per attempt (keyed), so each attempt
- * gets its own gate and no fill carries over from the last.
+ * correction's wait lasts as long as its request does (#14780), so the bar
+ * paces to when past corrections say it lands, and once the cleanup writes,
+ * follows it. Only a send the composer took brings it to full, the caption
+ * turning to a receipt as it fades; one still being handed over holds where it
+ * stands, saying so. Escape, or a send held back, lets it fade where it
+ * stands, caption and all. A wait that ends inside the gate leaves nothing to
+ * take down; a handover that outlasts it still shows. Mount one per attempt
+ * (keyed), so each attempt gets its own gate and no bar carries over from the
+ * last.
  */
-export function VoiceSubmitProgress({ wait, outcome, onPresentChange }: VoiceSubmitProgressProps) {
+export function VoiceSubmitProgress({
+  wait,
+  outcome,
+  streamed = null,
+  onPresentChange,
+}: VoiceSubmitProgressProps) {
   const fillRef = useRef<HTMLDivElement>(null);
+  // Where the fill stood when the cleanup began writing.
+  const streamStartRef = useRef<number | null>(null);
   const captionRef = useRef<HTMLDivElement>(null);
   const [exiting, setExiting] = useState(false);
   const [wasShown, setWasShown] = useState(false);
@@ -86,9 +128,10 @@ export function VoiceSubmitProgress({ wait, outcome, onPresentChange }: VoiceSub
   // Until the gate opens the shell alone says Enter landed.
   const shown = useDeferredLoading(active, UI_INLINE_LOADING_GATE_MS);
 
-  if (wait && waitCaption(wait) !== lastWaitCaption) setLastWaitCaption(waitCaption(wait));
+  if (wait && voiceSubmitWaitCaption(wait) !== lastWaitCaption)
+    setLastWaitCaption(voiceSubmitWaitCaption(wait));
   const caption = wait
-    ? waitCaption(wait)
+    ? voiceSubmitWaitCaption(wait)
     : outcome?.kind === "sent"
       ? "Sent"
       : outcome?.kind === "sending"
@@ -112,6 +155,15 @@ export function VoiceSubmitProgress({ wait, outcome, onPresentChange }: VoiceSub
       return;
     }
     const from = progressOf(el);
+    // Once the cleanup writes over the draft, the words are the progress: the
+    // rest of the fill follows them, so the bar and the text finish together.
+    if (streamed !== null) {
+      streamStartRef.current ??= from;
+      const start = streamStartRef.current;
+      const target = Math.max(from, start + (OVERRUN_CEILING - start) * Math.min(1, streamed));
+      restart(el, [at(from), at(target)], { duration: MIN_SEGMENT_MS, easing: "ease-out" });
+      return;
+    }
     if (from >= EXPECTED_SHARE) {
       restart(el, [at(from), at(Math.max(from, OVERRUN_CEILING))], {
         duration: OVERRUN_CREEP_MS,
@@ -131,7 +183,7 @@ export function VoiceSubmitProgress({ wait, outcome, onPresentChange }: VoiceSub
       ],
       { duration: total }
     );
-  }, [wait, shown]);
+  }, [wait, shown, streamed]);
 
   // A send still being handed over keeps the fill where it is until the
   // composer says whether it went.
@@ -187,34 +239,27 @@ export function VoiceSubmitProgress({ wait, outcome, onPresentChange }: VoiceSub
 
   return (
     <>
-      {/* Reduced motion keeps the caption and the shell's quiet outline, and no sweep. */}
+      {/* Reduced motion keeps the caption and the shell's quiet outline, and no bar. */}
       {!reduced && (
         <div
           aria-hidden="true"
           data-voice-submit-track=""
           className="pointer-events-none absolute inset-0 overflow-hidden rounded-md"
         >
+          {/* A border, not a fill: forced colours keep a border's ink. */}
           <div
             ref={fillRef}
             data-voice-submit-progress=""
-            className="absolute inset-0 border-b-2 border-[var(--ib-wait-edge)]"
-            style={{
-              // The wash feathers out ahead of the trace, so its edge never cuts
-              // a glyph in two; the trace keeps the exact extent.
-              background: `linear-gradient(to right, var(--ib-wait-fill) calc(100% - ${WASH_FEATHER_PX}px), transparent)`,
-              transform: "translateX(-100%)",
-            }}
+            className="absolute inset-x-0 bottom-0 border-b-2 border-[var(--ib-wait-edge)]"
+            style={{ transform: "translateX(-100%)" }}
           />
         </div>
       )}
-      {/* On the top border like a legend: it adds no row and covers none of
-          the draft. Centred on the border, it masks only the border's own
-          row, so the progress beneath shows through its lower half. */}
       <div
         ref={captionRef}
         aria-hidden="true"
         data-voice-submit-caption=""
-        className="pointer-events-none absolute -top-2 right-2.5 bg-[linear-gradient(transparent_6px,var(--ib-pane)_6px,var(--ib-pane)_8px,transparent_8px)] px-1.5 text-xs leading-4 whitespace-nowrap text-[var(--ib-wait-caption)]"
+        className={COMPOSER_BORDER_CAPTION_CLASS}
       >
         {caption}
       </div>

@@ -3,7 +3,9 @@ import {
   EditorView,
   ViewPlugin,
   WidgetType,
+  showTooltip,
   type DecorationSet,
+  type Tooltip,
   type ViewUpdate,
 } from "@codemirror/view";
 import {
@@ -21,6 +23,7 @@ import { createTrustedHTML, setTrustedInnerHTML } from "@/lib/trustedTypesPolicy
 import { isMac } from "@/lib/platform";
 import { labelWithShortcut } from "@/lib/kbdShortcut";
 import {
+  UI_ANIMATION_DURATION,
   VOICE_CORRECTION_MARK_DWELL_MS,
   VOICE_CORRECTION_MARK_FADE_MS,
 } from "@/lib/animationUtils";
@@ -378,29 +381,108 @@ const reviewTimers = ViewPlugin.fromClass(
   }
 );
 
-const reviewTooltip = chipHoverTooltip((view, pos, side) => {
-  const state = view.state.field(correctionReviewField, false);
-  if (!state) return null;
-  const { review, changes, phase } = state;
-  const end = review.from + review.correctedText.length;
-  if (pos === end && side > 0) {
-    return chipTooltip({ from: end, to: end }, ".cm-voice-restore", () => [
-      chipCardText(labelWithShortcut(RESTORE_LABEL, "Cmd+Z", isMac())),
-    ]);
-  }
-  if (phase === "settled") return null;
+/**
+ * The card for the change at `pos`: a word the correction wrote (its edges
+ * included, so a one-letter change has somewhere to stand), or the gap where
+ * it dropped some.
+ */
+function changeCard(state: ReviewState, pos: number): Tooltip | null {
+  const { review, changes } = state;
   const offset = pos - review.from;
   const span = changes.changed.find((s) => offset >= s.from && offset <= s.to);
-  if (!span) return null;
-  const range = { from: review.from + span.from, to: review.from + span.to };
-  return chipTooltip(range, ".cm-voice-corrected", () => [
-    chipCardText(span.heard ? `Heard “${span.heard}”` : "Added by correction"),
+  if (span) {
+    const range = { from: review.from + span.from, to: review.from + span.to };
+    return chipTooltip(range, ".cm-voice-corrected", () => [
+      chipCardText(span.heard ? `Heard “${span.heard}”` : "Added by correction"),
+    ]);
+  }
+  // A gap mark sits on the space beside the kept word it follows (or leads).
+  const gap = changes.removed.find((g) =>
+    g.afterWord ? offset === g.at || offset === g.at + 1 : offset === g.at || offset === g.at - 1
+  );
+  if (!gap) return null;
+  const at = review.from + gap.at;
+  return chipTooltip({ from: at, to: at }, ".cm-voice-corrected-gap", () => [
+    chipCardText(`Removed “${gap.heard}”`),
   ]);
+}
+
+const dismissCaretCard = StateEffect.define<null>();
+
+/**
+ * The same card for a caret the user moves onto a change, so a keyboard
+ * learns what was heard without a pointer, for as long as the review lasts.
+ * Only a move opens or closes it: the caret dictation leaves after the
+ * passage opens nothing, and the marks' fade leaves an open card alone.
+ * Escape puts it away until the caret moves again.
+ */
+const caretCardField = StateField.define<Tooltip | null>({
+  create: () => null,
+  update(card, tr) {
+    const review = tr.state.field(correctionReviewField, false);
+    if (!review || tr.effects.some((e) => e.is(dismissCaretCard))) return null;
+    const caret = tr.state.selection.main;
+    const moved = tr.isUserEvent("select");
+    // An outside write moved the passage: the open card follows its change.
+    if (!moved && !(card && tr.docChanged)) return card;
+    const next = caret.empty ? changeCard(review, caret.head) : null;
+    // The same change keeps the same card, so moving within a word doesn't
+    // build it again.
+    return next && card && next.pos === card.pos && next.end === card.end ? card : next;
+  },
+  provide: (f) => showTooltip.from(f),
 });
+
+// An observer, so the composer's own Escape (cancel a dictation or a send)
+// runs as ever and can't keep the card from closing.
+const dismissCaretCardOnEscape = EditorView.domEventObservers({
+  keydown(event, view) {
+    if (event.key === "Escape" && view.state.field(caretCardField, false)) {
+      view.dispatch({ effects: dismissCaretCard.of(null) });
+    }
+  },
+});
+
+const reviewTooltip = chipHoverTooltip(
+  (view, pos, side) => {
+    const state = view.state.field(correctionReviewField, false);
+    if (!state) return null;
+    const { review, phase } = state;
+    const end = review.from + review.correctedText.length;
+    if (pos === end && side > 0) {
+      return chipTooltip({ from: end, to: end }, ".cm-voice-restore", () => [
+        chipCardText(labelWithShortcut(RESTORE_LABEL, "Cmd+Z", isMac())),
+      ]);
+    }
+    if (phase === "settled") return null;
+    const card = changeCard(state, pos);
+    // The caret's card for the same change is already up.
+    if (card && view.state.field(caretCardField, false)?.pos === card.pos) return null;
+    return card;
+  },
+  // A pointer card already open closes when the caret opens the same one.
+  { hideOn: (tr, tooltip) => tr.state.field(caretCardField, false)?.pos === tooltip.pos }
+);
 
 // Colour lives in the swappable input bar theme; the fade only says "to
 // nothing", so it reads whatever colour the theme gave the mark.
 const reviewFadeTheme = EditorView.baseTheme({
+  // The marks come in as a state change rather than appearing in one frame:
+  // the streamed words they land on were unmarked a moment before.
+  "@keyframes cm-voice-corrected-in": { from: { textDecorationColor: "transparent" } },
+  "@keyframes cm-voice-corrected-gap-in": { from: { opacity: "0" } },
+  ".cm-voice-corrected": {
+    animation: `cm-voice-corrected-in ${UI_ANIMATION_DURATION}ms ease-out`,
+  },
+  ".cm-voice-corrected-gap": {
+    animation: `cm-voice-corrected-gap-in ${UI_ANIMATION_DURATION}ms ease-out`,
+  },
+  "@media (prefers-reduced-motion: reduce)": {
+    ".cm-voice-corrected:not(.cm-voice-corrected-fading), .cm-voice-corrected-gap:not(.cm-voice-corrected-fading)":
+      { animation: "none" },
+  },
+  'body[data-reduce-animations="true"] .cm-voice-corrected:not(.cm-voice-corrected-fading), body[data-reduce-animations="true"] .cm-voice-corrected-gap:not(.cm-voice-corrected-fading)':
+    { animation: "none" },
   "@keyframes cm-voice-corrected-fade": { to: { textDecorationColor: "transparent" } },
   "@keyframes cm-voice-corrected-out": { to: { opacity: "0" } },
   ".cm-voice-corrected.cm-voice-corrected-fading": {
@@ -430,6 +512,8 @@ export function createCorrectionReview(options: CorrectionReviewOptions = {}): E
     reviewHistory,
     reviewTimers,
     reviewTooltip,
+    caretCardField,
+    dismissCaretCardOnEscape,
     reviewFadeTheme,
     EditorView.updateListener.of((update) => {
       for (const tr of update.transactions) {

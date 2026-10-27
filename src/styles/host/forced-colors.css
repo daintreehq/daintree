@@ -223,15 +223,15 @@
     color: GrayText;
   }
 
-  /* A voice send's wait: the wash goes with every fill, so the 2px trace
-     alone is the progress. The caption's border mask is a gradient, which the
-     UA drops, so it takes a solid Canvas backing or the edge strikes through
-     it. */
+  /* A voice send's wait: its 2px bar is a border, so it keeps a system ink.
+     The caption's border mask is a gradient, which the UA drops, so it takes
+     a solid Canvas backing or the edge strikes through it. */
   [data-voice-submit-progress] {
     border-bottom-color: CanvasText;
   }
 
-  [data-voice-submit-caption] {
+  [data-voice-submit-caption],
+  [data-voice-session-caption] {
     background: Canvas;
     color: CanvasText;
   }

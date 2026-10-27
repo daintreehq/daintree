@@ -9,7 +9,6 @@ import {
   useRef,
   useState,
 } from "react";
-import { Spinner } from "@/components/ui/Spinner";
 import { EditorView } from "@codemirror/view";
 import { EditorSelection } from "@codemirror/state";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
@@ -68,7 +67,12 @@ import {
   COMPOSER_MARKER_TEXT_CLASS,
 } from "./composerControlStyles";
 import { useVoiceWaitSubmit, type VoiceSubmitOutcome } from "./hooks/useVoiceWaitSubmit";
-import { VoiceSubmitProgress } from "./VoiceSubmitProgress";
+import {
+  COMPOSER_BORDER_CAPTION_CLASS,
+  VoiceSubmitProgress,
+  correctionStreamShare,
+  voiceSubmitWaitCaption,
+} from "./VoiceSubmitProgress";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
 import {
   registerInputController,
@@ -704,11 +708,14 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       isolated,
     });
 
-    const placeholder = (() => {
+    // What the session is doing when that isn't listening. The placeholder
+    // says it on an empty draft; a draft hides the placeholder, so the shell's
+    // border carries it instead.
+    const voiceSessionStatus = (() => {
       if (isVoicePaused) {
         return voicePauseStopWarning
-          ? "Paused · Stopping in 10s unless resumed."
-          : "Paused · Resume to continue.";
+          ? "Paused · Stopping in 10s unless resumed"
+          : "Paused · Resume to continue";
       }
       if (isVoiceReconnecting) return "Reconnecting…";
       if (isVoiceFinishing) return "Finishing transcription…";
@@ -716,6 +723,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         if (voiceMicSignal !== "silent") return "Starting microphone…";
         return `No audio from ${voiceMicDeviceLabel ?? "microphone"}`;
       }
+      return null;
+    })();
+    const placeholder = (() => {
+      if (voiceSessionStatus) return voiceSessionStatus;
       const agentName = agentId ? getAgentConfig(agentId)?.name : null;
       return agentName ? `Ask ${agentName}` : "Ask anything";
     })();
@@ -1278,6 +1289,18 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // The wait's progress and its receipt own the shell's top border while on
     // screen, so the focus ring, which would run through the caption, waits.
     const [isVoiceSubmitPresenting, setIsVoiceSubmitPresenting] = useState(false);
+    const voiceWaitSessions =
+      voiceSubmitWait?.phase === "polishing" ? voiceSubmitWait.sessions : undefined;
+    const voiceCorrectionStreamed = useVoiceRecordingStore((s) =>
+      correctionStreamShare(s.panelBuffers[voiceId]?.correctionRanges ?? [], voiceWaitSessions)
+    );
+    // The session's status on the border, for a draft that hides the
+    // placeholder saying it. The send's own caption has the border first.
+    const showVoiceSessionCaption =
+      voiceSessionStatus !== null &&
+      value.length > 0 &&
+      !isVoiceSubmitting &&
+      !isVoiceSubmitPresenting;
 
     const voiceSlotRef = useRef<HTMLSpanElement>(null);
     const voiceSlotFocusedRef = useRef(false);
@@ -1306,18 +1329,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       </div>
     );
     // The Expanded Editor has no composer shell to draw the wait's progress
-    // in, so it labels the wait over the editor instead.
+    // in, so its header names the wait. Nothing covers the draft: the cleanup
+    // is still writing over it.
     const expandedVoiceSubmitLabel =
       voiceSubmitWait && showVoiceSubmitStatus ? (
-        <div
-          aria-hidden="true"
-          className="absolute inset-0 z-10 flex items-center justify-center gap-2 rounded-md bg-surface-canvas/80 pointer-events-none"
-        >
-          <Spinner className="text-text-secondary" />
-          <span className="text-xs text-text-secondary">
-            {voiceSubmitWait.phase === "polishing" ? "Polishing…" : "Finishing dictation…"}
-          </span>
-        </div>
+        <span aria-hidden="true" className="ml-auto mr-3 text-xs text-text-secondary">
+          {voiceSubmitWaitCaption(voiceSubmitWait)}
+        </span>
       ) : null;
 
     const handleDictationEscape = () => voiceRecordingService.handleEscape(voiceId);
@@ -1764,7 +1782,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       "--ib-voice-held": inputBarColors.voiceHeld,
       "--ib-fg": inputBarColors.foreground,
       "--ib-pane": inputBarColors.background,
-      "--ib-wait-fill": inputBarColors.waitFill,
       "--ib-wait-edge": inputBarColors.waitEdge,
       "--ib-wait-caption": inputBarColors.waitCaption,
     } as React.CSSProperties;
@@ -1785,11 +1802,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // Fleet-primary uses the same amber family as FleetDraftingPill so the
     // shell itself says "Enter broadcasts" at the point of typing.
     // A voice send waiting keeps the held outline, never the listening glow:
-    // the mic has stopped, and the wait's own progress is drawn inside.
+    // the mic has stopped, and the wait's own progress is drawn inside. The
+    // fill stays the one the shell had, so Enter doesn't flash the surface.
     const specialStyle: React.CSSProperties | undefined = isVoiceSubmitting
       ? {
           borderColor: `color-mix(in oklab, ${inputBarColors.accent} 25%, transparent)`,
-          backgroundColor: inputBarColors.shellBg,
+          backgroundColor: "var(--ib-bg)",
         }
       : isVoiceListeningChrome
         ? {
@@ -1884,8 +1902,18 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               key={voiceSubmitAttempt}
               wait={voiceSubmitWait}
               outcome={voiceSubmitOutcome}
+              streamed={voiceCorrectionStreamed}
               onPresentChange={setIsVoiceSubmitPresenting}
             />
+            {showVoiceSessionCaption && (
+              <div
+                aria-hidden="true"
+                data-voice-session-caption=""
+                className={COMPOSER_BORDER_CAPTION_CLASS}
+              >
+                {voiceSessionStatus}
+              </div>
+            )}
             <AutocompleteMenu
               ref={menuRef}
               isOpen={isAutocompleteOpen}
@@ -2243,6 +2271,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         >
           <AppDialog.Header>
             <AppDialog.Title>Expanded editor</AppDialog.Title>
+            {isExpanded && expandedVoiceSubmitLabel}
             <AppDialog.CloseButton />
           </AppDialog.Header>
           {/* CodeMirror claims file drops to suppress its own text insertion
@@ -2289,7 +2318,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             </ContextMenu>
             {isDragOverModal && <FileDropOverlay />}
             {isExpanded && voiceSubmitAnnouncer}
-            {isExpanded && expandedVoiceSubmitLabel}
           </div>
         </AppDialog>
         {/* One palette per id: while Canopy is open its own composer's is the
