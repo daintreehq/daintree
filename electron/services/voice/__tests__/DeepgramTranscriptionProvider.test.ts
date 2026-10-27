@@ -1653,6 +1653,8 @@ describe("DeepgramTranscriptionProvider", () => {
   });
 
   it("stopGracefully during a reconnect backoff tries straight away and flushes once the network is back", async () => {
+    // No jitter: each backoff is half its ceiling, so the last one is 1.5s.
+    vi.spyOn(Math, "random").mockReturnValue(0);
     const provider = new DeepgramTranscriptionProvider();
     const events: VoiceTranscriptionEvent[] = [];
     provider.onEvent((e) => events.push(e));
@@ -1672,6 +1674,10 @@ describe("DeepgramTranscriptionProvider", () => {
     const stopPromise = provider.stopGracefully();
     expect(instances).toHaveLength(attemptsBeforeStop + 1);
     const reconnect = latestInstance();
+    // Past where the backoff would have fired, the stop's attempt is still the
+    // only one.
+    vi.advanceTimersByTime(2_000);
+    expect(instances).toHaveLength(attemptsBeforeStop + 1);
     reconnect.simulateOpen();
     expect(reconnect.binaryFrames().map((b) => [...b])).toEqual([
       [1, 1],
@@ -1685,7 +1691,6 @@ describe("DeepgramTranscriptionProvider", () => {
     expect(statuses.at(-1)).toBe("idle");
     expect(statuses.slice(statuses.indexOf("finishing"))).not.toContain("reconnecting");
     expect(events.filter((e) => e.type === "error")).toEqual([]);
-    // The backoff timer the stop pre-empted doesn't make a second attempt.
     vi.advanceTimersByTime(60_000);
     expect(instances).toHaveLength(attemptsBeforeStop + 1);
   });
@@ -1701,7 +1706,7 @@ describe("DeepgramTranscriptionProvider", () => {
     }
 
     /** One second sent and never confirmed, then two seconds said during the outage. */
-    async function stopDuringBackoff(): Promise<{
+    async function stopDuringBackoff(extraGapBytes = 0): Promise<{
       provider: DeepgramTranscriptionProviderInstance;
       events: VoiceTranscriptionEvent[];
       stopPromise: Promise<void>;
@@ -1713,6 +1718,7 @@ describe("DeepgramTranscriptionProvider", () => {
       for (let i = 0; i < 10; i++) provider.sendAudioChunk(new ArrayBuffer(CHUNK_BYTES));
       socket.simulateClose(1006);
       for (let i = 0; i < 20; i++) provider.sendAudioChunk(new ArrayBuffer(CHUNK_BYTES));
+      if (extraGapBytes > 0) provider.sendAudioChunk(new ArrayBuffer(extraGapBytes));
       const stopPromise = provider.stopGracefully();
       return { provider, events, stopPromise };
     }
@@ -1773,6 +1779,13 @@ describe("DeepgramTranscriptionProvider", () => {
       latestInstance().simulateUnexpectedResponse(401);
       await stopPromise;
       expectOneLossReportBeforeIdle(events);
+    });
+
+    it("rounds a part second up rather than understating what may be missing", async () => {
+      const { events, stopPromise } = await stopDuringBackoff(2);
+      latestInstance().simulateClose(1006);
+      await stopPromise;
+      expect(lossReportsOf(events)).toEqual([expect.stringMatching(/up to 4 seconds/)]);
     });
 
     it("reports once however many times the stop is asked for", async () => {

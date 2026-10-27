@@ -862,7 +862,8 @@ class VoiceRecordingService {
           return;
         }
         // An error that lands while a stop drains belongs to a session already
-        // winding down; acting on it would finalize the stop early.
+        // winding down: it mustn't set an error state or toast over a stop the
+        // user asked for.
         if (this.isStoppingSession) {
           logWarn(`${LOG_PREFIX} Ignoring error during stop`, {
             severity: error.severity,

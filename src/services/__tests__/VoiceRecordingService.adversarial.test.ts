@@ -605,6 +605,12 @@ function emitError(error: VoiceInputError): void {
   }
 }
 
+const STOP_AUDIO_LOST: VoiceInputError = {
+  severity: "transient",
+  code: VOICE_STOP_AUDIO_LOST_CODE,
+  message: "up to 3 seconds at the end may be missing.",
+};
+
 // A real MessageEvent carrying one PCM16 chunk, as the worklet port delivers it.
 function pcmEvent(samples: Int16Array<ArrayBuffer>): MessageEvent<ArrayBuffer> {
   return new MessageEvent("message", { data: samples.buffer });
@@ -1625,12 +1631,7 @@ describe("VoiceRecordingService adversarial", () => {
       expect(runtime.voiceFns.setStatus).toHaveBeenCalledWith("finishing");
     });
     vi.mocked(notify).mockClear();
-    const lost: VoiceInputError = {
-      severity: "transient",
-      code: VOICE_STOP_AUDIO_LOST_CODE,
-      message: "up to 3 seconds at the end may be missing.",
-    };
-    emitError(lost);
+    emitError(STOP_AUDIO_LOST);
     emitStatus("idle");
     stopDeferred.resolve();
     await stopPromise;
@@ -1638,12 +1639,39 @@ describe("VoiceRecordingService adversarial", () => {
     expect(vi.mocked(notify)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(notify).mock.calls[0]![0]).toMatchObject({
       type: "warning",
-      message: lost.message,
+      message: STOP_AUDIO_LOST.message,
       context: { eventKind: "connectivity" },
     });
     expect(runtime.voiceInput.stop).toHaveBeenCalledTimes(1);
     expect(runtime.voiceFns.finishSession).toHaveBeenCalledTimes(1);
     expect(runtime.voiceFns.setLastError).not.toHaveBeenCalled();
+  });
+
+  it("tells the user about lost speech from a drain this view didn't start", async () => {
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const { notify } = await import("@/lib/notify");
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Panel One" });
+    vi.mocked(notify).mockClear();
+
+    emitError(STOP_AUDIO_LOST);
+
+    expect(vi.mocked(notify)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(notify).mock.calls[0]![0]).toMatchObject({ type: "warning" });
+    expect(runtime.voiceFns.setLastError).not.toHaveBeenCalled();
+  });
+
+  it("stays quiet about lost speech from a dictation the user cancelled", async () => {
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const { notify } = await import("@/lib/notify");
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Panel One" });
+    // Escape marks the session discarded (VoiceRecordingService.cancel.test.ts).
+    const discarded = Reflect.get(voiceRecordingService, "discardedSessionIds") as Set<string>;
+    discarded.add(liveSessionId());
+    vi.mocked(notify).mockClear();
+
+    emitError(STOP_AUDIO_LOST);
+
+    expect(vi.mocked(notify)).not.toHaveBeenCalled();
   });
 
   describe("asked by another view (#14601)", () => {
