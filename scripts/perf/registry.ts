@@ -436,6 +436,12 @@ export const REGISTRY: Record<string, Command> = {
     kind: "diagnostic",
     runner: tsxScript("voice-cleanup.ts"),
   },
+  "voice-preview-final": {
+    summary:
+      "Replay clips through the real OpenAI provider: where each segment's final disagrees with its live preview, and whether those are the misheard words (needs OPENAI_API_KEY)",
+    kind: "diagnostic",
+    runner: tsxScript("voice-preview-final.ts"),
+  },
   analyze: {
     summary: "Bundle-size visualizer build (ANALYZE=true vite build)",
     kind: "diagnostic",

@@ -107,6 +107,8 @@ export interface Alignment {
   insertions: number;
   /** The op aligned with each reference word, in reference order. */
   referenceOps: AlignmentOp[];
+  /** The op aligned with each hypothesis word, in hypothesis order. */
+  hypothesisOps: Array<Exclude<AlignmentOp, "del">>;
   /** The hypothesis words aligned as insertions, in hypothesis order. */
   inserted: string[];
 }
@@ -155,6 +157,7 @@ export function alignWords(reference: readonly string[], hypothesis: readonly st
   }
 
   const referenceOps = new Array<AlignmentOp>(n);
+  const hypothesisOps = new Array<Exclude<AlignmentOp, "del">>(m);
   const inserted: string[] = [];
   let substitutions = 0;
   let deletions = 0;
@@ -166,6 +169,7 @@ export function alignWords(reference: readonly string[], hypothesis: readonly st
     if (step === DIAGONAL) {
       const same = reference[i - 1] === hypothesis[j - 1];
       referenceOps[i - 1] = same ? "match" : "sub";
+      hypothesisOps[j - 1] = same ? "match" : "sub";
       if (!same) substitutions++;
       i--;
       j--;
@@ -175,11 +179,12 @@ export function alignWords(reference: readonly string[], hypothesis: readonly st
       i--;
     } else {
       insertions++;
+      hypothesisOps[j - 1] = "ins";
       inserted.unshift(hypothesis[j - 1]!);
       j--;
     }
   }
-  return { substitutions, deletions, insertions, referenceOps, inserted };
+  return { substitutions, deletions, insertions, referenceOps, hypothesisOps, inserted };
 }
 
 /**

@@ -111,6 +111,16 @@ describe("alignWords and scoreClip", () => {
     expect(b.referenceOps).toEqual(["match", "del", "match"]);
   });
 
+  it("records the op for every hypothesis word", () => {
+    const a = alignWords(["a1", "b1", "c1", "d1"], ["x1", "a1", "y1", "c1", "e1"]);
+    expect(a.hypothesisOps).toEqual(["ins", "match", "sub", "match", "sub"]);
+    expect(a.referenceOps).toEqual(["match", "sub", "match", "sub"]);
+    const b = alignWords(["a1", "b1", "c1", "d1"], ["x1", "a1", "c1", "d1"]);
+    expect(b.hypothesisOps).toEqual(["ins", "match", "match", "match"]);
+    expect(b.referenceOps).toEqual(["match", "del", "match", "match"]);
+    expect(alignWords(["a1"], []).hypothesisOps).toEqual([]);
+  });
+
   it("prefers the equally cheap path that keeps more words matched", () => {
     const tie = alignWords(["commit", "and", "push"], ["commit", "push", "now"]);
     expect([tie.substitutions, tie.deletions, tie.insertions]).toEqual([0, 1, 1]);
