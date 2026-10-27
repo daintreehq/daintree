@@ -3,7 +3,11 @@ import {
   extractProtectedSpans,
   findProtectedRanges,
 } from "../../../shared/utils/voiceProtectedSpans.js";
-import { validateCorrection, validateRewrite } from "../voiceCorrectionGuard.js";
+import {
+  CORRECTION_GUARD_LIMITS,
+  validateCorrection,
+  validateRewrite,
+} from "../voiceCorrectionGuard.js";
 import { CORE_CORRECTION_PROMPT } from "../../../shared/config/voiceCorrection.js";
 import { DICTATED_PROMPTS } from "./fixtures/dictatedPrompts.js";
 
@@ -219,6 +223,197 @@ describe("validateCorrection", () => {
     ],
   ])("rejects %s", (_label, raw, corrected, reason) => {
     expect(validateCorrection(raw, corrected)).toEqual({ ok: false, reason });
+  });
+
+  it("holds removals and additions to their own budgets", () => {
+    // 20 words, 7 dropped: over the floor of 4, inside 40%.
+    const raw =
+      "please check the logs and the traces and the metrics on the staging box then tell me what you see";
+    const dropped = "Check the logs on the staging box, then tell me what you see.";
+    expect(validateCorrection(raw, dropped)).toEqual({ ok: false, reason: "edit_size" });
+    expect(
+      validateCorrection(raw, dropped, { ...CORRECTION_GUARD_LIMITS, removedRatio: 0.4 })
+    ).toEqual({ ok: true });
+    // A looser removal budget doesn't let more words in: five over a budget of three.
+    const added = `${raw} and restart the box twice`;
+    expect(
+      validateCorrection(raw, added, { ...CORRECTION_GUARD_LIMITS, removedRatio: 0.5 })
+    ).toEqual({ ok: false, reason: "edit_size" });
+  });
+
+  describe("with spoken symbols", () => {
+    const symbols = { ...CORRECTION_GUARD_LIMITS, spokenSymbols: true };
+    const without = { ...CORRECTION_GUARD_LIMITS, spokenSymbols: false };
+    // No budget at all, so any word left unaccounted for is an edit.
+    const strict = { ...symbols, minRemoved: 0, removedRatio: 0, minAdded: 0, addedRatio: 0 };
+
+    it("reads a typed symbol as the word it was spoken as", () => {
+      const raw =
+        "add a project underscore id column then run npm run db colon generate and open electron slash ipc slash handlers";
+      const corrected =
+        "Add a project_id column, then run npm run db:generate and open electron/ipc/handlers.";
+      expect(validateCorrection(raw, corrected, without)).toEqual({
+        ok: false,
+        reason: "edit_size",
+      });
+      expect(validateCorrection(raw, corrected, symbols)).toEqual({ ok: true });
+      expect(validateCorrection(raw, corrected, strict)).toEqual({ ok: true });
+    });
+
+    it("never takes a sentence's own full stop or colon for a spoken one", () => {
+      expect(validateCorrection("open the readme dot md", "Open the readme.md.", strict)).toEqual({
+        ok: true,
+      });
+      expect(validateCorrection("open the readme dot", "Open the readme.", strict)).toEqual({
+        ok: false,
+        reason: "edit_size",
+      });
+      expect(validateCorrection("two things colon tests", "Two things: tests.", strict)).toEqual({
+        ok: false,
+        reason: "edit_size",
+      });
+    });
+
+    it("lets a flag the speaker spelled out appear, and no other", () => {
+      const raw = "run npm test dash dash watch and dash v on the voice tests";
+      expect(
+        validateCorrection(raw, "Run npm test --watch and -v on the voice tests.", without)
+      ).toEqual({ ok: false, reason: "protected_span" });
+      expect(
+        validateCorrection(raw, "Run npm test --watch and -v on the voice tests.", symbols)
+      ).toEqual({ ok: true });
+      expect(
+        validateCorrection(
+          "commit with dash dash no dash verify",
+          "Commit with --no-verify.",
+          symbols
+        )
+      ).toEqual({ ok: true });
+      expect(
+        validateCorrection(
+          raw,
+          "Run npm test --watch --coverage and -v on the voice tests.",
+          symbols
+        )
+      ).toEqual({ ok: false, reason: "protected_span" });
+      // A single dash takes a single letter.
+      expect(validateCorrection("rerun it dash verbose", "Rerun it -verbose.", symbols)).toEqual({
+        ok: false,
+        reason: "protected_span",
+      });
+    });
+
+    it("still holds a flag the raw text typed to its place", () => {
+      const raw = "run --watch then dash dash run";
+      expect(validateCorrection(raw, "Run --watch then --run.", symbols)).toEqual({ ok: true });
+      expect(validateCorrection(raw, "Run --run then --watch.", symbols)).toEqual({
+        ok: false,
+        reason: "protected_span",
+      });
+      // The typed flag is the required one; the spelled one stays as words.
+      for (const [said, cleaned] of [
+        ["say dash dash watch then run --watch", "Say dash dash watch, then run --watch."],
+        ["run dash dash watch then run --watch", "Run dash dash watch, then run --watch."],
+      ]) {
+        expect(validateCorrection(said, cleaned, symbols), said).toEqual({ ok: true });
+      }
+    });
+
+    it("keeps a spelled flag beside a word it was spoken next to", () => {
+      expect(
+        validateCorrection(
+          "run npm test dash dash force then publish the package",
+          "Run npm test, then publish the package --force.",
+          symbols
+        )
+      ).toEqual({ ok: false, reason: "protected_span" });
+      // Its own words came along, but it sits by another command, with the
+      // word before it or without the words after it.
+      for (const [said, cleaned] of [
+        ["commit with dash dash no dash verify then push", "Commit, then push with --no-verify."],
+        ["commit then push dash dash no dash verify", "Commit --no-verify."],
+      ]) {
+        expect(validateCorrection(said, cleaned, symbols), said).toEqual({
+          ok: false,
+          reason: "protected_span",
+        });
+      }
+      expect(
+        validateCorrection(
+          "commit dash dash no dash verify then push",
+          "Commit, then push --no-verify.",
+          symbols
+        )
+      ).toEqual({ ok: false, reason: "protected_span" });
+      // Its neighbouring word comes again later: still not where it was said.
+      expect(
+        validateCorrection(
+          "run npm test dash dash force then publish the package then stop",
+          "Run npm test, then publish the package --force, then stop.",
+          symbols
+        )
+      ).toEqual({ ok: false, reason: "protected_span" });
+      // A symbol's name used as a word stays a word beside the flag.
+      expect(validateCorrection("run dot dash V", "Run dot -V.", symbols)).toEqual({ ok: true });
+      expect(validateCorrection("run dot dash V", "Run -V.", symbols)).toEqual({
+        ok: false,
+        reason: "protected_span",
+      });
+      // Spelled letters joined either side of it.
+      expect(
+        validateCorrection(
+          "run N P M dash dash workspace A P I test",
+          "Run npm --workspace api test.",
+          symbols
+        )
+      ).toEqual({ ok: true });
+      expect(
+        validateCorrection(
+          "run npm test dash dash watch dash dash verbose",
+          "Run npm test --watch --verbose.",
+          symbols
+        )
+      ).toEqual({ ok: true });
+    });
+
+    it("takes no flag from a spelling inside code", () => {
+      expect(
+        validateCorrection(
+          "print `dash f` then publish the package",
+          "Print `dash f` -f, then publish the package.",
+          symbols
+        )
+      ).toEqual({ ok: false, reason: "protected_span" });
+    });
+
+    it("never frees a spoken symbol for one typed somewhere else", () => {
+      for (const [said, cleaned] of [
+        ["Don't dash. Deploy the follow up.", "Don't deploy the follow-up."],
+        // The word after the hyphen comes earlier too.
+        ["Don't dash. Commit the pre commit hook.", "Don't commit the pre-commit hook."],
+      ]) {
+        expect(validateCorrection(said, cleaned, symbols), said).toEqual({
+          ok: false,
+          reason: "negation",
+        });
+      }
+      expect(
+        validateCorrection(
+          "open the readme dot md and the follow up notes",
+          "Open the readme md and the follow up.notes.",
+          strict
+        )
+      ).toEqual({ ok: false, reason: "edit_size" });
+    });
+  });
+
+  it("gives a resolved self-correction its own floor for the rest", () => {
+    const raw = "um so use the old api, no wait, the new one, and log the calls";
+    const corrected = "Use the new one.";
+    expect(validateCorrection(raw, corrected)).toEqual({ ok: false, reason: "edit_size" });
+    expect(
+      validateCorrection(raw, corrected, { ...CORRECTION_GUARD_LIMITS, minAllowanceRemoved: 4 })
+    ).toEqual({ ok: true });
   });
 });
 
@@ -483,7 +678,10 @@ describe("validateCorrection on self-corrections and lists", () => {
         .replace(/<\/?uncertain>/g, "")
         .replace(/\\`/g, "`");
     const examples = [
-      ...CORE_CORRECTION_PROMPT.matchAll(/- Target: "(.*)"\n {2}Corrected: "(.*?)"(?: \(|$)/gm),
+      // A target may carry a note on what it answers: `- Target: "…" (answering …)`.
+      ...CORE_CORRECTION_PROMPT.matchAll(
+        /- Target: "(.*?)"(?: \(.*\))?\n {2}Corrected: "(.*?)"(?: \(|$)/gm
+      ),
     ];
     expect(examples.length).toBe(CORE_CORRECTION_PROMPT.match(/^- Target: /gm)?.length);
     for (const [, target, corrected] of examples) {
@@ -516,6 +714,24 @@ describe("validateCorrection on self-corrections and lists", () => {
       (scale: number) => `fix it, no${" ".repeat(1_500 * scale)}, sorry, now`,
       () => "Fix it now.",
       false,
+    ],
+    [
+      "typed slashes after a space",
+      () => "slash x",
+      (scale: number) => `${"/".repeat(1_500 * scale)} x`,
+      true,
+    ],
+    [
+      "spoken slashes typed as one run",
+      (scale: number) => `${"slash ".repeat(250 * scale)}x`,
+      (scale: number) => `${"/".repeat(250 * scale)}x`,
+      true,
+    ],
+    [
+      "spoken dashes beside a typed one",
+      (scale: number) => `${"dash ".repeat(300 * scale)}x`,
+      (scale: number) => `${"dash ".repeat(300 * scale)}x y-z`,
+      true,
     ],
     [
       "corrections that each scan back",

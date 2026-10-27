@@ -432,7 +432,7 @@ export const REGISTRY: Record<string, Command> = {
   },
   "voice-cleanup": {
     summary:
-      "Dictated passages through the real cleanup per model and effort: fixes, meaning kept, guard rejections, latency, cost (needs OPENAI_API_KEY)",
+      "Dictated passages through the real cleanup per model, effort and prompt, landed under each edit budget: agent-ready text, fixes, meaning kept, guard catches, latency, cost (needs OPENAI_API_KEY)",
     kind: "diagnostic",
     runner: tsxScript("voice-cleanup.ts"),
   },

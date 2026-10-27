@@ -7,6 +7,8 @@ import {
   VOICE_DICTATION_REASONING_EFFORT,
   buildCorrectionSystemPrompt,
   buildRewriteSystemPrompt,
+  correctionInstructionsFor,
+  type CorrectionInstructions,
   type CorrectionPromptContext,
   type CorrectionTargetContext,
   type CorrectionWorktreeContext,
@@ -17,25 +19,24 @@ import type { VoiceCorrectionVerdict } from "../../shared/types/voiceSessionSumm
 import { voiceErrorLogFields } from "../../shared/utils/voiceLogFields.js";
 import { buildOpenAIHeaders } from "../../shared/utils/openaiHeaders.js";
 import { createTimeoutSignal, withTimeoutSignal } from "../../shared/utils/timeoutSignal.js";
+import { validateRewrite } from "./voiceCorrectionGuard.js";
 import {
-  validateCorrection,
-  validateRewrite,
-  type CorrectionRejectReason,
-} from "./voiceCorrectionGuard.js";
+  correctionOutcome,
+  type VoiceCorrectionProposal,
+  type VoiceCorrectionRejectReason,
+} from "./voiceCorrectionOutcome.js";
 import { mayReferenceFile } from "../../shared/utils/voiceFileLinkCommands.js";
 import { sliceSpans, type VoiceTextSpan } from "../../shared/utils/voiceUncertainWords.js";
 import type { HeardAsRule } from "../../shared/utils/voiceHeardAs.js";
 import {
-  checkVoiceCommandEdit,
   EMPTY_VOICE_COMMAND_VOCABULARY,
-  voiceCommandBaseline,
-  type VoiceCommandEditRejection,
   type VoiceCommandEntry,
 } from "../../shared/utils/voiceAgentCommands.js";
 import type { VoiceCommandTarget } from "./voiceCommandTarget.js";
 import { holdsCredential, isSecretShaped } from "./voiceKeytermSecrets.js";
 
 export { CORE_CORRECTION_PROMPT, buildCorrectionSystemPrompt };
+export type { VoiceCorrectionProposal, VoiceCorrectionRejectReason };
 
 const P = "[VoiceCorrection]";
 const SHORT_CORRECTION_TIMEOUT_MS = 7000;
@@ -51,7 +52,7 @@ const MIN_OUTPUT_TOKENS = 1024;
 const OUTPUT_TOKENS_PER_CHAR = 1.5;
 const OUTPUT_TOKENS_OVERHEAD = 256;
 const FILE_LINK_MAX_OUTPUT_TOKENS = 256;
-const PROMPT_CACHE_PREFIX = "voice-correction-v12";
+const PROMPT_CACHE_PREFIX = "voice-correction-v13";
 // OpenAI rejects a prompt_cache_key longer than 64 characters.
 const PROMPT_CACHE_KEY_MAX_LENGTH = 64;
 const FILE_LINK_DETECTION_TIMEOUT_MS = 4000;
@@ -171,6 +172,8 @@ export interface VoiceCorrectionSettings {
   model: string;
   /** Overrides VOICE_DICTATION_REASONING_EFFORT for cleanup, its warm-up and rewrite. */
   reasoningEffort?: VoiceReasoningEffort;
+  /** Cleanup rules in place of the model's own (`correctionInstructionsFor`): the cleanup benchmark's prompt variants. */
+  instructions?: CorrectionInstructions;
   apiKey: string;
   customDictionary: string[];
   knownNames?: string[];
@@ -213,15 +216,14 @@ export interface VoiceCorrectionResult {
   failed?: true;
   /** The cleanup the model proposed and the check that turned it down; transcript content, so never logged. */
   rejected?: { reason: VoiceCorrectionRejectReason; candidate: string };
+  /** The reply as the model gave it, before any check; absent when none parsed. Transcript content, so never logged. */
+  proposal?: VoiceCorrectionProposal;
   /**
    * When the OpenAI request went out (performance.now()), how long it took,
    * and the tokens it was billed for when the reply said; absent when none went out.
    */
   roundTrip?: { sentAt: number; ms: number; usage?: VoiceCorrectionUsage };
 }
-
-export type VoiceCorrectionRejectReason =
-  CorrectionRejectReason | VoiceCommandEditRejection | "low_confidence";
 
 /** Reasoning tokens are part of `outputTokens`, and cached ones part of `inputTokens`. */
 export interface VoiceCorrectionUsage {
@@ -364,25 +366,6 @@ class CorrectionDiscardedError extends Error {
   }
 }
 
-function rejectionVerdict(
-  rejection: CorrectionRejectReason | "low_confidence" | VoiceCommandEditRejection
-): VoiceCorrectionVerdict {
-  switch (rejection) {
-    case "edit_size":
-      return "rejected_edit_size";
-    case "negation":
-      return "rejected_negation";
-    case "number":
-      return "rejected_number";
-    case "protected_span":
-      return "rejected_protected_span";
-    case "low_confidence":
-      return "rejected_low_confidence";
-    default:
-      return "rejected_command";
-  }
-}
-
 export class VoiceCorrectionService {
   // When each correction prompt last reached OpenAI, by account and content.
   private readonly promptUsedAt = new Map<string, number>();
@@ -444,7 +427,7 @@ export class VoiceCorrectionService {
 
     try {
       const lead = request.rawText.length - request.rawText.trimStart().length;
-      const result = await this.callApi(
+      const proposal = await this.callApi(
         {
           ...request,
           rawText: trimmedRaw,
@@ -456,58 +439,35 @@ export class VoiceCorrectionService {
         onText
       );
 
-      let confirmedText: string;
-      if (result.action === "no_change" || !result.correctedText.trim()) {
-        confirmedText = request.rawText;
-      } else {
-        const candidate = result.correctedText.trim();
-        // A command the cleanup wrote in place of its spoken request is measured
-        // as that command, so "can you please run the review skill on…" isn't
-        // over the edit budget for the words the command replaced.
-        const commandRejection = this.findCommandRejection(request, candidate, settings);
-        const baseline = commandRejection
-          ? request.rawText
-          : (voiceCommandBaseline(
-              request.rawText,
-              candidate,
-              settings.commandTarget?.vocabulary ?? EMPTY_VOICE_COMMAND_VOCABULARY
-            ) ?? request.rawText);
-        const rejection =
-          commandRejection ?? this.findRejection(baseline, candidate, result.confidence);
-        if (rejection) {
-          logDebug(`${P} Correction rejected, keeping raw text`, {
-            reason: rejection,
-            rawLen: request.rawText.length,
-            correctedLen: candidate.length,
-          });
-          return {
-            action: "no_change",
-            correctedText: request.rawText,
-            confidence: result.confidence,
-            confirmedText: request.rawText,
-            verdict: rejectionVerdict(rejection),
-            rejected: { reason: rejection, candidate },
-          };
-        }
-        confirmedText = candidate;
-      }
-      const action = confirmedText === request.rawText ? "no_change" : "replace";
-
-      logDebug(`${P} Correction success`, {
-        rawLen: request.rawText.length,
-        correctedLen: confirmedText.length,
-        action,
-        confidence: result.confidence,
-        contextLen: request.recentContext?.length ?? 0,
-        reason: request.reason ?? "unspecified",
+      const outcome = correctionOutcome(request.rawText, proposal, {
+        vocabulary: settings.commandTarget?.vocabulary ?? EMPTY_VOICE_COMMAND_VOCABULARY,
+        startsPrompt: request.startsPrompt === true,
       });
+      if (outcome.rejected) {
+        logDebug(`${P} Correction rejected, keeping raw text`, {
+          reason: outcome.rejected.reason,
+          rawLen: request.rawText.length,
+          correctedLen: outcome.rejected.candidate.length,
+        });
+      } else {
+        logDebug(`${P} Correction success`, {
+          rawLen: request.rawText.length,
+          correctedLen: outcome.confirmedText.length,
+          action: outcome.action,
+          confidence: proposal.confidence,
+          contextLen: request.recentContext?.length ?? 0,
+          reason: request.reason ?? "unspecified",
+        });
+      }
 
       return {
-        ...result,
-        action,
-        correctedText: confirmedText,
-        confirmedText,
-        verdict: action === "replace" ? "replaced" : "unchanged",
+        action: outcome.action,
+        correctedText: outcome.confirmedText,
+        confidence: proposal.confidence,
+        confirmedText: outcome.confirmedText,
+        verdict: outcome.verdict,
+        ...(outcome.rejected ? { rejected: outcome.rejected } : {}),
+        proposal,
       };
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
@@ -538,29 +498,6 @@ export class VoiceCorrectionService {
     }
   }
 
-  private findRejection(
-    rawText: string,
-    candidate: string,
-    confidence: VoiceCorrectionResult["confidence"]
-  ): CorrectionRejectReason | "low_confidence" | null {
-    if (confidence === "low") return "low_confidence";
-    const verdict = validateCorrection(rawText, candidate);
-    return verdict.ok ? null : verdict.reason;
-  }
-
-  private findCommandRejection(
-    request: VoiceCorrectionRequest,
-    candidate: string,
-    settings: VoiceCorrectionSettings
-  ): VoiceCommandEditRejection | null {
-    return checkVoiceCommandEdit(
-      request.rawText,
-      candidate,
-      settings.commandTarget?.vocabulary ?? EMPTY_VOICE_COMMAND_VOCABULARY,
-      request.startsPrompt === true
-    );
-  }
-
   private buildPromptCacheKey(settings: VoiceCorrectionSettings): string {
     const projectKey = settings.projectName ?? settings.projectPath ?? "global";
     const target = settings.commandTarget;
@@ -578,6 +515,7 @@ export class VoiceCorrectionService {
       parts.push({ repositoryNames: settings.repositoryNames });
     }
     if (settings.worktree) parts.push({ worktree: settings.worktree });
+    if (settings.instructions) parts.push({ instructions: settings.instructions });
     const fingerprint = createHash("sha256")
       .update(JSON.stringify(parts))
       .digest("hex")
@@ -894,7 +832,7 @@ export class VoiceCorrectionService {
     trace: RequestTrace,
     signal: AbortSignal | undefined,
     onText: ((text: string) => void) | undefined
-  ): Promise<Omit<VoiceCorrectionResult, "confirmedText" | "verdict">> {
+  ): Promise<VoiceCorrectionProposal> {
     const systemPrompt = this.buildSystemPrompt(settings);
     const userMessage = this.buildUserMessage(request);
     logDebug(`${P} Calling Responses API`, {
@@ -956,7 +894,10 @@ export class VoiceCorrectionService {
       customInstructions,
       language,
     };
-    return buildCorrectionSystemPrompt(context);
+    return buildCorrectionSystemPrompt(
+      context,
+      settings.instructions ?? correctionInstructionsFor(settings.model)
+    );
   }
 
   // The warm-up shares everything but the user turn and the output cap, so
@@ -1114,7 +1055,7 @@ export class VoiceCorrectionService {
     signal: AbortSignal,
     trace: RequestTrace,
     onText: ((text: string) => void) | undefined
-  ): Promise<Omit<VoiceCorrectionResult, "confirmedText" | "verdict">> {
+  ): Promise<VoiceCorrectionProposal> {
     const maxOutputTokens = this.getMaxOutputTokens(request);
     const body = JSON.stringify({
       ...this.correctionBody(settings, systemPrompt, userMessage, maxOutputTokens),
@@ -1152,7 +1093,7 @@ export class VoiceCorrectionService {
     maxOutputTokens: number,
     onText: ((text: string) => void) | undefined,
     trace: RequestTrace
-  ): Promise<Omit<VoiceCorrectionResult, "confirmedText" | "verdict">> {
+  ): Promise<VoiceCorrectionProposal> {
     const response = await fetch(RESPONSES_URL, {
       method: "POST",
       headers: {

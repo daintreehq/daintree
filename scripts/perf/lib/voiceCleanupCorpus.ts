@@ -16,15 +16,30 @@ import type { CorrectionWorktreeContext } from "../../../shared/config/voiceCorr
  *   gone, numbers as digits, project words split phonetically ("x term",
  *   "zoo stand", "p t y"), and the words it was unsure of flagged, which
  *   cleanup sees as `<uncertain>` spans.
+ * - Grok (`grok-voice-transcribe-2.0` with `format`, no `filler_words`): cased
+ *   and punctuated, numbers as digits, "um", "uh" and stutters gone but "yeah",
+ *   "you know" and hedges kept, compounds and identifiers written as ordinary
+ *   words ("Web Socket", "use Terminal Store"), and spelled letters as capitals
+ *   ("N P M"). Its words under 0.65 confidence reach cleanup as unsure
+ *   (#14859), the same cut-off as Deepgram's, so its misheard words are
+ *   flagged too.
  *
- * Grok joins once #14769 lands. The cleanup regression prompts
- * (`dictatedPrompts.ts`) come in as they are, in no provider's style.
+ * The cleanup regression prompts (`dictatedPrompts.ts`) come in as they are,
+ * in no provider's style.
  */
 
-export type TranscriptStyle = "openai" | "deepgram" | "generic";
+export type TranscriptStyle = "openai" | "deepgram" | "grok" | "generic";
 
 export type CaseSource =
-  "replay" | "afternoon" | "context" | "workspace" | "ramble" | "clean" | "regression";
+  | "replay"
+  | "afternoon"
+  | "context"
+  | "workspace"
+  | "ramble"
+  | "tics"
+  | "lookalike"
+  | "clean"
+  | "regression";
 
 /**
  * What a dictation's session tells cleanup about where it is typed (#14854):
@@ -65,7 +80,9 @@ export interface CleanupCase {
   drops?: string[];
   /** Spans the raw transcript already has right that must come through character for character. */
   keep?: string[];
-  /** Words the recogniser was unsure of, located in `raw` in order. Deepgram only. */
+  /** A run-on the cleanup should break up: no sentence it writes may run longer than this many words. */
+  maxSentenceWords?: number;
+  /** Words the recogniser was unsure of, located in `raw` in order. Deepgram and Grok only. */
   uncertain?: string[];
   recentContext?: string[];
   terminalOutput?: string;
@@ -87,6 +104,7 @@ interface Transcript {
 interface ReplayTranscripts {
   openai: Transcript;
   deepgram: Transcript;
+  grok: Transcript;
   /** Where cleanup's ideal differs from the clip's written reference. */
   reference?: string;
 }
@@ -104,6 +122,12 @@ export const REPLAY_TRANSCRIPTS: Readonly<Record<string, ReplayTranscripts>> = {
       fixes: { Zustand: "misread", worktree: "form", useShallow: "form" },
       uncertain: ["Zoo stand", "shallow"],
     },
+    grok: {
+      raw: "Zustand selector in the work tree store is returning a new array on every render. Wrap it in use shallow.",
+      fixes: { worktree: "form", useShallow: "form" },
+      keep: ["Zustand"],
+      uncertain: ["work tree", "use shallow"],
+    },
   },
   "npm-test-watch": {
     openai: {
@@ -114,10 +138,15 @@ export const REPLAY_TRANSCRIPTS: Readonly<Record<string, ReplayTranscripts>> = {
       raw: "Run N P M test dash dash watch on the voice recording service test file.",
       fixes: { "npm test": "form", "--watch": "form" },
     },
+    grok: {
+      raw: "Run N P M test dash dash watch on the Voice Recording Service test file.",
+      fixes: { "npm test": "form", "--watch": "form" },
+    },
   },
   "commit-and-push": {
     openai: { raw: "Commit and push.", fixes: {} },
     deepgram: { raw: "Commit and push.", fixes: {} },
+    grok: { raw: "Commit and push.", fixes: {} },
   },
   "path-after-pause": {
     openai: {
@@ -126,6 +155,10 @@ export const REPLAY_TRANSCRIPTS: Readonly<Record<string, ReplayTranscripts>> = {
     },
     deepgram: {
       raw: "Open Electron slash services slash voice. Then find where the websocket reconnects.",
+      fixes: { "electron/services/voice": "form", WebSocket: "form" },
+    },
+    grok: {
+      raw: "Open Electron slash services slash voice. Then find where the Web Socket reconnects.",
       fixes: { "electron/services/voice": "form", WebSocket: "form" },
     },
   },
@@ -143,6 +176,13 @@ export const REPLAY_TRANSCRIPTS: Readonly<Record<string, ReplayTranscripts>> = {
       keep: ["3 chunks"],
       uncertain: ["v test"],
     },
+    grok: {
+      raw: "I want you to go through the Open AI transcription provider and trace every path where audio arrives before the session is ready, then write a Vitest test that sends 3 chunks during the handshake and proves every byte reaches the socket in order after the session dot updated event arrives.",
+      reference:
+        "I want you to go through the OpenAITranscriptionProvider and trace every path where audio arrives before the session is ready, then write a Vitest test that sends 3 chunks during the handshake and proves every byte reaches the socket in order after the session.updated event arrives.",
+      fixes: { OpenAI: "form", "session.updated": "form" },
+      keep: ["3 chunks", "Vitest"],
+    },
   },
   "long-then-pause": {
     openai: {
@@ -155,6 +195,11 @@ export const REPLAY_TRANSCRIPTS: Readonly<Record<string, ReplayTranscripts>> = {
       fixes: { xterm: "form" },
       uncertain: ["x term"],
     },
+    grok: {
+      raw: "The Project View Manager evicts the least recently used view when memory is tight, but the renderer for that view keeps its X term instances alive because nothing calls dispose on them when the web contents goes away. Find the leak and fix it.",
+      fixes: { xterm: "form" },
+      uncertain: ["X term"],
+    },
   },
   "rebase-develop": {
     openai: {
@@ -165,6 +210,11 @@ export const REPLAY_TRANSCRIPTS: Readonly<Record<string, ReplayTranscripts>> = {
     deepgram: {
       raw: "Rebase this branch onto origin slash develop and resolve the conflict in package dot JSON.",
       fixes: { "origin/develop": "form", "package.json": "form" },
+    },
+    grok: {
+      raw: "Rebase this branch onto origin slash develop and resolve the conflict in package.json.",
+      fixes: { "origin/develop": "form" },
+      keep: ["package.json"],
     },
   },
   "tailwind-token": {
@@ -177,6 +227,11 @@ export const REPLAY_TRANSCRIPTS: Readonly<Record<string, ReplayTranscripts>> = {
       raw: "Swap the hard coded hex colour for the text secondary token from tailwind and check it in dark mode.",
       fixes: { "text-secondary": "form", Tailwind: "form" },
     },
+    grok: {
+      raw: "Swap the hard coded hex colour for the Text Secondary token from Tailwind and check it in dark mode.",
+      fixes: { "text-secondary": "form" },
+      keep: ["Tailwind"],
+    },
   },
   "typescript-error": {
     openai: {
@@ -186,6 +241,10 @@ export const REPLAY_TRANSCRIPTS: Readonly<Record<string, ReplayTranscripts>> = {
     },
     deepgram: {
       raw: "Fix the TypeScript error TS 2345 in shared slash types slash IPC slash API dot TS.",
+      fixes: { TS2345: "form", "shared/types/ipc/api.ts": "form" },
+    },
+    grok: {
+      raw: "Fix the TypeScript error T S 2345 in shared slash types slash I P C slash A P I dot T S.",
       fixes: { TS2345: "form", "shared/types/ipc/api.ts": "form" },
     },
   },
@@ -209,6 +268,15 @@ export const REPLAY_TRANSCRIPTS: Readonly<Record<string, ReplayTranscripts>> = {
         "3. Fix it without adding a timeout": "form",
       },
     },
+    grok: {
+      raw: "First, read the failing test. Second, find the race. Third, fix it without adding a timeout.",
+      fixes: {
+        "1. Read the failing test": "form",
+        "2. Find the race": "form",
+        "3. Fix it without adding a timeout": "form",
+      },
+      keep: ["without adding a timeout"],
+    },
   },
   "react-compiler": {
     openai: {
@@ -220,6 +288,12 @@ export const REPLAY_TRANSCRIPTS: Readonly<Record<string, ReplayTranscripts>> = {
       raw: "The react compiler bailed out on use terminal store. Check the babble plug in output for the reason.",
       fixes: { React: "form", useTerminalStore: "form", Babel: "misread", plugin: "form" },
       uncertain: ["babble"],
+    },
+    grok: {
+      raw: "The React compiler bailed out on use Terminal Store. Check the Babel plug-in output for the reason.",
+      fixes: { useTerminalStore: "form", plugin: "form" },
+      keep: ["Babel"],
+      uncertain: ["use Terminal Store"],
     },
   },
   "playwright-spec": {
@@ -233,6 +307,11 @@ export const REPLAY_TRANSCRIPTS: Readonly<Record<string, ReplayTranscripts>> = {
       fixes: { Playwright: "form", "e2e/full/platform": "form" },
       uncertain: ["e two e"],
     },
+    grok: {
+      raw: "Write a Playwright spec under E 2 E slash full slash platform that presses Command plus D and checks the mock gets audio.",
+      fixes: { "e2e/full/platform": "form" },
+      keep: ["Playwright"],
+    },
   },
   "drizzle-migration": {
     openai: {
@@ -244,6 +323,11 @@ export const REPLAY_TRANSCRIPTS: Readonly<Record<string, ReplayTranscripts>> = {
       raw: "Add a drizzle migration with a project underscore ID column on the dictionary table. Then run N P M run d b colon generate.",
       fixes: { Drizzle: "form", project_id: "form", "npm run db:generate": "form" },
     },
+    grok: {
+      raw: "Add a Drizzle migration with a project underscore ID column on the dictionary table, then run N P M run D B colon generate.",
+      fixes: { project_id: "form", "npm run db:generate": "form" },
+      keep: ["Drizzle"],
+    },
   },
   "deepgram-keyterm": {
     openai: {
@@ -254,15 +338,28 @@ export const REPLAY_TRANSCRIPTS: Readonly<Record<string, ReplayTranscripts>> = {
       fixes: { keyterm: "form" },
       keep: ["Deepgram", "three"],
     },
+    // As heard, "Nova 3": the guard reads "Nova-3" as a signed number, so the
+    // clip's written reference could never land.
     deepgram: {
       raw: "Deepgram Nova 3 rejects the key term parameter when the list is too long, so cap it before building the URL.",
+      reference:
+        "Deepgram Nova 3 rejects the keyterm parameter when the list is too long, so cap it before building the URL.",
       fixes: { keyterm: "form" },
       keep: ["Deepgram"],
+    },
+    grok: {
+      raw: "Deepgram Nova 3 rejects the key term parameter when the list is too long, so cap it before building the U R L.",
+      reference:
+        "Deepgram Nova 3 rejects the keyterm parameter when the list is too long, so cap it before building the URL.",
+      fixes: { keyterm: "form", URL: "form" },
+      keep: ["Deepgram"],
+      uncertain: ["key term"],
     },
   },
   "pull-request": {
     openai: { raw: "Looks good. Open a pull request against develop.", fixes: {} },
     deepgram: { raw: "Looks good. Open a pull request against develop.", fixes: {} },
+    grok: { raw: "Looks good. Open a pull request against develop.", fixes: {} },
   },
   "ipc-codegen": {
     openai: {
@@ -271,6 +368,11 @@ export const REPLAY_TRANSCRIPTS: Readonly<Record<string, ReplayTranscripts>> = {
     },
     deepgram: {
       raw: "Move the handler into electron slash IPC slash handlers and regenerate the preload types with code gen colon IPC.",
+      fixes: { "electron/ipc/handlers": "form", "codegen:ipc": "form" },
+      uncertain: ["code gen"],
+    },
+    grok: {
+      raw: "Move the handler into Electron slash IPC slash handlers and regenerate the preload types with code gen colon IPC.",
       fixes: { "electron/ipc/handlers": "form", "codegen:ipc": "form" },
       uncertain: ["code gen"],
     },
@@ -286,6 +388,11 @@ export const REPLAY_TRANSCRIPTS: Readonly<Record<string, ReplayTranscripts>> = {
       fixes: { xterm: "form", WebGL: "form" },
       uncertain: ["x term"],
     },
+    grok: {
+      raw: "The X term Web GL renderer drops glyphs after a resize. Check the texture atlas size.",
+      fixes: { xterm: "form", WebGL: "form" },
+      uncertain: ["X term", "Web GL"],
+    },
   },
   "node-pty-rebuild": {
     openai: {
@@ -296,6 +403,11 @@ export const REPLAY_TRANSCRIPTS: Readonly<Record<string, ReplayTranscripts>> = {
     deepgram: {
       raw: "Node p t y fails to load after the electron upgrade. Run n p m run rebuild and try again.",
       fixes: { "node-pty": "form", Electron: "form", "npm run rebuild": "form" },
+    },
+    grok: {
+      raw: "Node PTY fails to load after the Electron upgrade. Run N P M run rebuild and try again.",
+      fixes: { "node-pty": "form", "npm run rebuild": "form" },
+      keep: ["Electron"],
     },
   },
 };
@@ -708,7 +820,10 @@ const RAMBLE: readonly AuthoredCase[] = [
     source: "ramble",
     raw: "So the problem is the guard rejects any cleanup that changes more than 15% of the words, and when it rejects one, nothing lands at all, so the whole passage stays raw. What I want is for you to measure how often that happens on the replay fixtures, no wait, on the new cleanup corpus and tell me which rule fires most often.",
     reference:
+      "The problem is the guard rejects any cleanup that changes more than 15% of the words, and when it rejects one, nothing lands at all, so the whole passage stays raw. What I want is for you to measure how often that happens on the new cleanup corpus and tell me which rule fires most often.",
+    alsoAccept: [
       "So the problem is the guard rejects any cleanup that changes more than 15% of the words, and when it rejects one, nothing lands at all, so the whole passage stays raw. What I want is for you to measure how often that happens on the new cleanup corpus and tell me which rule fires most often.",
+    ],
     drops: ["no wait", "replay fixtures"],
     keep: ["15%", "nothing lands at all"],
   },
@@ -755,6 +870,253 @@ const RAMBLE: readonly AuthoredCase[] = [
     fixes: { "shared/config/voiceCorrection.ts": "form" },
     drops: ["um", "uh"],
     keep: ["--run", "Don't rename the existing one", "isn't", "don't run the full suite"],
+  },
+];
+
+// What the dictations that reached the agent still had in them (#14786):
+// filler, "yeah" and "so yeah", hedges, verbal tics, false starts, run-on
+// sentences and misheard names. Each reference is the message the speaker
+// would have typed: those gone, every instruction, constraint and detail
+// kept, in the speaker's own words. A hedge that marks a guess ("I guess",
+// "I think") is content, not a tic: it tells the agent not to take it as fact.
+const TICS: readonly AuthoredCase[] = [
+  {
+    id: "tics-so-yeah:openai",
+    style: "openai",
+    source: "tics",
+    raw: "Um, yeah, so the voice settings tab is, like, really slow to open now. Can you profile it and, uh, find out what's blocking the first render? So yeah.",
+    reference:
+      "The voice settings tab is really slow to open now. Can you profile it and find out what's blocking the first render?",
+    drops: ["um", "uh", "yeah", "like", "so"],
+  },
+  {
+    id: "tics-sidebar:grok",
+    style: "grok",
+    source: "tics",
+    raw: "Okay, so basically the worktree sidebar kind of flickers when an agent finishes, and I guess it's re-rendering the whole list. Can you memoize the rows so only the one that changed re-renders? Yeah.",
+    reference:
+      "The worktree sidebar flickers when an agent finishes, and I guess it's re-rendering the whole list. Can you memoize the rows so only the one that changed re-renders?",
+    drops: ["okay", "so", "basically", "kind of", "yeah"],
+    keep: ["I guess", "only the one that changed"],
+  },
+  {
+    id: "tics-scroll-runon:deepgram",
+    style: "deepgram",
+    source: "tics",
+    raw: "So the problem is when you switch projects the terminal loses its scroll position and then when you come back it jumps to the top and that's really annoying so can you save the scroll offset when the view hides and restore it when it shows again and make sure it still works if the terminal got new output while it was hidden.",
+    reference:
+      "The problem is when you switch projects, the terminal loses its scroll position, and then when you come back it jumps to the top, and that's really annoying. Can you save the scroll offset when the view hides and restore it when it shows again, and make sure it still works if the terminal got new output while it was hidden?",
+    alsoAccept: [
+      "The problem is when you switch projects, the terminal loses its scroll position, and then when you come back it jumps to the top, and that's really annoying. Can you save the scroll offset when the view hides and restore it when it shows again? Make sure it still works if the terminal got new output while it was hidden.",
+    ],
+    drops: ["so"],
+    keep: ["new output while it was hidden"],
+    maxSentenceWords: 35,
+  },
+  {
+    id: "tics-agents:grok",
+    style: "grok",
+    source: "tics",
+    raw: "Ask Cloud Code to review it, and if it's happy, hand it to codecs for the tests. Basically, I want them working in parallel, you know, not waiting on each other. Yeah.",
+    reference:
+      "Ask Claude Code to review it, and if it's happy, hand it to Codex for the tests. I want them working in parallel, not waiting on each other.",
+    fixes: { "Claude Code": "misread", Codex: "misread" },
+    drops: ["basically", "you know", "yeah"],
+    keep: ["not waiting on each other"],
+    uncertain: ["Cloud Code", "codecs"],
+  },
+  {
+    id: "tics-false-start:openai",
+    style: "openai",
+    source: "tics",
+    raw: "So I want, I need you to, um, check whether the, the preload script exposes the voice API before the window loads. And, uh, if it doesn't, don't add a delay, just, just move the expose call earlier. Okay?",
+    reference:
+      "I need you to check whether the preload script exposes the voice API before the window loads. If it doesn't, don't add a delay, just move the expose call earlier.",
+    alsoAccept: [
+      "I need you to check whether the preload script exposes the voice API before the window loads. And if it doesn't, don't add a delay, just move the expose call earlier.",
+    ],
+    drops: ["so", "um", "uh", "I want, I need", "the, the", "just, just", "okay"],
+    keep: ["don't add a delay", "if it doesn't"],
+  },
+  {
+    id: "tics-hedges:deepgram",
+    style: "deepgram",
+    source: "tics",
+    raw: "The diff view is sort of slow on big files, it basically re-tokenizes everything on every scroll. Can you kind of cache the tokens per hunk and only redo the hunks that changed? Pretty much like we do for the file tree.",
+    reference:
+      "The diff view is slow on big files, it re-tokenizes everything on every scroll. Can you cache the tokens per hunk and only redo the hunks that changed, like we do for the file tree?",
+    drops: ["sort of", "basically", "kind of", "pretty much"],
+    keep: ["only redo the hunks that changed", "like we do"],
+  },
+  {
+    id: "tics-notify-runon:openai",
+    style: "openai",
+    source: "tics",
+    raw: "Um, so when the agent finishes, uh, we play the done sound and we also flash the dock icon and we show a toast and it's too much, you know, so can you make it so it only plays the sound if the window is focused and only does the toast and the dock flash if it isn't, um, and keep the setting that turns it all off.",
+    reference:
+      "When the agent finishes, we play the done sound and we also flash the dock icon and we show a toast, and it's too much. Can you make it so it only plays the sound if the window is focused, and only does the toast and the dock flash if it isn't? And keep the setting that turns it all off.",
+    alsoAccept: [
+      "When the agent finishes, we play the done sound and we also flash the dock icon and we show a toast, and it's too much. Can you make it so it only plays the sound if the window is focused, and only does the toast and the dock flash if it isn't? Keep the setting that turns it all off.",
+    ],
+    drops: ["um", "uh", "you know", "so"],
+    keep: ["only plays the sound", "isn't", "turns it all off"],
+    maxSentenceWords: 32,
+  },
+  {
+    id: "tics-commit-runon:grok",
+    style: "grok",
+    source: "tics",
+    raw: "Yeah, so the commit message generator is writing whole paragraphs for a one-line change and I want it to match the size of the diff so a small diff gets a one-line subject and nothing else and it only adds a body when more than one file changed. Yeah.",
+    reference:
+      "The commit message generator is writing whole paragraphs for a one-line change. I want it to match the size of the diff, so a small diff gets a one-line subject and nothing else, and it only adds a body when more than one file changed.",
+    alsoAccept: [
+      "The commit message generator is writing whole paragraphs for a one-line change. And I want it to match the size of the diff, so a small diff gets a one-line subject and nothing else, and it only adds a body when more than one file changed.",
+      "The commit message generator is writing whole paragraphs for a one-line change, and I want it to match the size of the diff, so a small diff gets a one-line subject and nothing else. It only adds a body when more than one file changed.",
+    ],
+    drops: ["yeah", "so"],
+    keep: ["nothing else", "only adds a body", "more than one file"],
+    maxSentenceWords: 40,
+  },
+  {
+    id: "tics-answer:deepgram",
+    style: "deepgram",
+    source: "tics",
+    raw: "Yeah, go with the first one, but cap it at 3 attempts and log each retry. And honestly also show the error if the last one fails, so it's kind of both, really.",
+    reference:
+      "Yeah, go with the first one, but cap it at 3 attempts and log each retry. And also show the error if the last one fails, so it's both.",
+    alsoAccept: [
+      "Yeah, go with the first one, but cap it at 3 attempts and log each retry. Also show the error if the last one fails, so it's both.",
+    ],
+    drops: ["honestly", "kind of", "really"],
+    // "Yeah" answers the agent's question here: it stays.
+    keep: ["Yeah, go with the first one"],
+    terminalOutput:
+      "I can either:\n  1. Add a retry with backoff around the fetch\n  2. Surface the error and let the user retry\nWhich approach do you want?",
+  },
+  {
+    id: "tics-path:openai",
+    style: "openai",
+    source: "tics",
+    raw: "Um, okay, so in, uh, src slash store slash dictation range store dot TS, the, the selector for the ranges is, like, returning a new array every time. Can you wrap it in use shallow? And, yeah, run the tests for that file with dash dash run.",
+    reference:
+      "In src/store/dictationRangeStore.ts, the selector for the ranges is returning a new array every time. Can you wrap it in useShallow? And run the tests for that file with --run.",
+    alsoAccept: [
+      "In src/store/dictationRangeStore.ts, the selector for the ranges is returning a new array every time. Can you wrap it in useShallow? Run the tests for that file with --run.",
+    ],
+    fixes: { "src/store/dictationRangeStore.ts": "form", useShallow: "form", "--run": "form" },
+    drops: ["um", "uh", "okay", "so", "like", "the, the", "yeah"],
+  },
+  {
+    id: "tics-list:grok",
+    style: "grok",
+    source: "tics",
+    raw: "Okay, so a couple of things on the settings page. First, the search box kind of loses focus when you type fast. Second, the reset button basically resets every section, it should only reset the current one. And third, the scroll position jumps after you save. Yeah, that's it.",
+    reference:
+      "A couple of things on the settings page:\n1. The search box loses focus when you type fast.\n2. The reset button resets every section, it should only reset the current one.\n3. The scroll position jumps after you save.",
+    fixes: {
+      "1. The search box": "form",
+      "2. The reset button": "form",
+      "3. The scroll position": "form",
+    },
+    drops: ["okay", "so", "kind of", "basically", "yeah", "that's it"],
+    keep: ["only reset the current one"],
+  },
+  {
+    id: "tics-self-correct:deepgram",
+    style: "deepgram",
+    source: "tics",
+    raw: "Rename the hook to use voice session, no wait, use dictation session, and update the imports. Basically everywhere it's used, so yeah.",
+    reference:
+      "Rename the hook to useDictationSession, and update the imports everywhere it's used.",
+    fixes: { useDictationSession: "form" },
+    drops: ["voice session", "no wait", "basically", "so yeah"],
+  },
+  {
+    id: "tics-names:openai",
+    style: "openai",
+    source: "tics",
+    raw: "Um, so get Cloud Code to, uh, add a test for the Whisper Flow import, like, the one that reads its dictionary. Yeah, and make it run on Windows too.",
+    reference:
+      "Get Claude Code to add a test for the Wispr Flow import, the one that reads its dictionary, and make it run on Windows too.",
+    alsoAccept: [
+      "Get Claude Code to add a test for the Wispr Flow import, the one that reads its dictionary. Make it run on Windows too.",
+    ],
+    fixes: { "Claude Code": "misread", "Wispr Flow": "misread" },
+    drops: ["um", "so", "uh", "like", "yeah"],
+    keep: ["Windows"],
+  },
+];
+
+// Words that look like filler or a hedge but carry the meaning here: an
+// answer to the agent, "just" for "only", a guess, a kind, a direction.
+const LOOKALIKE: readonly AuthoredCase[] = [
+  {
+    id: "lookalike-yeah-answer:openai",
+    style: "openai",
+    source: "lookalike",
+    raw: "Yeah, and update the stories too.",
+    reference: "Yeah, and update the stories too.",
+    keep: ["Yeah"],
+    terminalOutput: "Done. Should I also update the snapshot tests?",
+  },
+  {
+    id: "lookalike-just:grok",
+    style: "grok",
+    source: "lookalike",
+    raw: "Just run the unit tests for the guard, not the whole suite.",
+    reference: "Just run the unit tests for the guard, not the whole suite.",
+    keep: ["Just run", "not the whole suite"],
+  },
+  {
+    id: "lookalike-i-think:deepgram",
+    style: "deepgram",
+    source: "lookalike",
+    raw: "I think it's the cache, but I'm not sure, so check that before you change anything.",
+    reference:
+      "I think it's the cache, but I'm not sure, so check that before you change anything.",
+    keep: ["I think", "not sure"],
+  },
+  {
+    id: "lookalike-kind-of:openai",
+    style: "openai",
+    source: "lookalike",
+    raw: "Find out what kind of error the watcher throws on Windows and handle that one.",
+    reference: "Find out what kind of error the watcher throws on Windows and handle that one.",
+    keep: ["what kind of error"],
+  },
+  {
+    id: "lookalike-partly:deepgram",
+    style: "deepgram",
+    source: "lookalike",
+    raw: "The tests pretty much pass now, it's only the Windows watcher one that still fails.",
+    reference:
+      "The tests pretty much pass now, it's only the Windows watcher one that still fails.",
+    keep: ["pretty much pass"],
+  },
+  {
+    id: "lookalike-sort-of:grok",
+    style: "grok",
+    source: "lookalike",
+    raw: "The fix sort of works, but the second window still flickers when it opens.",
+    reference: "The fix sort of works, but the second window still flickers when it opens.",
+    keep: ["sort of works"],
+  },
+  {
+    id: "lookalike-okay-answer:grok",
+    style: "grok",
+    source: "lookalike",
+    raw: "Okay, push it, but don't open the PR until CI is green.",
+    reference: "Okay, push it, but don't open the PR until CI is green.",
+    keep: ["Okay, push it", "don't open the PR"],
+    terminalOutput: "All checks pass locally. Ready to push the branch and open the PR?",
+  },
+  {
+    id: "lookalike-right:openai",
+    style: "openai",
+    source: "lookalike",
+    raw: "Move the button to the right of the search field, so it lines up with the toolbar.",
+    reference: "Move the button to the right of the search field, so it lines up with the toolbar.",
+    keep: ["right of", "so it lines up"],
   },
 ];
 
@@ -813,7 +1175,7 @@ function replayCases(): CleanupCase[] {
   return REPLAY_CLIPS.flatMap((clip) => {
     const transcripts = REPLAY_TRANSCRIPTS[clip.id];
     if (!transcripts) return [];
-    return (["openai", "deepgram"] as const).map((style) => {
+    return (["openai", "deepgram", "grok"] as const).map((style) => {
       const { reference, ...transcript } = transcripts[style];
       return {
         id: `${clip.id}:${style}`,
@@ -828,10 +1190,12 @@ function replayCases(): CleanupCase[] {
 
 export const CLEANUP_CORPUS: readonly CleanupCase[] = [
   ...replayCases(),
-  ...[...AFTERNOON, ...CONTEXT, ...WORKSPACE, ...RAMBLE, ...CLEAN].map((entry) => ({
-    ...entry,
-    fixes: entry.fixes ?? {},
-  })),
+  ...[...AFTERNOON, ...CONTEXT, ...WORKSPACE, ...RAMBLE, ...TICS, ...LOOKALIKE, ...CLEAN].map(
+    (entry) => ({
+      ...entry,
+      fixes: entry.fixes ?? {},
+    })
+  ),
   ...regressionCases(),
 ];
 

@@ -3,6 +3,8 @@ import {
   buildCorrectionSystemPrompt,
   buildRewriteSystemPrompt,
   CORE_CORRECTION_PROMPT,
+  correctionInstructionsFor,
+  LITERAL_CORRECTION_PROMPT,
 } from "../voiceCorrection.js";
 
 describe("CORE_CORRECTION_PROMPT", () => {
@@ -10,9 +12,25 @@ describe("CORE_CORRECTION_PROMPT", () => {
     expect(CORE_CORRECTION_PROMPT).toMatch(/return it character-for-character/i);
   });
 
-  it("allows paragraph cleanup without rewriting the passage", () => {
+  it("cleans up to the message the speaker would have typed, never a rewrite of it", () => {
     expect(CORE_CORRECTION_PROMPT).toContain("Add natural paragraph breaks");
-    expect(CORE_CORRECTION_PROMPT).toContain("do not turn it into polished prose");
+    expect(CORE_CORRECTION_PROMPT).toContain(
+      "Return the message the speaker would have typed to the agent"
+    );
+    expect(CORE_CORRECTION_PROMPT).toContain(
+      "never paraphrase, summarize, merge instructions, or add anything"
+    );
+  });
+
+  it("names the tics to drop beside the same words when they carry meaning", () => {
+    expect(CORE_CORRECTION_PROMPT).toMatch(/a closing "so yeah" or "yeah" goes/);
+    expect(CORE_CORRECTION_PROMPT).toMatch(/"Yeah" or "Okay" answering a question the agent asked/);
+    expect(CORE_CORRECTION_PROMPT).toMatch(/"just" meaning only/);
+  });
+
+  it("leaves the uncertain tags no say over filler, layout or spoken symbols", () => {
+    expect(CORE_CORRECTION_PROMPT).not.toContain("preserve it verbatim");
+    expect(CORE_CORRECTION_PROMPT).toMatch(/they don't limit the rest of the cleanup/);
   });
 
   it("gates custom-dictionary correction on context instead of forcing every phonetic match", () => {
@@ -131,6 +149,21 @@ describe("CORE_CORRECTION_PROMPT cleanup of spoken prompts", () => {
       /leave it exactly as spoken when the retracted words contain a negation or a number/
     );
     expect(CORE_CORRECTION_PROMPT).toMatch(/is not a list: keep it inline/);
+  });
+});
+
+describe("correctionInstructionsFor", () => {
+  it("keeps Luna on the literal rules and every other model on the core ones", () => {
+    expect(correctionInstructionsFor("gpt-6-luna").core).toBe(LITERAL_CORRECTION_PROMPT);
+    expect(correctionInstructionsFor("gpt-6.1-terra").core).toBe(CORE_CORRECTION_PROMPT);
+    expect(correctionInstructionsFor("some-new-model").core).toBe(CORE_CORRECTION_PROMPT);
+  });
+
+  it("gives the literal rules the same cache floor and reply contract", () => {
+    const literal = correctionInstructionsFor("gpt-6-luna");
+    expect(literal.core.length).toBeGreaterThan(4800);
+    expect(literal.core).not.toContain("cloud code/clawed code");
+    expect(literal.suffix).toMatch(/^Return a JSON object/);
   });
 });
 

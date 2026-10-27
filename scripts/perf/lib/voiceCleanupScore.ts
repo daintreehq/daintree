@@ -17,10 +17,11 @@ import { FIX_KINDS, type CleanupCase, type FixKind } from "./voiceCleanupCorpus"
  */
 
 // The saved run's shape: bump only when a rescore can no longer read one, since
-// a rescore scores every saved reply again from its text.
-export const VOICE_CLEANUP_SCHEMA_VERSION = 2;
+// a rescore scores every saved reply again from its text. A trial holds its
+// reply landed under each guard since #14786.
+export const VOICE_CLEANUP_SCHEMA_VERSION = 3;
 // Bump when a definition below changes, so runs scored differently aren't compared.
-export const VOICE_CLEANUP_SCORING_VERSION = 3;
+export const VOICE_CLEANUP_SCORING_VERSION = 4;
 
 /** Today's send yardstick (#14793): the wait a send used to give cleanup. */
 export const SEND_WAIT_TARGET_MS = 2000;
@@ -56,6 +57,16 @@ export interface TextScore {
   matchesReference: boolean;
   /** Byte for byte the raw transcript. */
   untouched: boolean;
+  /** Words in the longest sentence or line. */
+  longestSentence: number;
+  /** Whether a run-on came back broken up within the case's `maxSentenceWords`; null when it sets none. */
+  split: boolean | null;
+  /**
+   * The message the speaker would have typed: an accepted reference's words
+   * and lines, every fix and drop landed, nothing kept lost, and any run-on
+   * broken up.
+   */
+  agentReady: boolean;
 }
 
 function countOccurrences(haystack: string, needle: string): number {
@@ -170,6 +181,17 @@ function invented(raw: string, reference: string): string[] {
   return extra;
 }
 
+const SENTENCE_END_RE = /(?<=[.!?])\s+|\n+/u;
+const SENTENCE_WORD_RE = /[\p{L}\p{N}]+(?:['’]\p{L}+)*/gu;
+
+/** Words in the longest sentence or line, the way a reader would count them. */
+export function longestSentence(text: string): number {
+  return Math.max(
+    0,
+    ...text.split(SENTENCE_END_RE).map((sentence) => sentence.match(SENTENCE_WORD_RE)?.length ?? 0)
+  );
+}
+
 function lineWords(text: string): string[] {
   return text
     .split("\n")
@@ -265,6 +287,9 @@ export function scoreText(entry: CleanupCase, text: string): TextScore {
     .map((keep) => keep.label);
 
   const lines = lineWords(text);
+  const matchesReference = references.some((reference) => sameLines(lines, lineWords(reference)));
+  const longest = longestSentence(text);
+  const split = entry.maxSentenceWords === undefined ? null : longest <= entry.maxSentenceWords;
   return {
     referenceWords: referenceWords.length,
     edits: edits(textAlignment),
@@ -281,8 +306,16 @@ export function scoreText(entry: CleanupCase, text: string): TextScore {
     keepsKept: keeps.length - lostKeeps.length,
     keepsTotal: keeps.length,
     lostKeeps,
-    matchesReference: references.some((reference) => sameLines(lines, lineWords(reference))),
+    matchesReference,
     untouched: text === entry.raw,
+    longestSentence: longest,
+    split,
+    agentReady:
+      matchesReference &&
+      missedFixes.length === 0 &&
+      missedDrops.length === 0 &&
+      lostKeeps.length === 0 &&
+      split !== false,
   };
 }
 
@@ -343,8 +376,20 @@ export function corpusProblems(corpus: readonly CleanupCase[]): string[] {
         problems.push(`${entry.id}: "${reference}" has the number ${run}, which the raw doesn't`);
       }
     }
-    if (entry.uncertain?.length && entry.style !== "deepgram") {
-      problems.push(`${entry.id}: only Deepgram flags unsure words`);
+    if (entry.maxSentenceWords !== undefined) {
+      if (longestSentence(entry.raw) <= entry.maxSentenceWords) {
+        problems.push(`${entry.id}: the raw has no sentence over ${entry.maxSentenceWords} words`);
+      }
+      for (const reference of acceptedReferences(entry)) {
+        if (longestSentence(reference) > entry.maxSentenceWords) {
+          problems.push(
+            `${entry.id}: "${reference}" has a sentence over ${entry.maxSentenceWords} words`
+          );
+        }
+      }
+    }
+    if (entry.uncertain?.length && entry.style !== "deepgram" && entry.style !== "grok") {
+      problems.push(`${entry.id}: only Deepgram and Grok flag unsure words`);
     }
     try {
       locateUncertain(entry.raw, entry.uncertain ?? []);
@@ -420,18 +465,29 @@ export function seededShuffle<T>(items: readonly T[], seed: number): T[] {
 /** What became of one passage. */
 export type Disposition = "applied" | "declined" | "rejected" | "failed" | "skipped";
 
-export interface Trial {
-  caseId: string;
-  variant: string;
-  repeat: number;
+/** A reply landed under one guard: what a send would carry. */
+export interface Landing {
   disposition: Disposition;
   rejectReason?: string;
-  /** What the service handed back: the text a send would carry. */
   landed: string;
-  /** What the model proposed, before the checks: the landed text unless it was rejected. */
-  proposal: string;
   landedScore: TextScore;
+}
+
+/** Why a guard refused a cleanup, as opposed to the confidence or command checks. */
+const GUARD_REASONS = new Set(["edit_size", "negation", "number", "protected_span"]);
+
+export interface Trial {
+  caseId: string;
+  /** `model:effort/prompt`. */
+  variant: string;
+  repeat: number;
+  /** The reply as it parsed, before any check; absent when the request failed or was skipped. */
+  reply?: { action: "no_change" | "replace"; correctedText: string; confidence: string };
+  /** What the model proposed: its replacement, else the raw transcript. */
+  proposal: string;
   proposalScore: TextScore;
+  /** The reply landed under each guard the run named, by name. */
+  landings: Record<string, Landing>;
   /** The service's own round trip, request out to reply read. */
   roundTripMs: number | null;
   /** Request out to the first corrected text a streamed reply showed; absent when it didn't stream or showed none. */
@@ -446,11 +502,18 @@ export interface QualitySummary {
   /** Reference words repaired over those the raw transcripts had wrong. */
   repairRate: number;
   /** The denominators, so a cohort with none of a check reads as such. */
-  totals: { repairable: number; misreads: number; forms: number; drops: number; keeps: number };
+  totals: {
+    repairable: number;
+    misreads: number;
+    forms: number;
+    drops: number;
+    keeps: number;
+    splits: number;
+  };
   broken: number;
   novelWords: number;
   addedWords: number;
-  /** Trials that lost a word the raw transcript had right, or added one it never said. */
+  /** Trials that lost a word or a kept span the raw transcript had right, or added a word it never said. */
   trialsWithMeaningRisk: number;
   /** Misread fixes landed: the score a model or prompt choice rests on. */
   misreadRate: number;
@@ -458,7 +521,11 @@ export interface QualitySummary {
   formRate: number;
   dropRate: number;
   keepRate: number;
+  /** Run-ons broken up, over the trials of passages that set `maxSentenceWords`. */
+  splitRate: number;
   referenceMatchRate: number;
+  /** Trials whose text was the message the speaker would have typed (`TextScore.agentReady`). */
+  agentReadyRate: number;
   /** Pooled over normalised reference words. */
   rawWer: number;
   wer: number;
@@ -473,13 +540,26 @@ export interface LatencySummary {
   overTarget: number;
 }
 
+export interface GuardChecks {
+  /** Proposals with a meaning risk that a guard check refused. */
+  caught: number;
+  /** Proposals with a meaning risk that landed. */
+  letThrough: number;
+  /** Proposals with no meaning risk that a guard check refused, so the raw text stayed. */
+  heldBack: number;
+  /** Of those, the ones that were the message the speaker would have typed. */
+  heldBackReady: number;
+}
+
 export interface VariantSummary {
   variant: string;
+  guard: string;
   trials: number;
   dispositions: Record<Disposition, number>;
   rejectReasons: Record<string, number>;
   landed: QualitySummary;
   proposed: QualitySummary;
+  guardChecks: GuardChecks;
   /** Passages already right that came back byte for byte. */
   cleanUntouched: { kept: number; of: number };
   /** Requests that came back with a reply the service could read; failures are left out. */
@@ -499,6 +579,13 @@ export interface VariantSummary {
   };
   meanCostUsd: number | null;
   totalCostUsd: number | null;
+}
+
+/** A lost or changed word the raw had right, a word it never said, or a kept span gone. */
+export function hasMeaningRisk(score: TextScore): boolean {
+  return (
+    score.broken > 0 || score.novelWords > 0 || score.addedWords > 0 || score.lostKeeps.length > 0
+  );
 }
 
 function ratio(numerator: number, denominator: number): number {
@@ -522,7 +609,10 @@ function summariseQuality(
   let dropsTotal = 0;
   let keeps = 0;
   let keepsTotal = 0;
+  let splits = 0;
+  let splitsTotal = 0;
   let matches = 0;
+  let ready = 0;
   let rawEdits = 0;
   let rawReferenceWords = 0;
   let textEdits = 0;
@@ -533,7 +623,7 @@ function summariseQuality(
     broken += score.broken;
     novelWords += score.novelWords;
     addedWords += score.addedWords;
-    if (score.broken > 0 || score.novelWords > 0 || score.addedWords > 0) risky++;
+    if (hasMeaningRisk(score)) risky++;
     misreads += score.misreadsLanded;
     forms += score.formsLanded;
     misreadsTotal += fixesOf(entry, "misread").length;
@@ -542,7 +632,10 @@ function summariseQuality(
     dropsTotal += entry.drops?.length ?? 0;
     keeps += score.keepsKept;
     keepsTotal += score.keepsTotal;
+    if (score.split !== null) splitsTotal++;
+    if (score.split === true) splits++;
     if (score.matchesReference) matches++;
+    if (score.agentReady) ready++;
     // Against the reference the raw transcript is closest to, which needn't be
     // the one this text is: the baseline must be the same for every variant.
     const raw = scoreText(entry, entry.raw);
@@ -559,6 +652,7 @@ function summariseQuality(
       forms: formsTotal,
       drops: dropsTotal,
       keeps: keepsTotal,
+      splits: splitsTotal,
     },
     broken,
     novelWords,
@@ -568,7 +662,9 @@ function summariseQuality(
     formRate: ratio(forms, formsTotal),
     dropRate: ratio(drops, dropsTotal),
     keepRate: ratio(keeps, keepsTotal),
+    splitRate: ratio(splits, splitsTotal),
     referenceMatchRate: ratio(matches, rows.length),
+    agentReadyRate: ratio(ready, rows.length),
     rawWer: ratio(rawEdits, rawReferenceWords),
     wer: ratio(textEdits, referenceWords),
   };
@@ -590,16 +686,22 @@ function firstTexts(rows: ReadonlyArray<{ trial: Trial }>): number[] {
   );
 }
 
+/**
+ * One variant's trials with their replies landed under one guard. Latency,
+ * tokens and cost belong to the requests, so they read the same under every
+ * guard.
+ */
 export function summariseVariant(
   variant: string,
+  guard: string,
   trials: readonly Trial[],
   corpus: readonly CleanupCase[]
 ): VariantSummary {
   const byId = new Map(corpus.map((entry) => [entry.id, entry]));
   const rows = trials
     .filter((trial) => trial.variant === variant)
-    .map((trial) => ({ trial, entry: byId.get(trial.caseId)! }))
-    .filter((row) => row.entry);
+    .map((trial) => ({ trial, entry: byId.get(trial.caseId)!, landing: trial.landings[guard]! }))
+    .filter((row) => row.entry && row.landing);
   const dispositions: Record<Disposition, number> = {
     applied: 0,
     declined: 0,
@@ -608,16 +710,25 @@ export function summariseVariant(
     skipped: 0,
   };
   const rejectReasons: Record<string, number> = {};
-  for (const { trial } of rows) {
-    dispositions[trial.disposition]++;
-    if (trial.rejectReason) {
-      rejectReasons[trial.rejectReason] = (rejectReasons[trial.rejectReason] ?? 0) + 1;
+  const guardChecks: GuardChecks = { caught: 0, letThrough: 0, heldBack: 0, heldBackReady: 0 };
+  for (const { trial, landing } of rows) {
+    dispositions[landing.disposition]++;
+    if (landing.rejectReason) {
+      rejectReasons[landing.rejectReason] = (rejectReasons[landing.rejectReason] ?? 0) + 1;
+    }
+    const risky = hasMeaningRisk(trial.proposalScore);
+    const refused = landing.rejectReason !== undefined && GUARD_REASONS.has(landing.rejectReason);
+    if (risky && refused) guardChecks.caught++;
+    if (hasMeaningRisk(landing.landedScore)) guardChecks.letThrough++;
+    if (!risky && refused) {
+      guardChecks.heldBack++;
+      if (trial.proposalScore.agentReady) guardChecks.heldBackReady++;
     }
   }
   const clean = rows.filter(({ entry }) => entry.raw === entry.reference);
   // A request that failed fast would flatter the cleanups that came back.
   const timed = rows.filter(
-    ({ trial }) => trial.roundTripMs !== null && trial.disposition !== "failed"
+    ({ trial, landing }) => trial.roundTripMs !== null && landing.disposition !== "failed"
   );
   const billed = rows.flatMap(({ trial }) => (trial.usage ? [trial.usage] : []));
   const costs = rows.map(({ trial }) => trial.costUsd);
@@ -626,15 +737,19 @@ export function summariseVariant(
   const totalInput = sum(billed.map((usage) => usage.inputTokens));
   return {
     variant,
+    guard,
     trials: rows.length,
     dispositions,
     rejectReasons,
-    landed: summariseQuality(rows.map(({ entry, trial }) => ({ entry, score: trial.landedScore }))),
+    landed: summariseQuality(
+      rows.map(({ entry, landing }) => ({ entry, score: landing.landedScore }))
+    ),
     proposed: summariseQuality(
       rows.map(({ entry, trial }) => ({ entry, score: trial.proposalScore }))
     ),
+    guardChecks,
     cleanUntouched: {
-      kept: clean.filter(({ trial }) => trial.landedScore.untouched).length,
+      kept: clean.filter(({ landing }) => landing.landedScore.untouched).length,
       of: clean.length,
     },
     roundTrip: summariseLatency(timed.map(({ trial }) => trial.roundTripMs!)),

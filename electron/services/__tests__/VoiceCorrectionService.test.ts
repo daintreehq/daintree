@@ -10,6 +10,10 @@ vi.mock("../../utils/logger.js", () => ({
 
 import { logWarn } from "../../utils/logger.js";
 import { VoiceCorrectionService } from "../VoiceCorrectionService.js";
+import {
+  CORE_CORRECTION_PROMPT,
+  LITERAL_CORRECTION_PROMPT,
+} from "../../../shared/config/voiceCorrection.js";
 import type { VoiceCommandTarget } from "../voiceCommandTarget.js";
 import { getAgentConfig } from "../../../shared/config/agentRegistry.js";
 import { getBuiltinSlashCommands } from "../../../shared/types/slashCommands.js";
@@ -478,6 +482,53 @@ describe("VoiceCorrectionService", () => {
     expect(without.input[0].content).not.toContain("WORKTREE:");
   });
 
+  it("sends each cleanup model its own rules", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(makeFetchResponse({ corrected_text: "Ok." }));
+    vi.stubGlobal("fetch", fetchMock);
+    const promptFor = async (model: string) => {
+      fetchMock.mockClear();
+      await new VoiceCorrectionService().correct({ rawText: "ok" }, { ...BASE_SETTINGS, model });
+      return (
+        JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string) as {
+          input: Array<{ content: string }>;
+        }
+      ).input[0].content;
+    };
+    expect((await promptFor("gpt-6-luna")).startsWith(LITERAL_CORRECTION_PROMPT)).toBe(true);
+    expect((await promptFor("gpt-6.1-terra")).startsWith(CORE_CORRECTION_PROMPT)).toBe(true);
+    expect(LITERAL_CORRECTION_PROMPT).not.toBe(CORE_CORRECTION_PROMPT);
+  });
+
+  it("sends other cleanup instructions under their own cache key", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(makeFetchResponse({ corrected_text: "Ok." }));
+    vi.stubGlobal("fetch", fetchMock);
+    const requestFor = async (instructions?: { core: string; suffix: string }) => {
+      fetchMock.mockClear();
+      await new VoiceCorrectionService().correct(
+        { rawText: "ok" },
+        { ...BASE_SETTINGS, ...(instructions ? { instructions } : {}) }
+      );
+      return JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string) as {
+        prompt_cache_key: string;
+        input: Array<{ content: string }>;
+      };
+    };
+
+    const standard = await requestFor();
+    const other = await requestFor({ core: "CLEAN UP THE TARGET.", suffix: "Reply with JSON." });
+    expect(other.input[0].content.startsWith("CLEAN UP THE TARGET.")).toBe(true);
+    expect(other.input[0].content.endsWith("Reply with JSON.")).toBe(true);
+    expect(other.prompt_cache_key.length).toBeLessThanOrEqual(64);
+    const otherCore = await requestFor({ core: "TIDY THE TARGET.", suffix: "Reply with JSON." });
+    const otherSuffix = await requestFor({ core: "CLEAN UP THE TARGET.", suffix: "JSON only." });
+    const keys = [standard, other, otherCore, otherSuffix].map((body) => body.prompt_cache_key);
+    expect(new Set(keys).size).toBe(4);
+    expect(
+      (await requestFor({ core: "CLEAN UP THE TARGET.", suffix: "Reply with JSON." }))
+        .prompt_cache_key
+    ).toBe(other.prompt_cache_key);
+  });
+
   it("formats explicit correction context in the user message", async () => {
     const fetchMock = vi
       .fn()
@@ -781,6 +832,39 @@ describe("VoiceCorrectionService", () => {
         corrected_text: "Wire up the React component.",
       });
       expect(applied.rejected).toBeUndefined();
+    });
+
+    it("keeps the reply as the model gave it, whatever landed", async () => {
+      const rejected = await correctWith("um don't delete the branch yet", {
+        corrected_text: "Um, delete the branch yet.",
+        confidence: "medium",
+      });
+      expect(rejected.proposal).toEqual({
+        action: "replace",
+        correctedText: "delete the branch yet.",
+        confidence: "medium",
+      });
+
+      const declined = await correctWith("  commit and push ", {
+        action: "no_change",
+        corrected_text: "",
+      });
+      expect(declined.proposal).toEqual({
+        action: "no_change",
+        correctedText: "commit and push",
+        confidence: "high",
+      });
+      expect(declined.confirmedText).toBe("  commit and push ");
+
+      const applied = await correctWith("um wire up the racked component", {
+        corrected_text: "Um, wire up the React component.",
+      });
+      expect(applied.confirmedText).toBe("wire up the React component.");
+      expect(applied.proposal).toEqual({
+        action: "replace",
+        correctedText: "wire up the React component.",
+        confidence: "high",
+      });
     });
 
     it("applies a medium-confidence cleanup", async () => {
