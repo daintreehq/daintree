@@ -16,6 +16,8 @@ import {
   getSessionHistoryPath,
   rewriteAgentSessionPathsForProject,
   removeFromCanopyTrash,
+  adoptCanopyTrashClose,
+  onSessionHistoryWritten,
   MAX_RECORDS_PER_WORKTREE,
   SESSION_HISTORY_TTL_MS,
 } from "../agentSessionHistory.js";
@@ -1155,7 +1157,8 @@ describe("removeFromCanopyTrash", () => {
     title: null,
     projectId: "p1",
     closedBy: "user" as const,
-    trash: { terminalId, spawnedAt, expiresAt: spawnedAt + 50, closedAt: spawnedAt + 30 },
+    terminal: { id: terminalId, spawnedAt },
+    trash: { expiresAt: spawnedAt + 50, closedAt: spawnedAt + 30 },
   });
 
   it("marks only the named incarnation's close, keeping every record for resuming", async () => {
@@ -1163,7 +1166,7 @@ describe("removeFromCanopyTrash", () => {
     await persistAgentSession(userClose("b", "t1", 200), userDataDir);
     await persistAgentSession(userClose("c", "t2", 100), userDataDir);
 
-    const removed = await removeFromCanopyTrash([{ terminalId: "t1", spawnedAt: 100 }], userDataDir);
+    const removed = await removeFromCanopyTrash([{ id: "t1", spawnedAt: 100 }], userDataDir);
 
     expect(removed).toBe(1);
     const records = new Map(
@@ -1177,20 +1180,60 @@ describe("removeFromCanopyTrash", () => {
 
   it("writes nothing for a close already removed or never journaled", async () => {
     await persistAgentSession(userClose("a", "t1", 100), userDataDir);
-    await removeFromCanopyTrash([{ terminalId: "t1", spawnedAt: 100 }], userDataDir);
+    await removeFromCanopyTrash([{ id: "t1", spawnedAt: 100 }], userDataDir);
     const filePath = getSessionHistoryPath(userDataDir)!;
     const before = await fsp.readFile(filePath, "utf-8");
 
     expect(
       await removeFromCanopyTrash(
         [
-          { terminalId: "t1", spawnedAt: 100 },
-          { terminalId: "t9", spawnedAt: 1 },
+          { id: "t1", spawnedAt: 100 },
+          { id: "t9", spawnedAt: 1 },
         ],
         userDataDir
       )
     ).toBe(0);
     expect(await fsp.readFile(filePath, "utf-8")).toBe(before);
+  });
+
+  it("makes an incarnation's earlier capture the close, once, when no close of it landed", async () => {
+    await persistAgentSession(
+      {
+        sessionId: "exited",
+        agentId: "codex",
+        worktreeId: null,
+        title: null,
+        projectId: "p1",
+        closedBy: "exit",
+        terminal: { id: "t1", spawnedAt: 100 },
+      },
+      userDataDir
+    );
+    const trash = { expiresAt: 150, closedAt: 130 };
+
+    expect(await adoptCanopyTrashClose({ id: "t1", spawnedAt: 100 }, trash, userDataDir)).toBe(true);
+    // Another incarnation of the terminal, or a close already claimed, adopts nothing.
+    expect(await adoptCanopyTrashClose({ id: "t1", spawnedAt: 99 }, trash, userDataDir)).toBe(false);
+    expect(
+      await adoptCanopyTrashClose({ id: "t1", spawnedAt: 100 }, { ...trash, closedAt: 1 }, userDataDir)
+    ).toBe(false);
+
+    const [record] = listAgentSessions(undefined, userDataDir);
+    expect(record?.closedBy).toBe("user");
+    expect(record?.trash).toEqual(trash);
+  });
+
+  it("tells listeners of every write, whichever writer made it", async () => {
+    let heard = 0;
+    const off = onSessionHistoryWritten(() => {
+      heard += 1;
+    });
+    await persistAgentSession(userClose("a", "t1", 100), userDataDir);
+    await removeFromCanopyTrash([{ id: "t1", spawnedAt: 100 }], userDataDir);
+    await clearAgentSessions(undefined, userDataDir);
+    off();
+    await persistAgentSession(userClose("b", "t2", 100), userDataDir);
+    expect(heard).toBe(3);
   });
 
   it("never carries an older close's trash onto a newer record of the same session", async () => {

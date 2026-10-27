@@ -143,13 +143,18 @@ describe("gracefulTeardownAndJournalProject", () => {
     const records = new Map(
       journalMock.journalAgentSession.mock.calls.map(([record]) => [
         (record as { sessionId: string }).sessionId,
-        record as { closedBy?: string; trash?: { terminalId: string; expiresAt: number } },
+        record as {
+          closedBy?: string;
+          terminal?: { id: string };
+          trash?: { expiresAt: number };
+        },
       ])
     );
     expect(records.get("s1")?.closedBy).toBe("sleep");
     expect(records.get("s1")?.trash).toBeUndefined();
     expect(records.get("s2")?.closedBy).toBe("user");
-    expect(records.get("s2")?.trash).toMatchObject({ terminalId: "t2", expiresAt: 90_000 });
+    expect(records.get("s2")?.terminal).toEqual({ id: "t2", spawnedAt: 2 });
+    expect(records.get("s2")?.trash).toMatchObject({ expiresAt: 90_000 });
   });
 
   it("freezes each terminal's generation before the kill and passes it to the journal", async () => {

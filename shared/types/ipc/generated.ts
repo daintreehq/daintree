@@ -202,6 +202,7 @@ export interface GeneratedIpcInvokeMap {
       | import("./canopy.js").CanopySnapshot
       | import("./canopy.js").CanopyReadMark[]
       | import("./fleet.js").FleetSnapshot
+      | import("./canopy.js").CanopyRestoreOutcome
       | null;
   };
   "canopy-host:list-assistants": {
@@ -4214,7 +4215,7 @@ export interface GeneratedIpcInvokeMap {
           sourcePrNumber?: number | undefined;
           sourcePrTitle?: string | undefined;
           sourcePrUrl?: string | undefined;
-          sourcePrState?: "merged" | "closed" | "open" | undefined;
+          sourcePrState?: "open" | "merged" | "closed" | undefined;
           sourcePrLinkedIssueNumber?: number | undefined;
           submoduleInit?: "none" | "inherit" | "all" | undefined;
           collisionPolicy?: "error" | "suffix" | undefined;

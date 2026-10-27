@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CanopyTrashLedger, type TrashedTerminalRecord } from "../canopyTrashLedger.js";
+import type { CanopyTrashEntry } from "../../../../shared/types/ipc/canopy.js";
+import {
+  CANOPY_TRASH_SETTLE_MS,
+  CanopyTrashLedger,
+  type TrashedTerminalRecord,
+} from "../canopyTrashLedger.js";
 
 const NOW = 1_800_000_000_000;
 
@@ -20,7 +25,13 @@ function record(id: string, overrides: Partial<TrashedTerminalRecord> = {}): Tra
   };
 }
 
-function setup(records: Record<string, TrashedTerminalRecord | null>) {
+function setup(
+  records: Record<string, TrashedTerminalRecord | null>,
+  options: {
+    onSettle?: (entry: CanopyTrashEntry) => Promise<boolean> | boolean;
+    isRemoved?: (entry: CanopyTrashEntry) => boolean;
+  } = {}
+) {
   let now = NOW;
   const onChange = vi.fn();
   const reads = new Map<string, Array<(value: TrashedTerminalRecord | null) => void>>();
@@ -36,6 +47,7 @@ function setup(records: Record<string, TrashedTerminalRecord | null>) {
     readTerminal,
     isHelpTerminal: (id) => id === "help",
     onChange,
+    ...options,
     now: () => now,
   });
   /** Answers every read made of the run with what the host holds now. */
@@ -114,7 +126,7 @@ describe("CanopyTrashLedger", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
-  it("drops a run when it is restored, removed or expires, whoever did it", async () => {
+  it("drops a run restored, and keeps one the trash lets go, ended, until its close lands", async () => {
     const { ledger, answer, onChange } = setup({
       a: record("a"),
       b: record("b"),
@@ -132,13 +144,75 @@ describe("CanopyTrashLedger", () => {
     ledger.onRestored("a");
     expect(ledger.get("a")).toBeUndefined();
     ledger.onCleared("b", NOW + 20_000);
-    expect(ledger.get("b")).toBeUndefined();
+    // Same row, same trash: only now its process is gone.
+    expect(ledger.get("b")).toMatchObject({ expiresAt: NOW + 20_000, ended: {} });
     expect(onChange).toHaveBeenCalledTimes(2);
 
-    // No clear heard for "c": it still goes at its deadline.
-    vi.advanceTimersByTime(30_000);
+    // Nothing journaled the close: it leaves once one had time to land.
+    vi.advanceTimersByTime(CANOPY_TRASH_SETTLE_MS);
+    await vi.waitFor(() => expect(ledger.get("b")).toBeUndefined());
+
+    // No clear heard for "c": it ends at its deadline all the same, and goes the same way.
+    vi.advanceTimersByTime(30_000 - CANOPY_TRASH_SETTLE_MS);
+    expect(ledger.get("c")?.ended).toEqual({});
+    vi.advanceTimersByTime(CANOPY_TRASH_SETTLE_MS);
+    await vi.waitFor(() => expect(ledger.list()).toEqual([]));
+  });
+
+  it("lets an ended run go without a word once the journal holds that incarnation's close", async () => {
+    const { ledger, answer, onChange } = setup({ a: record("a") });
+    ledger.onTrashed("a", NOW + 20_000);
+    await answer("a");
+    ledger.onCleared("a", NOW + 20_000);
+    onChange.mockClear();
+
+    // Another incarnation's close stands for nothing here.
+    expect(ledger.onJournaled("a", NOW - 1)).toBe(false);
+    expect(ledger.onJournaled("a", NOW - 60_000)).toBe(true);
+    expect(ledger.get("a")).toBeUndefined();
+    expect(onChange).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("asks for the incarnation's earlier session when no close landed, and leaves either way", async () => {
+    const onSettle = vi.fn(async () => true);
+    const { ledger, answer, onChange } = setup({ a: record("a") }, { onSettle });
+    ledger.onTrashed("a", NOW + 20_000);
+    await answer("a");
+    ledger.onCleared("a", NOW + 20_000);
+    onChange.mockClear();
+
+    vi.advanceTimersByTime(CANOPY_TRASH_SETTLE_MS);
+    await vi.waitFor(() => expect(ledger.get("a")).toBeUndefined());
+    expect(onSettle).toHaveBeenCalledWith(
+      expect.objectContaining({ expiresAt: NOW + 20_000, run: expect.objectContaining({ runId: "a" }) })
+    );
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets a run the user removed go when the trash does, never ended", async () => {
+    const { ledger, answer } = setup(
+      { a: record("a") },
+      { isRemoved: (entry) => entry.run.runId === "a" }
+    );
+    ledger.onTrashed("a", NOW + 20_000);
+    await answer("a");
+    ledger.onCleared("a", NOW + 20_000);
+    expect(ledger.get("a")).toBeUndefined();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("takes a run out at once when the user removes it", async () => {
+    const { ledger, answer, onChange } = setup({ a: record("a") });
+    ledger.onTrashed("a", NOW + 20_000);
+    await answer("a");
+    onChange.mockClear();
+    ledger.remove("a");
     expect(ledger.list()).toEqual([]);
-    expect(onChange).toHaveBeenCalledTimes(3);
+    expect(onChange).toHaveBeenCalledTimes(1);
+    // A late clear of that trash finds nothing to end.
+    ledger.onCleared("a", NOW + 20_000);
+    expect(ledger.list()).toEqual([]);
   });
 
   it("ignores a clear of an earlier trash of the same run", async () => {
@@ -189,9 +263,16 @@ describe("CanopyTrashLedger", () => {
   });
 
   it("stops listening and lets its timers go once disposed", async () => {
-    const { ledger, answer, onChange } = setup({ a: record("a"), b: record("b") });
+    const { ledger, answer, onChange } = setup({
+      a: record("a"),
+      b: record("b"),
+      c: record("c"),
+    });
     ledger.onTrashed("a", NOW + 20_000);
     await answer("a");
+    ledger.onTrashed("c", NOW + 20_000);
+    await answer("c");
+    ledger.onCleared("c", NOW + 20_000);
     ledger.onTrashed("b", NOW + 20_000);
     onChange.mockClear();
     ledger.dispose();

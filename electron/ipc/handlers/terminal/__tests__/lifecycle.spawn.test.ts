@@ -3049,12 +3049,8 @@ describe("terminal close handlers - resume journaling", () => {
 
     const [record] = persistAgentSessionMock.mock.calls[0];
     expect(record.closedBy).toBe("user");
-    expect(record.trash).toEqual({
-      terminalId: "term-1",
-      spawnedAt: 1_000,
-      expiresAt: 50_000,
-      closedAt: 50_000 - TRASH_TTL_MS,
-    });
+    expect(record.terminal).toEqual({ id: "term-1", spawnedAt: 1_000 });
+    expect(record.trash).toEqual({ expiresAt: 50_000, closedAt: 50_000 - TRASH_TTL_MS });
   });
 
   it("journals a kill of a pane the user had not closed as a kill, with no trash", async () => {

@@ -45,6 +45,10 @@ import { journalAgentSession, journalAgentSessionRecord } from "../agentSessionJ
 import { readSessionHistory } from "../agentSessionHistory.js";
 import { getLifecycleLedger, disposeLifecycleLedger } from "../lifecycleLedger.js";
 import { events } from "../../events.js";
+import {
+  noteCanopyTrashRemoval,
+  resetCanopyTrashRemovalsForTests,
+} from "../canopyTrashRemovals.js";
 
 function makeRecord(sessionId: string, overrides: Record<string, unknown> = {}) {
   return {
@@ -95,6 +99,26 @@ describe("journalAgentSession", () => {
     expect(records).toHaveLength(1);
     expect(records[0]).toMatchObject({ sessionId: "sess-1", agentId: "claude" });
     expect(recordedEvents).toEqual([{ sessionId: "sess-1" }]);
+  });
+
+  it("lands a close already out of Canopy's Trash when the user removed its run while it ended", async () => {
+    resetCanopyTrashRemovalsForTests();
+    const close = (sessionId: string, spawnedAt: number) =>
+      makeRecord(sessionId, {
+        closedBy: "user",
+        terminal: { id: `term-${spawnedAt}`, spawnedAt },
+        trash: { expiresAt: spawnedAt + 20_000, closedAt: spawnedAt },
+      });
+    noteCanopyTrashRemoval({ id: "term-1", spawnedAt: 1 });
+
+    await journalAgentSession(close("removed", 1), { terminalId: "term-1", generation: null });
+    await journalAgentSession(close("kept", 2), { terminalId: "term-2", generation: null });
+
+    const records = new Map(
+      (await readSessionHistory(userDataDir)).map((record) => [record.sessionId, record])
+    );
+    expect(typeof records.get("removed")?.trash?.removedAt).toBe("number");
+    expect(records.get("kept")?.trash?.removedAt).toBeUndefined();
   });
 
   it("never journals a throwaway run, and claims nothing for it (#14445)", async () => {
