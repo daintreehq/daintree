@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import {
   LONG_SPEECH_CLIPS,
@@ -32,7 +32,13 @@ import { shiftSpans, type VoiceTextSpan } from "../../shared/utils/voiceUncertai
 import { CorrectionStreamAligner } from "../../src/services/voiceCorrectionStream";
 import { seededShuffle } from "./lib/voiceCleanupScore";
 import { installLiveRuntime, liveVoiceSettings } from "./lib/voiceLiveSession";
-import { parseVoice, prepareVoiceClip, type PipelineVoice } from "./lib/voicePipelineAudio";
+import {
+  parseVoice,
+  prepareVoiceClip,
+  readRecording,
+  withRecordedVoice,
+  type PipelineVoice,
+} from "./lib/voicePipelineAudio";
 import {
   ACCEPTED_REFERENCES,
   parsePipelineArm,
@@ -72,12 +78,15 @@ VoiceCorrectionService (gpt-6.1-terra) against the live Responses API, as a
 dictation in a Claude Code pane does. Scores what reached the draft and how long
 the speaker waited after the stop. Needs GROK_API_KEY (or XAI_API_KEY) and
 OPENAI_API_KEY; gemini voices need GOOGLE_API_KEY (or GEMINI_API_KEY), minimax
-voices REPLICATE_API_TOKEN. Costs cents.
+voices REPLICATE_API_TOKEN. With VOICE_REPLAY_RECORDINGS_DIR set, its <clip id>.wav
+recordings play as a voice of their own, recorded, and a clip with no recording
+is skipped for it. Costs cents.
 
   --arms <list>         pipeline arms, the first the reference (default ${DEFAULT_ARMS.join(",")})
                         tokens joined with +: prod, ep<ms>, nofmt, spec, raw
-  --voices <list>       say, say:<name>, gemini:<name>, minimax:<voice_id>
-                        (default ${DEFAULT_VOICES.join(",")})
+  --voices <list>       say, say:<name>, gemini:<name>, minimax:<voice_id>, recorded
+                        (default ${DEFAULT_VOICES.join(",")}, and recorded
+                        whenever VOICE_REPLAY_RECORDINGS_DIR is set)
   --stop-tails <list>   ms of silence between the speech ending and the stop (default 0,700)
   --repeats <n>         passes (default 1)
   --clips <list>        only these clip ids (default every replay and long-speech clip)
@@ -143,6 +152,10 @@ function parseArgs(argv: readonly string[]): Options | null {
       if (!/^[\w.-]+$/.test(options.label)) throw new Error("--label takes letters, digits, . _ -");
     } else if (flag === "--rescore") options.rescore = value();
     else throw new Error(`unknown option ${flag}`);
+  }
+  // A voice named twice would play each clip twice under one session key.
+  if (new Set(options.voices.map((voice) => voice.id)).size !== options.voices.length) {
+    throw new Error("a voice is listed twice");
   }
   if (!Number.isInteger(options.repeats) || options.repeats < 1) {
     throw new Error("--repeats must be a positive whole number");
@@ -505,6 +518,8 @@ interface RunRecord {
   terms: boolean;
   repo?: boolean;
   seed: number;
+  /** Clips the recorded voice skipped, for want of a recording. */
+  unrecorded?: string[];
   sessions: PipelineSession[];
   failures: Array<{ clip: string; voice: string; arm: string; error: string }>;
   summary?: ArmSummary[];
@@ -535,7 +550,7 @@ function renderReport(run: RunRecord, scored: readonly ScoredPipelineSession[]):
   const lines = [
     `# voice-pipeline ${run.label}`,
     "",
-    `${run.startedAt} · ${run.git.revision.slice(0, 10)}${run.git.dirty ? " (dirty)" : ""} · cleanup ${run.model} · voices ${run.voices.join(", ")} · stop tails ${run.stopTails.join(", ")} ms · ${run.repeats} pass(es)${run.terms ? " · clip terms as keyterms" : ""}${run.repo ? " · this repository's context" : ""}`,
+    `${run.startedAt} · ${run.git.revision.slice(0, 10)}${run.git.dirty ? " (dirty)" : ""} · cleanup ${run.model} · voices ${run.voices.join(", ")}${run.unrecorded?.length ? ` (no recording of ${run.unrecorded.join(", ")})` : ""} · stop tails ${run.stopTails.join(", ")} ms · ${run.repeats} pass(es)${run.terms ? " · clip terms as keyterms" : ""}${run.repo ? " · this repository's context" : ""}`,
     "",
     "Times in ms, p50 / p95. First preview is from the start; the rest from the stop press. Settled is when the draft holds its final text (the cleanup landed or gave up; the drain without one).",
     "",
@@ -614,6 +629,19 @@ async function main(): Promise<number> {
     console.error("[voice-pipeline] DAINTREE_GROK_WS_URL points Grok at a mock; unset it");
     return 1;
   }
+  const recordingsDir = process.env.VOICE_REPLAY_RECORDINGS_DIR || undefined;
+  try {
+    options.voices = withRecordedVoice(options.voices, recordingsDir);
+  } catch (error) {
+    console.error(`[voice-pipeline] ${formatErrorMessage(error, "bad voices")}`);
+    return 1;
+  }
+  if (recordingsDir && !statSync(recordingsDir, { throwIfNoEntry: false })?.isDirectory()) {
+    console.error(
+      `[voice-pipeline] VOICE_REPLAY_RECORDINGS_DIR ${recordingsDir} isn't a directory`
+    );
+    return 1;
+  }
   const keys = {
     gemini: process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY ?? "",
     replicate: process.env.REPLICATE_API_TOKEN ?? process.env.REPLICATE_API_KEY ?? "",
@@ -633,17 +661,35 @@ async function main(): Promise<number> {
     ? CLIPS.filter((clip) => options.clips.includes(clip.id))
     : [...CLIPS];
   const prepared = new Map<string, { clip: PreparedClip; samples: Int16Array }>();
+  const unrecorded: string[] = [];
   for (const voice of options.voices) {
+    let count = 0;
     for (const clip of clips) {
       const cacheDir = voice.engine === "say" ? SAY_CACHE_DIR : VOICE_CACHE_DIR;
-      const ready = await prepareVoiceClip(clip, voice, cacheDir, keys);
+      const ready =
+        voice.engine === "recorded"
+          ? readRecording(clip, recordingsDir!)
+          : await prepareVoiceClip(clip, voice, cacheDir, keys);
+      if (!ready) {
+        unrecorded.push(clip.id);
+        continue;
+      }
+      // Audio goes out as it is, so a recording at another rate would play at the wrong speed.
       const pcm = readPcm16Wav(readFileSync(ready.wavPath));
       if (pcm.sampleRate !== REPLAY_SAMPLE_RATE) {
         throw new Error(`${ready.wavPath} is ${pcm.sampleRate} Hz, not ${REPLAY_SAMPLE_RATE}`);
       }
       prepared.set(`${clip.id}|${voice.id}`, { clip: ready, samples: pcm.samples });
+      count++;
     }
-    console.error(`[voice-pipeline] ${voice.id}: ${clips.length} clips ready`);
+    console.error(`[voice-pipeline] ${voice.id}: ${count} of ${clips.length} clips ready`);
+  }
+  if (unrecorded.length > 0) {
+    console.error(`[voice-pipeline] recorded skips ${unrecorded.join(", ")}: no recording`);
+  }
+  if (prepared.size === 0) {
+    console.error("[voice-pipeline] no voice has a clip to play");
+    return 1;
   }
 
   await installLiveRuntime();
@@ -689,6 +735,7 @@ async function main(): Promise<number> {
     terms: options.terms,
     repo: options.repo,
     seed: options.seed,
+    ...(unrecorded.length > 0 ? { unrecorded } : {}),
     sessions: [],
     failures: [],
   };
@@ -708,12 +755,14 @@ async function main(): Promise<number> {
   for (let pass = 1; pass <= options.repeats && !interrupted; pass++) {
     for (const clip of seededShuffle(clips, seed++)) {
       for (const voice of options.voices) {
+        // Only the recorded voice can lack a clip.
+        const ready = prepared.get(`${clip.id}|${voice.id}`);
+        if (!ready) continue;
         for (const tail of options.stopTails) {
           // Arms back to back, in an order shuffled per dictation, so a slow
           // minute on the network lands on all of them.
           for (const arm of seededShuffle(options.arms, seed++)) {
             if (interrupted) break;
-            const ready = prepared.get(`${clip.id}|${voice.id}`)!;
             try {
               const session = await dictate(
                 runtime,

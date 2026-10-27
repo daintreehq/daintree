@@ -18,6 +18,7 @@ import {
 } from "../lib/voiceCleanupCorpus";
 import { PROMPT_VARIANTS, revise } from "../lib/voiceCleanupPrompts";
 import {
+  codeNamesOf,
   corpusProblems,
   locateUncertain,
   longestSentence,
@@ -31,7 +32,26 @@ import {
   type Disposition,
   type Trial,
 } from "../lib/voiceCleanupScore";
-import { inputHash, renderReport, rescore } from "../voice-cleanup";
+import { inputHash, renderReport, requestFor, rescore } from "../voice-cleanup";
+
+// `raw` with the words that spell `name` written as the name, as a cleanup
+// that took them for it would.
+function joinSpoken(raw: string, name: string): string {
+  const key = name.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const words = [...raw.matchAll(/[A-Za-z0-9]+/g)];
+  for (let i = 0; i < words.length; i++) {
+    let joined = "";
+    for (let j = i; j < words.length && joined.length < key.length; j++) {
+      joined += words[j]![0].toLowerCase();
+      if (joined === key) {
+        return (
+          raw.slice(0, words[i]!.index) + name + raw.slice(words[j]!.index! + words[j]![0].length)
+        );
+      }
+    }
+  }
+  throw new Error(`"${raw}" never says ${name}`);
+}
 
 function makeCase(overrides: Partial<CleanupCase>): CleanupCase {
   return {
@@ -79,6 +99,52 @@ describe("cleanup corpus", () => {
       })
     );
     expect(imperfect).toEqual([]);
+  });
+
+  // #14903: production never flags a Grok word, since its streamed words carry no confidence.
+  it("gives no passage but Deepgram's unsure words", () => {
+    expect(
+      CLEANUP_CORPUS.filter((entry) => entry.uncertain?.length && entry.style !== "deepgram")
+    ).toEqual([]);
+  });
+
+  // #14903: code names must both land where the speaker named the code and
+  // leave alone words that only run together into a name, measurably.
+  it("sends its code-name passages the names they spell, each beside a bare twin", () => {
+    const codeNames = CLEANUP_CORPUS.filter((entry) => entry.source === "codenames");
+    const inRepo = codeNames.filter((entry) => entry.codebase);
+    expect(
+      CLEANUP_CORPUS.filter((entry) => entry.source !== "codenames" && entry.codebase)
+    ).toEqual([]);
+    let landed = 0;
+    let leftAlone = 0;
+    for (const entry of inRepo) {
+      const sent = requestFor(entry).codeNames ?? [];
+      expect(sent.length, entry.id).toBeGreaterThan(0);
+      for (const name of sent) {
+        // Each name the passage sends is one cleanup must write, or words it must keep.
+        const score = scoreText(entry, joinSpoken(entry.raw, name));
+        if (Object.hasOwn(entry.fixes, name)) {
+          expect(score.missedFixes, entry.id).not.toContain(name);
+          landed++;
+        } else {
+          expect(score.lostKeeps.length, `${entry.id}: ${name}`).toBeGreaterThan(0);
+          leftAlone++;
+        }
+      }
+      const twins = codeNames.filter(
+        ({ id, codebase, ...twin }) =>
+          id !== entry.id &&
+          !codebase &&
+          JSON.stringify(twin) ===
+            JSON.stringify((({ id: _id, codebase: _codebase, ...rest }) => rest)(entry))
+      );
+      expect(twins, entry.id).toHaveLength(1);
+      expect(requestFor(twins[0]!).codeNames).toBeUndefined();
+    }
+    expect(landed).toBeGreaterThanOrEqual(3);
+    expect(leftAlone).toBeGreaterThanOrEqual(3);
+    expect(codeNames).toHaveLength(inRepo.length * 2);
   });
 
   // #14854: the context a session gives cleanup must both settle names and
@@ -194,6 +260,25 @@ describe("inputHash", () => {
     );
   });
 
+  it("changes with the code names a passage sends, not the rest of its codebase", () => {
+    const shallow = makeCase({
+      raw: "wrap the selector in use shallow",
+      reference: "x",
+      fixes: {},
+    });
+    const withName = { ...shallow, codebase: { identifiers: ["useShallow"] } };
+    expect(inputHash({ ...shallow, codebase: { identifiers: ["useEffect"] } })).toBe(
+      inputHash(shallow)
+    );
+    expect(inputHash(withName)).not.toBe(inputHash(shallow));
+    expect(
+      inputHash({
+        ...withName,
+        codebase: { files: ["src/store/worktreeStore.ts"], identifiers: ["useShallow"] },
+      })
+    ).toBe(inputHash(withName));
+  });
+
   it("changes with anything its session tells cleanup, and only that", () => {
     const hashes = [
       inputHash(passage),
@@ -210,6 +295,28 @@ describe("inputHash", () => {
     ];
     expect(new Set(hashes).size).toBe(hashes.length);
     expect(inputHash({ ...passage, session: structuredClone(session) })).toBe(hashes[1]);
+  });
+});
+
+describe("codeNamesOf", () => {
+  it("finds the names a passage spells in its files and its branch's identifiers", () => {
+    const entry = makeCase({
+      raw: "Open the use voice recording hook and wrap the selector in use shallow, then render it.",
+      codebase: {
+        files: ["src/hooks/useVoiceRecording.ts"],
+        identifiers: ["useShallow", "render"],
+      },
+    });
+    expect(codeNamesOf(entry)).toEqual(["useVoiceRecording", "useShallow"]);
+    expect(codeNamesOf({ ...entry, codebase: undefined })).toEqual([]);
+  });
+
+  it("indexes the session's repository names, as main does for a pane's project", () => {
+    const entry = makeCase({
+      raw: "Read the log with simple git, not a shell.",
+      session: { repositoryNames: ["simple-git"] },
+    });
+    expect(codeNamesOf(entry)).toEqual(["simple-git"]);
   });
 });
 
@@ -249,17 +356,35 @@ describe("corpusProblems", () => {
         raw: "um rerun --watch",
         drops: [],
       }),
+      makeCase({ id: "g", style: "grok", uncertain: ["cash"] }),
     ]);
     expect(problems).toEqual([
       'a: fix "the cache" is already in the raw transcript',
       'b: drop "um" leaves nothing to take out',
       'c: keep "branch changes now" is not in the raw',
-      "d: only Deepgram and Grok flag unsure words",
+      "d: only Deepgram flags unsure words",
       "d: duplicate id",
       'd: unsure phrase "cache" is not in the raw transcript',
       'e: keep "the branch" does not survive into "Invalidate the cache on change."',
       'f: fix "rebuild" is not in the reference',
       'f: keep "--watch" does not survive into "Invalidate the cache when the branch changes."',
+      // Grok's streamed words carry no confidence, so production never flags one.
+      "g: only Deepgram flags unsure words",
+    ]);
+  });
+
+  it("flags an identifier main wouldn't index, and a code-name passage that sends no name", () => {
+    expect(
+      corpusProblems([
+        makeCase({ id: "plain", codebase: { identifiers: ["render", "useShallow", "a.b"] } }),
+        makeCase({ id: "silent", source: "codenames", codebase: { identifiers: ["useShallow"] } }),
+        // A bare twin sends none by design.
+        makeCase({ id: "bare", source: "codenames" }),
+      ])
+    ).toEqual([
+      'plain: identifier "render" is not one main reads from a diff',
+      'plain: identifier "a.b" is not one main reads from a diff',
+      "silent: its codebase gives cleanup no code name",
     ]);
   });
 

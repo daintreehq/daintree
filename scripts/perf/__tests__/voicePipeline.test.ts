@@ -1,5 +1,19 @@
-import { describe, expect, it } from "vitest";
-import { parseVoice, speechPhrases } from "../lib/voicePipelineAudio";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  encodePcm16Wav,
+  REPLAY_CLIPS,
+  REPLAY_SAMPLE_RATE,
+  type ReplayClip,
+} from "../../../e2e/helpers/voiceReplayFixtures";
+import {
+  parseVoice,
+  readRecording,
+  speechPhrases,
+  withRecordedVoice,
+} from "../lib/voicePipelineAudio";
 import {
   brokenWords,
   formWords,
@@ -105,6 +119,71 @@ describe("parseVoice", () => {
       name: "English_Wiselady",
     });
     expect(() => parseVoice("gemini")).toThrow(/unknown voice/);
+    expect(parseVoice("recorded")).toEqual({ id: "recorded", engine: "recorded", name: "" });
+    expect(() => parseVoice("recorded:greg")).toThrow(/unknown voice/);
+  });
+});
+
+describe("withRecordedVoice", () => {
+  const voices = ["say", "gemini:Puck"].map(parseVoice);
+
+  it("adds the recordings as a voice of their own whenever there is a directory of them", () => {
+    expect(withRecordedVoice(voices, "/recordings")).toEqual([
+      ...voices,
+      { id: "recorded", engine: "recorded", name: "" },
+    ]);
+    expect(withRecordedVoice(voices, undefined)).toEqual(voices);
+  });
+
+  it("names the recorded voice once, and refuses it with no directory", () => {
+    const named = [...voices, parseVoice("recorded")];
+    expect(withRecordedVoice(named, "/recordings")).toEqual(named);
+    expect(withRecordedVoice([parseVoice("recorded")], "/recordings")).toHaveLength(1);
+    expect(() => withRecordedVoice(named, undefined)).toThrow(/VOICE_REPLAY_RECORDINGS_DIR/);
+  });
+});
+
+describe("readRecording", () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("plays a clip's recording as it was recorded, and skips a clip with none", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "voice-pipeline-recordings-"));
+    dirs.push(dir);
+    const [short, long, unrecorded] = REPLAY_CLIPS;
+    // Speech from `from` to `to` seconds; the silence a speaker leaves either side stays in.
+    const record = (clip: ReplayClip, seconds: number, from: number, to: number) => {
+      const samples = new Int16Array(seconds * REPLAY_SAMPLE_RATE);
+      samples.fill(8_000, from * REPLAY_SAMPLE_RATE, to * REPLAY_SAMPLE_RATE);
+      writeFileSync(
+        path.join(dir, `${clip.id}.wav`),
+        encodePcm16Wav({ sampleRate: REPLAY_SAMPLE_RATE, samples })
+      );
+    };
+    record(short!, 1, 0.25, 0.5);
+    record(long!, 3, 0.5, 2);
+
+    expect(readRecording(short!, dir)).toEqual({
+      clip: short,
+      wavPath: path.join(dir, `${short!.id}.wav`),
+      source: "recorded",
+      audioMs: 1_000,
+      longestUtteranceMs: 250,
+    });
+    expect(readRecording(long!, dir)).toMatchObject({ audioMs: 3_000, longestUtteranceMs: 1_500 });
+    expect(readRecording(unrecorded!, dir)).toBeNull();
+  });
+
+  it("refuses a recording that isn't mono 16-bit PCM", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "voice-pipeline-recordings-"));
+    dirs.push(dir);
+    const clip = REPLAY_CLIPS[0]!;
+    const wav = encodePcm16Wav({ sampleRate: REPLAY_SAMPLE_RATE, samples: new Int16Array(4) });
+    wav.writeUInt16LE(2, 22);
+    writeFileSync(path.join(dir, `${clip.id}.wav`), wav);
+    expect(() => readRecording(clip, dir)).toThrow(/mono 16-bit PCM/);
   });
 });
 

@@ -1,4 +1,9 @@
 import { alignWords, normaliseWords } from "../../../e2e/helpers/voiceReplayScore";
+import {
+  buildCodeNameIndex,
+  diffCodeNames,
+  matchCodeNames,
+} from "../../../electron/services/voiceCodeNames";
 import { scanProtectedSpans } from "../../../shared/utils/voiceProtectedSpans";
 import { FIX_KINDS, type CleanupCase, type FixKind } from "./voiceCleanupCorpus";
 
@@ -354,6 +359,28 @@ export function locateUncertain(
   return spans;
 }
 
+// Each identifier as an added line of a diff of its own, so only those main's
+// diff reading keeps reach the index.
+function diffIdentifiers(identifiers: readonly string[]): string[] {
+  return diffCodeNames(identifiers.map((identifier) => `+${identifier}`).join("\n"));
+}
+
+/**
+ * The code names a passage spells out word by word, found as main finds them
+ * (`readCodeNames`): its repository's files, its session's repository names
+ * and its branch's identifiers indexed and matched by production's own code.
+ * None for a passage dictated with no repository.
+ */
+export function codeNamesOf(entry: CleanupCase): string[] {
+  const repositoryNames = entry.session?.repositoryNames ?? [];
+  if (!entry.codebase && repositoryNames.length === 0) return [];
+  const index = buildCodeNameIndex(entry.codebase?.files ?? [], [
+    ...repositoryNames,
+    ...diffIdentifiers(entry.codebase?.identifiers ?? []),
+  ]);
+  return matchCodeNames(entry.raw, index);
+}
+
 /**
  * Corpus mistakes that would make a score meaningless, found before any
  * request is paid for. Empty when the corpus is sound.
@@ -407,13 +434,23 @@ export function corpusProblems(corpus: readonly CleanupCase[]): string[] {
         }
       }
     }
-    if (entry.uncertain?.length && entry.style !== "deepgram" && entry.style !== "grok") {
-      problems.push(`${entry.id}: only Deepgram and Grok flag unsure words`);
+    if (entry.uncertain?.length && entry.style !== "deepgram") {
+      problems.push(`${entry.id}: only Deepgram flags unsure words`);
     }
     try {
       locateUncertain(entry.raw, entry.uncertain ?? []);
     } catch (error) {
       problems.push(`${entry.id}: ${(error as Error).message}`);
+    }
+    for (const identifier of entry.codebase?.identifiers ?? []) {
+      if (diffIdentifiers([identifier])[0] !== identifier) {
+        problems.push(`${entry.id}: identifier "${identifier}" is not one main reads from a diff`);
+      }
+    }
+    // A code-name passage whose repository gives cleanup no name tests nothing
+    // its bare twin doesn't.
+    if (entry.source === "codenames" && entry.codebase && codeNamesOf(entry).length === 0) {
+      problems.push(`${entry.id}: its codebase gives cleanup no code name`);
     }
   }
   return problems;

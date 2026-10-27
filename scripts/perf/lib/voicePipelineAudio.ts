@@ -17,17 +17,17 @@ import {
 
 /**
  * Speech for the dictation pipeline benchmark in more than one voice: macOS
- * `say` as the replay benchmark synthesises it, Gemini's TTS models, and
- * MiniMax through Replicate. A clip's `[[slnc N]]` markers are exact silences
- * in every voice: `say` renders them itself, and for the others each phrase
- * between them is synthesised alone, trimmed, and joined to the next by that
- * many milliseconds of silence.
+ * `say` as the replay benchmark synthesises it, Gemini's TTS models, MiniMax
+ * through Replicate, and a person's own recordings. A clip's `[[slnc N]]`
+ * markers are exact silences in every synthesised voice: `say` renders them
+ * itself, and for the others each phrase between them is synthesised alone,
+ * trimmed, and joined to the next by that many milliseconds of silence.
  */
 
-export type VoiceEngine = "say" | "gemini" | "minimax";
+export type VoiceEngine = "say" | "gemini" | "minimax" | "recorded";
 
 export interface PipelineVoice {
-  /** As given on the command line: `say`, `say:Samantha`, `gemini:Puck`, `minimax:English_Wiselady`. */
+  /** As given on the command line: `say`, `say:Samantha`, `gemini:Puck`, `minimax:English_Wiselady`, `recorded`. */
   id: string;
   engine: VoiceEngine;
   /** The engine's own voice name; empty for the system `say` voice. */
@@ -45,7 +45,44 @@ export function parseVoice(spec: string): PipelineVoice {
   const name = rest.join(":");
   if (engine === "say") return { id: spec, engine, name };
   if ((engine === "gemini" || engine === "minimax") && name) return { id: spec, engine, name };
-  throw new Error(`unknown voice "${spec}" (say, say:<name>, gemini:<name>, minimax:<voice_id>)`);
+  if (spec === "recorded") return { id: spec, engine: "recorded", name: "" };
+  throw new Error(
+    `unknown voice "${spec}" (say, say:<name>, gemini:<name>, minimax:<voice_id>, recorded)`
+  );
+}
+
+/**
+ * The voices a run speaks in: the ones asked for, and the speaker's own
+ * recordings whenever there is a directory of them, as a voice of their own.
+ */
+export function withRecordedVoice(
+  voices: readonly PipelineVoice[],
+  recordingsDir: string | undefined
+): PipelineVoice[] {
+  const named = voices.some((voice) => voice.engine === "recorded");
+  if (!recordingsDir) {
+    if (named) throw new Error("the recorded voice needs VOICE_REPLAY_RECORDINGS_DIR");
+    return [...voices];
+  }
+  return named ? [...voices] : [...voices, parseVoice("recorded")];
+}
+
+/**
+ * The speaker's recording of the clip, `<id>.wav` in `dir`, played as it was
+ * recorded. Null when there is none: the clip is skipped for this voice, never
+ * filled in with synthesised speech.
+ */
+export function readRecording(clip: ReplayClip, dir: string): PreparedClip | null {
+  const wavPath = path.join(dir, `${clip.id}.wav`);
+  if (!existsSync(wavPath)) return null;
+  const pcm = readPcm16Wav(readFileSync(wavPath));
+  return {
+    clip,
+    wavPath,
+    source: "recorded",
+    audioMs: pcmDurationMs(pcm),
+    longestUtteranceMs: longestUtteranceMs(pcm),
+  };
 }
 
 /** The phrases between a clip's silences, each with the pause that follows it. */
@@ -169,6 +206,7 @@ export async function prepareVoiceClip(
   cacheDir: string,
   keys: VoiceKeys
 ): Promise<PreparedClip> {
+  if (voice.engine === "recorded") throw new Error("recordings are read with readRecording");
   if (voice.engine === "say") {
     return prepareClip(clip, { cacheDir, ...(voice.name ? { voice: voice.name } : {}) });
   }

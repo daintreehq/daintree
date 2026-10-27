@@ -40,6 +40,7 @@ import {
 } from "./lib/voiceCleanupCorpus";
 import { PROMPT_VARIANTS } from "./lib/voiceCleanupPrompts";
 import {
+  codeNamesOf,
   corpusProblems,
   fixesOf,
   locateUncertain,
@@ -291,14 +292,18 @@ function settingsFor(
   };
 }
 
-function requestFor(entry: CleanupCase): VoiceCorrectionRequest {
+// Code names go to every variant; the service drops them for rules that
+// don't say what they are, as it does in production.
+export function requestFor(entry: CleanupCase): VoiceCorrectionRequest {
   const recentContext = entry.recentContext ?? [];
   const recentPrompts = entry.recentPrompts ?? [];
+  const codeNames = codeNamesOf(entry);
   return {
     rawText: entry.raw,
     ...(recentContext.length > 0 ? { recentContext } : {}),
     ...(recentPrompts.length > 0 ? { recentPrompts } : {}),
     ...(entry.terminalOutput ? { terminalOutput: entry.terminalOutput } : {}),
+    ...(codeNames.length > 0 ? { codeNames } : {}),
     reason: "stop",
     startsPrompt: entry.startsPrompt ?? recentContext.length === 0,
     ...(entry.uncertain?.length ? { uncertain: locateUncertain(entry.raw, entry.uncertain) } : {}),
