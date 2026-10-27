@@ -117,7 +117,6 @@ vi.mock("../../../services/VoiceCorrectionService.js", () => ({
       shared.fileLinkCalls.push(utterance);
       return Promise.resolve([]);
     };
-    this.setSessionSignal = function () {};
   },
 }));
 

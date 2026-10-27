@@ -42,8 +42,6 @@ const shared = vi.hoisted(() => ({
   transcriptionProvider: "openai" as "openai" | "deepgram",
   /** The start context svc.start() was last handed. */
   startContext: undefined as undefined | { keyterms?: Promise<string[]> },
-  /** The signal the correction service was last handed. */
-  sessionSignal: null as AbortSignal | null,
   /** The session the fake provider was last started for; its events carry it. */
   providerSessionId: null as string | null,
   /** The project of the view sending the start. */
@@ -114,9 +112,6 @@ vi.mock("../../../services/VoiceCorrectionService.js", () => ({
   VoiceCorrectionService: function VoiceCorrectionService(this: Record<string, unknown>) {
     this.warm = () => Promise.resolve();
     this.preconnect = () => {};
-    this.setSessionSignal = function (signal: AbortSignal | null) {
-      shared.sessionSignal = signal;
-    };
     this.correct = async function (
       request: { rawText: string; terminalOutput?: string },
       settings: { customDictionary: string[]; knownNames?: string[]; projectName?: string }
@@ -206,7 +201,7 @@ vi.mock("../../channels.js", () => ({
   },
 }));
 
-import { registerVoiceInputHandlers } from "../voiceInput.js";
+import { registerVoiceInputHandlers, getLiveVoiceSession } from "../voiceInput.js";
 import { assembleTaggedKeyterms } from "../../../services/voiceContextKeyterms.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import {
@@ -315,7 +310,6 @@ describe("voiceInput — audio sent before the provider starts", () => {
     shared.assembleKeyterms = null;
     shared.transcriptionProvider = "openai";
     shared.startContext = undefined;
-    shared.sessionSignal = null;
     shared.providerSessionId = null;
     shared.drainPromise = null;
     sender.destroyed = false;
@@ -572,30 +566,26 @@ describe("voiceInput — audio sent before the provider starts", () => {
     expect(shared.stops).toBe(0);
   });
 
-  it("leaves a newer session's signal alone when an older pending start fails", async () => {
+  it("leaves a newer session running when an older pending start fails", async () => {
     let failFirst!: (result: StartResult) => void;
     shared.startPromise = new Promise<StartResult>((r) => {
       failFirst = r;
     });
     const first = start();
     await vi.waitFor(() => expect(shared.calls).toEqual(["start"]));
-    const firstSignal = shared.sessionSignal!;
 
     // Another view starts while the first is still connecting.
     fakeEvent.sender = makeSender();
     shared.startPromise = null;
     await expect(start()).resolves.toEqual({ ok: true });
-    const secondSignal = shared.sessionSignal!;
-    expect(secondSignal).not.toBe(firstSignal);
+    const second = currentSessionId;
 
     // The second start's svc.start() tore down the first provider, which settles
     // its pending start as stopped.
     failFirst({ ok: false, error: "Voice session stopped" });
     await expect(first).resolves.toEqual({ ok: false, error: "Voice session stopped" });
 
-    expect(firstSignal.aborted).toBe(true);
-    expect(secondSignal.aborted).toBe(false);
-    expect(shared.sessionSignal).toBe(secondSignal);
+    expect(getLiveVoiceSession()?.sessionId).toBe(second);
   });
 
   it("holds 15 seconds of startup audio without dropping any", async () => {
@@ -866,7 +856,11 @@ describe("voiceInput — keyterm target", () => {
     });
     shared.voiceInput = { correctionEnabled: true };
     await expect(startWith({ terminalId: "t-1" })).resolves.toEqual({ ok: true });
-    await getHandler("voice-input:correct")(fakeEvent, { rawText: "fix it", terminalId: "t-1" });
+    await getHandler("voice-input:correct")(fakeEvent, {
+      rawText: "fix it",
+      terminalId: "t-1",
+      sessionId: currentSessionId,
+    });
 
     expect(shared.correctionNames).toEqual([...hosts, ...projects, "billing", "payments"]);
     expect(shared.correctionNames).not.toContain(secret);
@@ -879,6 +873,39 @@ describe("voiceInput — keyterm target", () => {
     await expect(startWith({ terminalId: "t-1" })).resolves.toEqual({ ok: true });
 
     fakeEvent.sender = makeSender();
+    await getHandler("voice-input:correct")(fakeEvent, {
+      rawText: "fix it",
+      terminalId: "t-1",
+      sessionId: currentSessionId,
+    });
+    expect(shared.correctionNames).toEqual([]);
+  });
+
+  it("corrects a passage with its own session's names after another starts in the view", async () => {
+    // Cleanup was off at A's start, so A has no cleanup context read ahead.
+    shared.voiceInput = { correctionEnabled: false };
+    shared.names = Promise.resolve({ hosts: ["Studio 1"], projects: ["Alpha"], worktrees: [] });
+    await expect(startWith({ terminalId: "t-1" })).resolves.toEqual({ ok: true });
+    const sessionA = currentSessionId;
+    await stop(sessionA);
+
+    shared.names = Promise.resolve({ hosts: ["Studio 9"], projects: ["Bravo"], worktrees: [] });
+    await expect(startWith({ terminalId: "t-1" })).resolves.toEqual({ ok: true });
+    shared.voiceInput = { correctionEnabled: true };
+
+    await getHandler("voice-input:correct")(fakeEvent, {
+      rawText: "fix it",
+      terminalId: "t-1",
+      sessionId: sessionA,
+    });
+    expect(shared.correctionNames).toEqual(["Studio 1", "Alpha"]);
+  });
+
+  it("corrects a passage naming no session with no names", async () => {
+    shared.names = Promise.resolve({ hosts: ["Studio 1"], projects: ["Alpha"], worktrees: [] });
+    shared.voiceInput = { correctionEnabled: true };
+    await expect(startWith({ terminalId: "t-1" })).resolves.toEqual({ ok: true });
+
     await getHandler("voice-input:correct")(fakeEvent, { rawText: "fix it", terminalId: "t-1" });
     expect(shared.correctionNames).toEqual([]);
   });

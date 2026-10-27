@@ -135,8 +135,6 @@ import {
 let service: VoiceTranscriptionService | null = null;
 let servicePromise: Promise<VoiceTranscriptionService> | null = null;
 let correctionService: VoiceCorrectionService | null = null;
-// The controller whose signal correctionService currently carries.
-let sessionController: AbortController | null = null;
 
 // A completion ending in a spoken "send it", waiting to see whether the
 // speaker stays quiet. It goes out as a send, as literal words when the
@@ -350,10 +348,6 @@ function endSession(session: VoiceSession, reason: VoiceSessionEndReason): void 
   session.unwatchDestroyed = null;
   // Abort any in-flight file-link detection / resolution.
   session.controller.abort();
-  if (sessionController === session.controller) {
-    correctionService?.setSessionSignal(null);
-    sessionController = null;
-  }
   logInfo("[VoiceInput] Session ended", {
     sessionId: session.id,
     reason,
@@ -745,9 +739,26 @@ function hostPaneFor(viewProjectKey: string | null, outsideView: boolean): HostP
   return outsideView ? null : hostPaneOf(viewProjectKey);
 }
 
-// The names the latest dictation sent, so its end-of-passage correction spells
-// them the same way. Keyed by view: another view's names aren't this one's.
-let lastSessionNames: { webContentsId: number; names: string[] } | null = null;
+// The names each recent dictation sent, so its cleanup spells them the same
+// way, whatever has started since. Kept whether or not cleanup was on at its
+// start, for the same sessions as the cleanup context.
+interface SessionNames {
+  readonly sessionId: string;
+  readonly webContentsId: number;
+  names: string[];
+}
+
+let recentSessionNames: SessionNames[] = [];
+
+function findSessionNames(
+  ctx: IpcContext,
+  request: VoiceInputCorrectPayload
+): SessionNames | undefined {
+  if (!request.sessionId) return undefined;
+  return recentSessionNames.find(
+    (record) => record.sessionId === request.sessionId && record.webContentsId === ctx.webContentsId
+  );
+}
 
 // A dictation's cleanup context, read while it runs (#14771), so the passages
 // sent after the stop go straight to the model. Kept only for a session that
@@ -764,7 +775,6 @@ interface CorrectionPrep {
   readonly projectInfo: Promise<{ name?: string; path?: string }>;
   readonly vocabulary: Promise<VoiceDictionaryEntry[]>;
   readonly commandTarget: Promise<VoiceCommandTarget | null>;
-  readonly names: { names: string[] };
   // What the terminal showed as the stop landed, read while the stop drains.
   // Read only then: it goes to OpenAI with the passages and nothing earlier.
   terminalOutput: Promise<string | null> | null;
@@ -1165,7 +1175,6 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     terminalId: string | undefined,
     vocabulary: Promise<VoiceDictionaryEntry[]>,
     hostStart: Promise<PaneStartContext | null> | null,
-    names: { names: string[] },
     screenedNames: Promise<string[]>
   ) => {
     const hostPane = hostPaneFor(session.projectId, session.outsideView);
@@ -1190,7 +1199,6 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
             resolveKeytermTarget(session.projectId, terminalId, deps.ptyClient).terminalId,
             COMMAND_TARGET_CORRECTION_BUDGET_MS
           ),
-      names,
       terminalOutput: null,
       hostStop: null,
     };
@@ -1285,8 +1293,12 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // The correction gets the same screened names as the keyterms, whenever
     // they arrive. Its own record, so a slow read from an older session can't
     // overwrite this one's.
-    const sessionNames = { webContentsId: session.webContentsId, names: [] as string[] };
-    lastSessionNames = sessionNames;
+    const sessionNames: SessionNames = {
+      sessionId: session.id,
+      webContentsId: session.webContentsId,
+      names: [],
+    };
+    recentSessionNames = [sessionNames, ...recentSessionNames].slice(0, CORRECTION_PREP_MEMORY);
     const screenedNames = names.then((gathered) =>
       flattenDictationNames(screenDictationNames(gathered))
     );
@@ -1294,7 +1306,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       sessionNames.names = screened;
     });
     if (session.intent === "dictation" && mayCorrect(settings)) {
-      prepareCorrection(session, terminalId, vocabulary, hostContext, sessionNames, screenedNames);
+      prepareCorrection(session, terminalId, vocabulary, hostContext, screenedNames);
     }
     // Bounded by the same budget as the other reads, and resolved alongside them.
     // The keyterms wait on it, so it is in place before either provider can
@@ -1720,11 +1732,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     };
     const keyterms = taggedKeyterms ? recordAssembledTerms(taggedKeyterms) : null;
     const providerStartAt = performance.now();
-    // Bound at the handoff: until now a session this one replaced may still be
-    // draining, and its file-link detection runs under its own signal.
+    // Its transcripts look for spoken file references through it.
     correctionService ??= new VoiceCorrectionService();
-    sessionController = session.controller;
-    correctionService.setSessionSignal(session.controller.signal);
     // Field names avoid "key": the logger blanks any field containing it.
     logInfo("[VoiceInput] Start timing — provider start", {
       sessionId: session.id,
@@ -1950,6 +1959,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     };
   };
 
+  // Cleanup requests still out, cancelled when the handlers go.
+  const openCorrections = new Set<AbortController>();
+
   // Whole-passage cleanup pass. The renderer calls this once after recording
   // stops, with the full dictated text; correction runs as a single gpt-6-luna
   // request rather than the old per-segment streaming pipeline.
@@ -1968,62 +1980,78 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       return { action: "no_change", correctedText: request.rawText };
     }
 
-    if (!correctionService) {
-      correctionService = new VoiceCorrectionService();
-    }
+    const svc = (correctionService ??= new VoiceCorrectionService());
+    // The request is its passage's alone. Only the view that sent it going
+    // away cancels it, since the reply would reach no one: no session starting
+    // or ending, the passage's own included, ever does.
+    const lifetime = new AbortController();
+    openCorrections.add(lifetime);
+    const sender = ctx.event?.sender;
+    const unwatchSender = sender ? onWebContentsDestroyed(sender, () => lifetime.abort()) : null;
+    try {
+      const outsideView = request.outsideView === true;
+      // Read while the dictation ran, for a passage that names its session. One
+      // that doesn't, or a session cleanup was off for at its start, reads now.
+      const prep = findCorrectionPrep(ctx, request);
+      // Found before any wait, so a session that starts meanwhile can't push
+      // this one's names out.
+      const names = findSessionNames(ctx, request);
+      let projectInfo: { name?: string; path?: string };
+      let vocabulary: VoiceDictionaryEntry[];
+      let commandTarget: VoiceCommandTarget | null;
+      let terminalOutput: string | null;
+      if (prep) {
+        [projectInfo, vocabulary, commandTarget, terminalOutput] = await Promise.all([
+          prep.projectInfo,
+          prep.vocabulary,
+          currentCommandTarget(prep),
+          prep.terminalOutput ?? readStopOutput(prep),
+        ]);
+      } else {
+        ({ projectInfo, vocabulary, commandTarget, terminalOutput } = await readCorrectionContext(
+          ctx.projectId,
+          request.terminalId,
+          outsideView
+        ));
+      }
+      if (lifetime.signal.aborted) {
+        return { action: "no_change", correctedText: request.rawText, failed: true };
+      }
+      const result = await svc.correct(
+        {
+          rawText: request.rawText,
+          recentContext: request.recentContext,
+          ...(terminalOutput ? { terminalOutput } : {}),
+          reason: "stop",
+          startsPrompt: request.startsPrompt === true,
+          ...(request.uncertain ? { uncertain: request.uncertain } : {}),
+        },
+        correctionSettingsFor(
+          settings,
+          projectInfo,
+          vocabulary,
+          commandTarget,
+          outsideView ? [] : (names?.names ?? [])
+        ),
+        lifetime.signal
+      );
+      // Main's share of the wait, for the session summary: up to the request
+      // going out, and the round trip, when there was one.
+      const sentAt = result.roundTrip?.sentAt ?? performance.now();
 
-    const outsideView = request.outsideView === true;
-    // Read while the dictation ran, for a passage that names its session. One
-    // that doesn't, or a session cleanup was off for at its start, reads now.
-    const prep = findCorrectionPrep(ctx, request);
-    let projectInfo: { name?: string; path?: string };
-    let vocabulary: VoiceDictionaryEntry[];
-    let commandTarget: VoiceCommandTarget | null;
-    let terminalOutput: string | null;
-    let knownNames: string[];
-    if (prep) {
-      [projectInfo, vocabulary, commandTarget, terminalOutput] = await Promise.all([
-        prep.projectInfo,
-        prep.vocabulary,
-        currentCommandTarget(prep),
-        prep.terminalOutput ?? readStopOutput(prep),
-      ]);
-      knownNames = outsideView ? [] : prep.names.names;
-    } else {
-      ({ projectInfo, vocabulary, commandTarget, terminalOutput } = await readCorrectionContext(
-        ctx.projectId,
-        request.terminalId,
-        outsideView
-      ));
-      knownNames =
-        !outsideView && lastSessionNames?.webContentsId === ctx.webContentsId
-          ? lastSessionNames.names
-          : [];
+      return {
+        action: result.action,
+        correctedText: result.confirmedText,
+        ...(result.failed ? { failed: true as const } : {}),
+        timing: {
+          prepMs: Math.max(0, sentAt - startedAt),
+          requestMs: result.roundTrip ? result.roundTrip.ms : null,
+        },
+      };
+    } finally {
+      unwatchSender?.();
+      openCorrections.delete(lifetime);
     }
-    const result = await correctionService.correct(
-      {
-        rawText: request.rawText,
-        recentContext: request.recentContext,
-        ...(terminalOutput ? { terminalOutput } : {}),
-        reason: "stop",
-        startsPrompt: request.startsPrompt === true,
-        ...(request.uncertain ? { uncertain: request.uncertain } : {}),
-      },
-      correctionSettingsFor(settings, projectInfo, vocabulary, commandTarget, knownNames)
-    );
-    // Main's share of the wait, for the session summary: up to the request
-    // going out, and the round trip, when there was one.
-    const sentAt = result.roundTrip?.sentAt ?? performance.now();
-
-    return {
-      action: result.action,
-      correctedText: result.confirmedText,
-      ...(result.failed ? { failed: true as const } : {}),
-      timing: {
-        prepMs: Math.max(0, sentAt - startedAt),
-        requestMs: result.roundTrip ? result.roundTrip.ms : null,
-      },
-    };
   };
 
   // A spoken instruction applied to selected composer text. It runs whatever
@@ -2125,9 +2153,11 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     service = null;
     servicePromise = null;
     correctionService = null;
-    sessionController = null;
+    for (const lifetime of openCorrections) lifetime.abort();
+    openCorrections.clear();
     lastDictationTerms = null;
     lastTermSources = new Map();
     correctionPreps = [];
+    recentSessionNames = [];
   };
 }

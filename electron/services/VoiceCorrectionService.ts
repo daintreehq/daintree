@@ -234,23 +234,23 @@ class CorrectionDiscardedError extends Error {
 }
 
 export class VoiceCorrectionService {
-  private sessionSignal: AbortSignal | null = null;
   // When each correction prompt last reached OpenAI, by account and content.
   private readonly promptUsedAt = new Map<string, number>();
   private readonly warming = new Set<string>();
   private preconnecting: Promise<void> | null = null;
   private preconnectedAt: number | null = null;
 
-  setSessionSignal(signal: AbortSignal | null): void {
-    this.sessionSignal = signal;
-  }
-
+  /**
+   * Cleans up one passage. `signal` belongs to the request alone: nothing
+   * another dictation does can cancel it.
+   */
   async correct(
     request: VoiceCorrectionRequest,
-    settings: VoiceCorrectionSettings
+    settings: VoiceCorrectionSettings,
+    signal?: AbortSignal
   ): Promise<VoiceCorrectionResult> {
     const trace: RequestTrace = {};
-    const result = await this.correctPassage(request, settings, trace);
+    const result = await this.correctPassage(request, settings, trace, signal);
     if (trace.sentAt === undefined) return result;
     const ms = (trace.settledAt ?? performance.now()) - trace.sentAt;
     return { ...result, roundTrip: { sentAt: trace.sentAt, ms } };
@@ -259,7 +259,8 @@ export class VoiceCorrectionService {
   private async correctPassage(
     request: VoiceCorrectionRequest,
     settings: VoiceCorrectionSettings,
-    trace: RequestTrace
+    trace: RequestTrace,
+    signal: AbortSignal | undefined
   ): Promise<VoiceCorrectionResult> {
     const trimmedRaw = request.rawText.trim();
     if (!trimmedRaw) {
@@ -293,7 +294,8 @@ export class VoiceCorrectionService {
           uncertain: sliceSpans(request.uncertain ?? [], lead, lead + trimmedRaw.length),
         },
         settings,
-        trace
+        trace,
+        signal
       );
 
       let confirmedText: string;
@@ -499,10 +501,9 @@ export class VoiceCorrectionService {
   }
 
   /**
-   * Applies a spoken instruction to selected composer text. It carries its own
-   * deadline rather than the session's signal: the recording that captured the
-   * instruction has ended by the time this runs, and a new one starting must
-   * not cancel it.
+   * Applies a spoken instruction to selected composer text, under its own
+   * deadline: the recording that captured the instruction has ended by the
+   * time this runs, and a new one starting must not cancel it.
    */
   async rewrite(
     request: VoiceRewriteRequest,
@@ -608,11 +609,6 @@ export class VoiceCorrectionService {
     }
   }
 
-  /**
-   * Takes its own abort signal rather than the session's: the final
-   * utterance's detection is still running when a graceful stop ends the
-   * session, and its result is still wanted.
-   */
   async detectFileLinkTokens(
     utterance: string,
     settings: Pick<VoiceCorrectionSettings, "apiKey" | "organizationId" | "projectId">,
@@ -726,7 +722,8 @@ export class VoiceCorrectionService {
   private async callApi(
     request: VoiceCorrectionRequest,
     settings: VoiceCorrectionSettings,
-    trace: RequestTrace
+    trace: RequestTrace,
+    signal: AbortSignal | undefined
   ): Promise<Omit<VoiceCorrectionResult, "confirmedText">> {
     const systemPrompt = this.buildSystemPrompt(settings);
     const userMessage = this.buildUserMessage(request);
@@ -741,9 +738,9 @@ export class VoiceCorrectionService {
 
     return await withTimeoutSignal(
       this.getCorrectionTimeoutMs(request),
-      (signal) =>
-        this.requestCorrection(request, settings, systemPrompt, userMessage, signal, trace),
-      this.sessionSignal
+      (deadline) =>
+        this.requestCorrection(request, settings, systemPrompt, userMessage, deadline, trace),
+      signal
     );
   }
 
