@@ -353,6 +353,12 @@ describe("validateCorrection", () => {
           symbols
         )
       ).toEqual({ ok: false, reason: "protected_span" });
+      // A symbol's name used as a word stays a word beside the flag.
+      expect(validateCorrection("run dot dash V", "Run dot -V.", symbols)).toEqual({ ok: true });
+      expect(validateCorrection("run dot dash V", "Run -V.", symbols)).toEqual({
+        ok: false,
+        reason: "protected_span",
+      });
       // Spelled letters joined either side of it.
       expect(
         validateCorrection(

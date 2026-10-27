@@ -421,8 +421,9 @@ function placeSpokenSymbols(
   return {
     tokens: raw.filter((_, index) => !free[index]),
     // The words it was spelled with sit inside the typed flag, and it sits
-    // between the words it was spoken between (another spelled flag's words
-    // count), so it can't move to another command or outlive a dropped one.
+    // between the words it was spoken between (past any spoken symbols typed
+    // as symbols, so another spelled flag's words count), so it can't move to
+    // another command or outlive a dropped one.
     holdsFlag: (spelled, typed) => {
       const from = firstTokenFrom(raw, spelled.start);
       if (from > 0 && raw[from - 1].end > spelled.start) return false;
@@ -438,8 +439,8 @@ function placeSpokenSymbols(
       const firstTyped = firstTokenFrom(corrected, typed.start);
       const lastTyped = firstTokenFrom(corrected, typed.end) - 1;
       let before = from - 1;
-      while (before >= 0 && isSymbol(before)) before--;
-      while (next < raw.length && isSymbol(next)) next++;
+      while (before >= 0 && free[before]) before--;
+      while (next < raw.length && free[next]) next++;
       const beside = (index: number, at: number) =>
         index < 0 || index >= raw.length
           ? at < 0 || at >= corrected.length
