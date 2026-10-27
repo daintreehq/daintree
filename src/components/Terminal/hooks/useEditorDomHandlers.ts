@@ -4,7 +4,7 @@ import type { EditorView } from "@codemirror/view";
 import { hasFileDrag } from "@/lib/fileDragPayload";
 import { hasAgentContextDrag } from "@/lib/agentContextDragPayload";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
-import { isEnterLikeLineBreakInputEvent } from "../hybridInputEvents";
+import { agentAltChordKey, isEnterLikeLineBreakInputEvent } from "../hybridInputEvents";
 
 interface LatestRefShape {
   disabled: boolean;
@@ -19,6 +19,8 @@ interface LatestRefShape {
   onSendKey?: (key: string) => void;
   isVoiceActiveForPanel: boolean;
   isExpanded: boolean;
+  /** The agent's own Option/Alt chords (`capabilities.altChords`), sent to it rather than typed. */
+  altChords?: readonly string[];
 }
 
 interface UseEditorDomHandlersParams {
@@ -149,7 +151,13 @@ export function useEditorDomHandlers({
             }
             return false;
           }
-          return false;
+          // Matched by key code here rather than in the keymap: CodeMirror
+          // leaves every macOS Option chord to type its glyph.
+          const latest = latestRef.current;
+          const chord = latest ? agentAltChordKey(event, latest.altChords) : null;
+          if (chord === null || !latest?.onSendKey || latest.disabled) return false;
+          latest.onSendKey(chord);
+          return true;
         },
         blur: (event) => {
           const nextTarget = event.relatedTarget as HTMLElement | null;

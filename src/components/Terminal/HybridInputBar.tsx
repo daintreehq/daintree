@@ -291,6 +291,7 @@ interface LatestState {
   isVoiceActiveForPanel: boolean;
   isExpanded: boolean;
   modEnterSend?: () => ComposerSendRoute;
+  altChords?: readonly string[];
 }
 
 interface HybridInputE2EController {
@@ -508,6 +509,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const commandContext = { terminalId, cwd, projectId };
 
     const isAgentTerminal = agentId !== undefined;
+    const altChords = agentId ? getAgentConfig(agentId)?.capabilities?.altChords : undefined;
 
     // --- Terminal color scheme ---
     const effectiveTheme = useTerminalColorSchemeStore(selectEffectiveTheme);
@@ -900,6 +902,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         isVoiceActiveForPanel,
         isExpanded,
         modEnterSend,
+        altChords,
       };
     });
 
