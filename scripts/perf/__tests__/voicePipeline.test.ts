@@ -6,6 +6,7 @@ import {
   encodePcm16Wav,
   REPLAY_CLIPS,
   REPLAY_SAMPLE_RATE,
+  type ReplayClip,
 } from "../../../e2e/helpers/voiceReplayFixtures";
 import {
   parseVoice,
@@ -127,10 +128,9 @@ describe("withRecordedVoice", () => {
   const voices = ["say", "gemini:Puck"].map(parseVoice);
 
   it("adds the recordings as a voice of their own whenever there is a directory of them", () => {
-    expect(withRecordedVoice(voices, "/recordings").map((voice) => voice.id)).toEqual([
-      "say",
-      "gemini:Puck",
-      "recorded",
+    expect(withRecordedVoice(voices, "/recordings")).toEqual([
+      ...voices,
+      { id: "recorded", engine: "recorded", name: "" },
     ]);
     expect(withRecordedVoice(voices, undefined)).toEqual(voices);
   });
@@ -152,22 +152,27 @@ describe("readRecording", () => {
   it("plays a clip's recording as it was recorded, and skips a clip with none", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "voice-pipeline-recordings-"));
     dirs.push(dir);
-    const [recorded, unrecorded] = REPLAY_CLIPS;
-    // Leading and trailing silence a speaker leaves stays in.
-    const samples = new Int16Array(REPLAY_SAMPLE_RATE);
-    samples.fill(8_000, REPLAY_SAMPLE_RATE / 4, REPLAY_SAMPLE_RATE / 2);
-    writeFileSync(
-      path.join(dir, `${recorded!.id}.wav`),
-      encodePcm16Wav({ sampleRate: REPLAY_SAMPLE_RATE, samples })
-    );
+    const [short, long, unrecorded] = REPLAY_CLIPS;
+    // Speech from `from` to `to` seconds; the silence a speaker leaves either side stays in.
+    const record = (clip: ReplayClip, seconds: number, from: number, to: number) => {
+      const samples = new Int16Array(seconds * REPLAY_SAMPLE_RATE);
+      samples.fill(8_000, from * REPLAY_SAMPLE_RATE, to * REPLAY_SAMPLE_RATE);
+      writeFileSync(
+        path.join(dir, `${clip.id}.wav`),
+        encodePcm16Wav({ sampleRate: REPLAY_SAMPLE_RATE, samples })
+      );
+    };
+    record(short!, 1, 0.25, 0.5);
+    record(long!, 3, 0.5, 2);
 
-    expect(readRecording(recorded!, dir)).toEqual({
-      clip: recorded,
-      wavPath: path.join(dir, `${recorded!.id}.wav`),
+    expect(readRecording(short!, dir)).toEqual({
+      clip: short,
+      wavPath: path.join(dir, `${short!.id}.wav`),
       source: "recorded",
       audioMs: 1_000,
       longestUtteranceMs: 250,
     });
+    expect(readRecording(long!, dir)).toMatchObject({ audioMs: 3_000, longestUtteranceMs: 1_500 });
     expect(readRecording(unrecorded!, dir)).toBeNull();
   });
 

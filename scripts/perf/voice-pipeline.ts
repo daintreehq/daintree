@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import {
   LONG_SPEECH_CLIPS,
@@ -152,6 +152,10 @@ function parseArgs(argv: readonly string[]): Options | null {
       if (!/^[\w.-]+$/.test(options.label)) throw new Error("--label takes letters, digits, . _ -");
     } else if (flag === "--rescore") options.rescore = value();
     else throw new Error(`unknown option ${flag}`);
+  }
+  // A voice named twice would play each clip twice under one session key.
+  if (new Set(options.voices.map((voice) => voice.id)).size !== options.voices.length) {
+    throw new Error("a voice is listed twice");
   }
   if (!Number.isInteger(options.repeats) || options.repeats < 1) {
     throw new Error("--repeats must be a positive whole number");
@@ -632,8 +636,10 @@ async function main(): Promise<number> {
     console.error(`[voice-pipeline] ${formatErrorMessage(error, "bad voices")}`);
     return 1;
   }
-  if (recordingsDir && !existsSync(recordingsDir)) {
-    console.error(`[voice-pipeline] VOICE_REPLAY_RECORDINGS_DIR ${recordingsDir} doesn't exist`);
+  if (recordingsDir && !statSync(recordingsDir, { throwIfNoEntry: false })?.isDirectory()) {
+    console.error(
+      `[voice-pipeline] VOICE_REPLAY_RECORDINGS_DIR ${recordingsDir} isn't a directory`
+    );
     return 1;
   }
   const keys = {
