@@ -103,6 +103,12 @@ const RAW_ONLY: RecentDictation = {
 const item = (name: string, within: ParentNode = document) =>
   [...within.querySelectorAll('[role="menuitem"]')].filter((el) => el.textContent === name);
 const entries = () => [...document.querySelectorAll('[data-testid="dictation-entry"]')];
+const recording = () =>
+  useVoiceRecordingStore.setState({
+    status: "recording",
+    micSignal: "live",
+    activeTarget: { panelId: "p1", panelTitle: "Claude" },
+  });
 
 describe("VoiceRecordingToolbarButton — recent dictations (#14637)", () => {
   beforeEach(() => {
@@ -126,24 +132,16 @@ describe("VoiceRecordingToolbarButton — recent dictations (#14637)", () => {
     useRecentDictationsStore.getState().setDictations([]);
   });
 
-  it("keeps the idle slot an empty placeholder until there is something to recover", () => {
-    useRecentDictationsStore.getState().setDictations([]);
+  it("keeps the idle slot an empty placeholder even with dictations to recover", () => {
     const { container } = render(<VoiceRecordingToolbarButton />);
 
     expect(container.querySelector("button")).toBeNull();
     expect(container.querySelector('[aria-hidden="true"]')).not.toBeNull();
-  });
-
-  it("shows a history button once a dictation has finished, which opens the list", () => {
-    const { getByTestId } = render(<VoiceRecordingToolbarButton data-toolbar-item="" />);
-
-    fireEvent.click(getByTestId("voice-history-button"));
-    expect(dispatch).toHaveBeenCalledWith("voiceInput.openRecentDictations", undefined, {
-      source: "user",
-    });
+    expect(entries()).toHaveLength(0);
   });
 
   it("offers each dictation's text, and the original only where cleanup changed it", () => {
+    recording();
     render(<VoiceRecordingToolbarButton />);
 
     expect(entries().map((el) => el.textContent)).toEqual([
@@ -160,9 +158,11 @@ describe("VoiceRecordingToolbarButton — recent dictations (#14637)", () => {
   });
 
   it("gives the composer the keyboard after an add, instead of the toolbar", () => {
+    recording();
     render(<VoiceRecordingToolbarButton />);
     fireEvent.click(item("Add to draft")[0]!);
     expect(recovery.insertRecentDictation).toHaveBeenCalledWith(CLEANED, "cleaned");
+    menu.onOpenChange!(false);
 
     const close = new Event("focus.close", { cancelable: true });
     menu.onCloseAutoFocus!(close);
@@ -177,6 +177,7 @@ describe("VoiceRecordingToolbarButton — recent dictations (#14637)", () => {
   });
 
   it("forgets an add's destination when the menu reopens before its close finished", () => {
+    recording();
     render(<VoiceRecordingToolbarButton />);
     fireEvent.click(item("Add to draft")[0]!);
     menu.onOpenChange!(true);
@@ -189,8 +190,10 @@ describe("VoiceRecordingToolbarButton — recent dictations (#14637)", () => {
 
   it("leaves focus to the menu when the add was refused", () => {
     recovery.insertRecentDictation.mockReturnValue(null);
+    recording();
     render(<VoiceRecordingToolbarButton />);
     fireEvent.click(item("Add to draft")[1]!);
+    expect(recovery.insertRecentDictation).toHaveBeenCalledWith(RAW_ONLY, "cleaned");
 
     const close = new Event("focus.close", { cancelable: true });
     menu.onCloseAutoFocus!(close);
@@ -205,12 +208,8 @@ describe("VoiceRecordingToolbarButton — recent dictations (#14637)", () => {
     expect(entries()).toHaveLength(2);
     locked.unmount();
 
-    useVoiceRecordingStore.setState({
-      lockedTarget: null,
-      status: "recording",
-      micSignal: "live",
-      activeTarget: { panelId: "p1", panelTitle: "Claude" },
-    });
+    useVoiceRecordingStore.setState({ lockedTarget: null });
+    recording();
     render(<VoiceRecordingToolbarButton />);
     expect(item("Pause dictation")).toHaveLength(1);
     expect(entries()).toHaveLength(2);
