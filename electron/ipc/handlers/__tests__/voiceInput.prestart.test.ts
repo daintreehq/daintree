@@ -930,8 +930,33 @@ describe("voiceInput — keyterm target", () => {
       await expect(correct()).resolves.toEqual({
         action: "no_change",
         correctedText: "go with the shin",
+        timing: { prepMs: expect.any(Number), requestMs: null },
       });
       expect(shared.correctionTerminalOutput).toBeUndefined();
+    });
+
+    it("reads a dictation's output while its stop drains, never before", async () => {
+      await startWith({ terminalId: "t-1" });
+      expect(ptyClient.getTerminalSnapshot).not.toHaveBeenCalled();
+      await stop();
+      expect(ptyClient.getTerminalSnapshot).toHaveBeenCalledTimes(1);
+
+      for (const rawText of ["go with the shin", "and the second passage"]) {
+        await getHandler("voice-input:correct")(fakeEvent, {
+          rawText,
+          terminalId: "t-1",
+          sessionId: currentSessionId,
+        });
+        expect(shared.correctionTerminalOutput).toBe("Migration or the shim?\n>");
+      }
+      expect(ptyClient.getTerminalSnapshot).toHaveBeenCalledTimes(1);
+    });
+
+    it("reads none at the stop with cleanup off", async () => {
+      shared.voiceInput = { correctionEnabled: false };
+      await startWith({ terminalId: "t-1" });
+      await stop();
+      expect(ptyClient.getTerminalSnapshot).not.toHaveBeenCalled();
     });
   });
 
