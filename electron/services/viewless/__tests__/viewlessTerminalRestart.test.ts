@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { CHANNELS } from "../../../ipc/channels.js";
 import type { ProjectState, TerminalSnapshot } from "../../../../shared/types/project.js";
 import type { ViewlessTerminalRecord } from "../ViewlessActionExecutor.js";
