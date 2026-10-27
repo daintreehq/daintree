@@ -1094,9 +1094,20 @@ describe("prompt variants", () => {
     expect(PROMPT_VARIANTS.v13!.instructionsFor("gpt-6.1-terra")).toEqual(
       withRecentPrompts(PROMPT_VARIANTS.final!.instructionsFor("gpt-6.1-terra"))
     );
-    // Production now clarifies self-corrections; replaying agentreply must keep its measured rules.
-    expect(production.instructionsFor("gpt-6.1-terra")).not.toEqual(
-      PROMPT_VARIANTS.agentreply!.instructionsFor("gpt-6.1-terra")
+    // Production clarifies self-corrections past the rules pauses1 was measured
+    // with (#14898); replaying a measured variant must keep its measured rules.
+    const kept = "An instruction the speaker didn't take back is never dropped.";
+    const clarified = (instructions: CorrectionInstructions) =>
+      revise(instructions, {
+        core: [
+          [
+            kept,
+            `${kept} The retracted words are only the phrase the replacement takes the place of, not the whole sentence: a negation governing a verb that stays does not block replacing its object. "Don't edit the routes, I mean the handlers" becomes "Don't edit the handlers"; "Don't run it, no wait, run it" stays as spoken because the negation itself was retracted. Keep the replacement exactly in the speaker's words, including a pronoun such as "one": "Use the old script, no wait, the shared one" becomes "Use the shared one", never "Use the shared script".`,
+          ],
+        ],
+      });
+    expect(production.instructionsFor("gpt-6.1-terra")).toEqual(
+      clarified(PROMPT_VARIANTS.pauses1!.instructionsFor("gpt-6.1-terra"))
     );
   });
 
