@@ -28,6 +28,7 @@ import { logWarn } from "../utils/logger.js";
 import * as AgentStateCache from "./ProjectViewAgentStateCache.js";
 import { updateViewBounds } from "./ProjectViewFactory.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
+import { isDictationViewHeld } from "../services/voice/dictationViewHold.js";
 import type { CachedViewPurgeSession, ViewEntry } from "./ProjectViewManagerTypes.js";
 
 // Cached-view memory purge cadence. The delay keeps the likely next-switch
@@ -178,7 +179,16 @@ export function deactivateEntry(
       const mcp = host.mcpActivityFor(capturedProjectId, vc);
       // A host's live assistant runs its tool calls through this view (#13392).
       const remoteAssistant = host.remoteAssistantLive?.(vc.id) === true;
-      if (!mcp.liveBinding && !mcp.dispatchLease && !mcp.unknown && !remoteAssistant) {
+      // A dictation started here still captures its audio in this renderer,
+      // and its cleanup writes into its draft (#14773).
+      const dictating = isDictationViewHeld(vc);
+      if (
+        !mcp.liveBinding &&
+        !mcp.dispatchLease &&
+        !mcp.unknown &&
+        !remoteAssistant &&
+        !dictating
+      ) {
         void freezeWebContents(vc);
       }
     }

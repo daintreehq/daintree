@@ -345,6 +345,7 @@ describe("voiceInput — IPC handler surface", () => {
       answer = resolve;
     });
 
+    vi.useFakeTimers();
     try {
       const pending = handleCorrect({ sender: view }, { rawText: "helo world" });
       await Promise.resolve();
@@ -352,9 +353,13 @@ describe("voiceInput — IPC handler surface", () => {
 
       answer();
       await pending;
+      // Still held while the reply reaches the view and lands in its draft.
+      expect(isDictationViewHeld(view)).toBe(true);
+      vi.advanceTimersByTime(5_000);
       expect(isDictationViewHeld(view)).toBe(false);
     } finally {
       shared.cleanupGate = null;
+      vi.useRealTimers();
     }
   });
 
@@ -2532,6 +2537,7 @@ describe("voiceInput — rewrite instructions", () => {
       answer = resolve;
     });
 
+    vi.useFakeTimers();
     try {
       const pending = handleRewrite(fakeEvent, {
         selectedText: "a long sentence",
@@ -2542,9 +2548,12 @@ describe("voiceInput — rewrite instructions", () => {
 
       answer();
       await pending;
+      expect(isDictationViewHeld(view)).toBe(true);
+      vi.advanceTimersByTime(5_000);
       expect(isDictationViewHeld(view)).toBe(false);
     } finally {
       shared.cleanupGate = null;
+      vi.useRealTimers();
     }
   });
 

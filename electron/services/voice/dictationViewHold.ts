@@ -10,7 +10,8 @@
  * Dependency-free so the eviction controller can read it synchronously.
  */
 
-const holds = new Map<number, number>();
+/** Each view's outstanding holds, one token apiece: a stale release finds nothing to drop. */
+const holds = new Map<number, Set<symbol>>();
 const releaseListeners = new Set<(webContentsId: number) => void>();
 
 /**
@@ -18,20 +19,27 @@ const releaseListeners = new Set<(webContentsId: number) => void>();
  * called, or `ttlMs` has passed when given. Releasing twice is harmless.
  */
 export function holdDictationView(webContentsId: number, ttlMs?: number): () => void {
-  holds.set(webContentsId, (holds.get(webContentsId) ?? 0) + 1);
-  let released = false;
+  const token = Symbol("dictation-view-hold");
+  let tokens = holds.get(webContentsId);
+  if (!tokens) {
+    tokens = new Set();
+    holds.set(webContentsId, tokens);
+  }
+  tokens.add(token);
   let timer: ReturnType<typeof setTimeout> | null = null;
   const release = () => {
-    if (released) return;
-    released = true;
     if (timer) clearTimeout(timer);
-    const left = (holds.get(webContentsId) ?? 1) - 1;
-    if (left > 0) {
-      holds.set(webContentsId, left);
-      return;
-    }
+    timer = null;
+    const current = holds.get(webContentsId);
+    if (!current?.delete(token) || current.size > 0) return;
     holds.delete(webContentsId);
-    for (const listener of [...releaseListeners]) listener(webContentsId);
+    for (const listener of [...releaseListeners]) {
+      try {
+        listener(webContentsId);
+      } catch {
+        // One listener failing must not keep the others from reclaiming.
+      }
+    }
   };
   if (ttlMs !== undefined) {
     timer = setTimeout(release, ttlMs);
@@ -58,7 +66,7 @@ export function onDictationViewReleased(listener: (webContentsId: number) => voi
   };
 }
 
-/** Test-only: forget every hold. */
+/** Test-only: forget every hold. A release from before the reset then drops nothing. */
 export function _resetDictationViewHoldsForTests(): void {
   holds.clear();
 }

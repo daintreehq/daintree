@@ -162,7 +162,8 @@ const CORRECTION_PREP_MEMORY = 4;
 // long at most, and goes without.
 const HOST_PROJECT_READ_BUDGET_MS = 500;
 // The renderer asks for a stopped dictation's cleanup as soon as the stop
-// resolves; its view stays held this long for the request to arrive.
+// resolves, and applies each answer as it arrives; its view stays held this
+// long after either for the next step to reach it.
 const CLEANUP_HANDOFF_MS = 5_000;
 // A cleanup request's hold outlasts the longest correction the service waits
 // for, so it only ever lapses on a request that never settled.
@@ -2103,11 +2104,12 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       return { action: "no_change", correctedText: request.rawText };
     }
     // The answer lands in the asking view's draft, so the view is kept until
-    // it has (#14773).
+    // it has (#14773): through the request, and a handoff for the reply.
     const releaseView = holdDictationView(ctx.webContentsId, CLEANUP_REQUEST_HOLD_MS);
     try {
       return await correctPassage(ctx, request, settings, startedAt);
     } finally {
+      holdCleanupHandoff(ctx.webContentsId);
       releaseView();
     }
   };
@@ -2205,6 +2207,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     try {
       return await rewriteSelection(ctx, request, settings);
     } finally {
+      holdCleanupHandoff(ctx.webContentsId);
       releaseView();
     }
   };

@@ -139,6 +139,10 @@ import {
   registerCachedViewWebContents,
   unregisterCachedViewWebContents,
 } from "../webContentsRegistry.js";
+import {
+  _resetDictationViewHoldsForTests,
+  holdDictationView,
+} from "../../services/voice/dictationViewHold.js";
 
 function createMockWindow() {
   return {
@@ -265,6 +269,34 @@ describe("ProjectViewManager — efficiency freeze", () => {
     const gcOrder = initialWc.executeJavaScript.mock.invocationCallOrder[0];
     const freezeOrder = vi.mocked(freezeWebContents).mock.invocationCallOrder[0];
     expect(gcOrder).toBeLessThan(freezeOrder);
+  });
+
+  describe("a view a dictation still needs (#14773)", () => {
+    afterEach(() => _resetDictationViewHoldsForTests());
+
+    it("isn't frozen as the user leaves it", async () => {
+      manager.setEfficiencyFreeze(true);
+      vi.advanceTimersByTime(500);
+      vi.mocked(freezeWebContents).mockClear();
+      holdDictationView(initialWc.id);
+
+      await manager.switchTo("proj-b", "/path/b");
+
+      expect(vi.mocked(freezeWebContents)).not.toHaveBeenCalled();
+    });
+
+    it("is skipped by the batch freeze, and frozen once the dictation lets go", async () => {
+      await manager.switchTo("proj-b", "/path/b");
+      const release = holdDictationView(initialWc.id);
+
+      manager.setEfficiencyFreeze(true);
+      vi.advanceTimersByTime(500);
+      expect(vi.mocked(freezeWebContents)).not.toHaveBeenCalled();
+
+      release();
+      manager.refreezeUnprotectedCachedViews();
+      expect(vi.mocked(freezeWebContents)).toHaveBeenCalledWith(initialWc);
+    });
   });
 
   it("deactivateCurrentView does not freeze when efficiency is off", async () => {

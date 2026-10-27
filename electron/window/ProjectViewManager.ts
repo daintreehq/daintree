@@ -1574,6 +1574,8 @@ export class ProjectViewManager {
       // A host's assistant runs its tool calls through this view, often one the
       // person never shows (a hub started it); frozen, every call would stall.
       if (this.remoteAssistantLive?.(wc.id) === true) continue;
+      // A dictation started here captures its audio in this renderer (#14773).
+      if (isDictationViewHeld(wc)) continue;
       void freezeWebContents(wc);
     }
   }
