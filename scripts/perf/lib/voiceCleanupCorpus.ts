@@ -19,8 +19,9 @@ import { REPLAY_CLIPS } from "../../../e2e/helpers/voiceReplayFixtures";
  *   and punctuated, numbers as digits, "um", "uh" and stutters gone but "yeah",
  *   "you know" and hedges kept, compounds and identifiers written as ordinary
  *   words ("Web Socket", "use Terminal Store"), and spelled letters as capitals
- *   ("N P M"). It flags no unsure words: xAI's word confidences aren't
- *   calibrated (#14769), so cleanup gets none from it.
+ *   ("N P M"). Its words under 0.65 confidence reach cleanup as unsure
+ *   (#14859), the same cut-off as Deepgram's, so its misheard words are
+ *   flagged too.
  *
  * The cleanup regression prompts (`dictatedPrompts.ts`) come in as they are,
  * in no provider's style.
@@ -49,7 +50,7 @@ export interface CleanupCase {
   keep?: string[];
   /** A run-on the cleanup should break up: no sentence it writes may run longer than this many words. */
   maxSentenceWords?: number;
-  /** Words the recogniser was unsure of, located in `raw` in order. Deepgram only. */
+  /** Words the recogniser was unsure of, located in `raw` in order. Deepgram and Grok only. */
   uncertain?: string[];
   recentContext?: string[];
   terminalOutput?: string;
@@ -91,6 +92,7 @@ export const REPLAY_TRANSCRIPTS: Readonly<Record<string, ReplayTranscripts>> = {
       raw: "Zustand selector in the work tree store is returning a new array on every render. Wrap it in use shallow.",
       fixes: ["worktree", "useShallow"],
       keep: ["Zustand"],
+      uncertain: ["work tree", "use shallow"],
     },
   },
   "npm-test-watch": {
@@ -162,6 +164,7 @@ export const REPLAY_TRANSCRIPTS: Readonly<Record<string, ReplayTranscripts>> = {
     grok: {
       raw: "The Project View Manager evicts the least recently used view when memory is tight, but the renderer for that view keeps its X term instances alive because nothing calls dispose on them when the web contents goes away. Find the leak and fix it.",
       fixes: ["xterm"],
+      uncertain: ["X term"],
     },
   },
   "rebase-develop": {
@@ -244,6 +247,7 @@ export const REPLAY_TRANSCRIPTS: Readonly<Record<string, ReplayTranscripts>> = {
       raw: "The React compiler bailed out on use Terminal Store. Check the Babel plug-in output for the reason.",
       fixes: ["useTerminalStore", "plugin"],
       keep: ["Babel"],
+      uncertain: ["use Terminal Store"],
     },
   },
   "playwright-spec": {
@@ -297,6 +301,7 @@ export const REPLAY_TRANSCRIPTS: Readonly<Record<string, ReplayTranscripts>> = {
       raw: "Deepgram Nova 3 rejects the key term parameter when the list is too long, so cap it before building the U R L.",
       fixes: ["keyterm", "URL"],
       keep: ["Deepgram"],
+      uncertain: ["key term"],
     },
   },
   "pull-request": {
@@ -317,6 +322,7 @@ export const REPLAY_TRANSCRIPTS: Readonly<Record<string, ReplayTranscripts>> = {
     grok: {
       raw: "Move the handler into Electron slash IPC slash handlers and regenerate the preload types with code gen colon IPC.",
       fixes: ["electron/ipc/handlers", "codegen:ipc"],
+      uncertain: ["code gen"],
     },
   },
   "xterm-webgl": {
@@ -333,6 +339,7 @@ export const REPLAY_TRANSCRIPTS: Readonly<Record<string, ReplayTranscripts>> = {
     grok: {
       raw: "The X term Web GL renderer drops glyphs after a resize. Check the texture atlas size.",
       fixes: ["xterm", "WebGL"],
+      uncertain: ["X term", "Web GL"],
     },
   },
   "node-pty-rebuild": {
@@ -601,7 +608,10 @@ const RAMBLE: readonly AuthoredCase[] = [
     source: "ramble",
     raw: "So the problem is the guard rejects any cleanup that changes more than 15% of the words, and when it rejects one, nothing lands at all, so the whole passage stays raw. What I want is for you to measure how often that happens on the replay fixtures, no wait, on the new cleanup corpus and tell me which rule fires most often.",
     reference:
+      "The problem is the guard rejects any cleanup that changes more than 15% of the words, and when it rejects one, nothing lands at all, so the whole passage stays raw. What I want is for you to measure how often that happens on the new cleanup corpus and tell me which rule fires most often.",
+    alsoAccept: [
       "So the problem is the guard rejects any cleanup that changes more than 15% of the words, and when it rejects one, nothing lands at all, so the whole passage stays raw. What I want is for you to measure how often that happens on the new cleanup corpus and tell me which rule fires most often.",
+    ],
     drops: ["no wait", "replay fixtures"],
     keep: ["15%", "nothing lands at all"],
   },
@@ -701,6 +711,7 @@ const TICS: readonly AuthoredCase[] = [
     fixes: ["Claude Code", "Codex"],
     drops: ["basically", "you know", "yeah"],
     keep: ["not waiting on each other"],
+    uncertain: ["Cloud Code", "codecs"],
   },
   {
     id: "tics-false-start:openai",

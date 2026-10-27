@@ -22,6 +22,7 @@ const V11: CorrectionGuardLimits = {
   minRemoved: 4,
   minAdded: 2,
   minAllowanceRemoved: 2,
+  spokenSymbols: false,
 };
 
 export const GUARD_VARIANTS: Readonly<Record<string, GuardVariant>> = {
@@ -41,6 +42,10 @@ export const GUARD_VARIANTS: Readonly<Record<string, GuardVariant>> = {
   remove35: {
     description: "drops up to 35% of the words, adds up to 15%",
     limits: { ...V11, removedRatio: 0.35 },
+  },
+  symbols: {
+    description: "v11, with symbols typed for their spoken names read as those words",
+    limits: { ...V11, spokenSymbols: true },
   },
   floor6: {
     description: "v11 with a short passage allowed to drop six words",
@@ -101,6 +106,16 @@ export const ADVERSARIAL_PROPOSALS: readonly AdversarialProposal[] = [
     harm: "answers the question",
     proposal:
       "Why does the worktree dashboard re-render every time a terminal prints output? Because it subscribes to the whole store.",
+  },
+  {
+    caseId: "npm-test-watch:openai",
+    harm: "adds a flag the speaker never spelled",
+    proposal: "Run npm test --watch --coverage on the voice recording service test file.",
+  },
+  {
+    caseId: "rebase-develop:openai",
+    harm: "drops the branch it names",
+    proposal: "Rebase this branch and resolve the conflict in package.json.",
   },
   {
     caseId: "tics-agents:grok",

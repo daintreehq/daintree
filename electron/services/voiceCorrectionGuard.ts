@@ -130,6 +130,13 @@ export interface CorrectionGuardLimits {
    * may drop besides the words those allowances cover: a stutter, not a clause.
    */
   readonly minAllowanceRemoved: number;
+  /**
+   * Whether a symbol typed for its spoken name ("origin slash develop" as
+   * origin/develop, "project underscore id" as project_id) stands for the
+   * word it replaces rather than counting as an edit, and a flag the speaker
+   * spelled out ("dash dash watch" as --watch) may appear.
+   */
+  readonly spokenSymbols: boolean;
 }
 
 // Cleanup removes filler and merges misheard phrases into one term, so it may
@@ -140,7 +147,35 @@ export const CORRECTION_GUARD_LIMITS: CorrectionGuardLimits = {
   minRemoved: 4,
   minAdded: 2,
   minAllowanceRemoved: 2,
+  spokenSymbols: false,
 };
+
+// The symbols a speaker names aloud in paths, flags and identifiers. A dot or
+// colon counts as typed only inside a word, so a sentence's own full stop or
+// colon never stands for a spoken one.
+const SPOKEN_SYMBOLS: ReadonlyMap<string, string> = new Map([
+  ["slash", "/"],
+  ["backslash", "\\"],
+  ["dot", "."],
+  ["colon", ":"],
+  ["underscore", "_"],
+  ["dash", "-"],
+  ["hyphen", "-"],
+]);
+const TYPED_SYMBOL_RES: ReadonlyMap<string, RegExp> = new Map([
+  ["/", /\//g],
+  ["\\", /\\/g],
+  [".", /(?<=[\p{L}\p{N}_])\.(?=[\p{L}\p{N}_])/gu],
+  [":", /(?<=[\p{L}\p{N}_]):(?=[\p{L}\p{N}_])/gu],
+  ["_", /_/g],
+  ["-", /-/g],
+]);
+// "dash dash watch" is --watch, "dash dash no dash verify" is --no-verify,
+// and "dash v" is -v: a single dash takes a single letter.
+const SPOKEN_FLAG_RE =
+  /(?<![\p{L}\p{N}])(?:dash|hyphen)\s+(?:(?<long>dash|hyphen)\s+)?(?<name>\p{L}[\p{L}\p{N}]*(?:\s+(?:dash|hyphen)\s+[\p{L}\p{N}]+)*)/giu;
+// What joins the parts of a typed identifier, path or filename into one word.
+const IDENTIFIER_JOIN_RE = /[._:]+/u;
 
 // Phrases a speaker uses to take back what they just said. "no wait" and
 // "scratch that" are set off by punctuation on both sides, so "there is no wait,"
@@ -213,20 +248,62 @@ function isSubsequence(needle: readonly string[], haystack: readonly string[]): 
   return found === needle.length;
 }
 
+/** The flags `raw` spells out word by word, written as they're typed, lowercase. */
+function spelledFlags(raw: string): string[] {
+  return Array.from(raw.matchAll(SPOKEN_FLAG_RE), (match) => {
+    const { long, name } = match.groups!;
+    const parts = name.split(/\s+(?:dash|hyphen)\s+/iu);
+    if (!long && (parts.length > 1 || parts[0].length > 1)) return null;
+    return `${long ? "--" : "-"}${parts.join("-")}`.toLowerCase();
+  }).filter((flag) => flag !== null);
+}
+
 /**
  * Code, references, URLs and flags come back exactly, in order, and none are
- * invented. Paths and filenames come back exactly, in order, but new ones may
+ * invented, except a flag the speaker spelled out when `spokenSymbols` allows
+ * it. Paths and filenames come back exactly, in order, but new ones may
  * appear, because fixing "next jess" to "Next.js" is the point of cleanup.
  */
-function keepsProtectedSpans(raw: string, corrected: string): boolean {
+function keepsProtectedSpans(raw: string, corrected: string, spokenSymbols: boolean): boolean {
   const rawSpans = scanProtectedSpans(raw);
   const correctedSpans = scanProtectedSpans(corrected);
   const texts = (spans: ProtectedSpan[], strict: boolean) =>
     spans.filter((span) => (span.kind !== "path") === strict).map((span) => span.text);
+  const spelled = spokenSymbols ? spelledFlags(raw) : [];
+  const typed = correctedSpans.filter((span) => {
+    if (span.kind !== "flag") return true;
+    const at = spelled.indexOf(span.text.toLowerCase());
+    if (at < 0) return true;
+    spelled.splice(at, 1);
+    return false;
+  });
   return (
-    sameSequence(texts(rawSpans, true), texts(correctedSpans, true)) &&
+    sameSequence(texts(rawSpans, true), texts(typed, true)) &&
     isSubsequence(texts(rawSpans, false), texts(correctedSpans, false))
   );
+}
+
+/**
+ * The raw words without those naming a symbol the cleanup typed in their
+ * place, one word for each copy of the symbol it added.
+ */
+function withoutSpokenSymbols(
+  tokens: readonly WordToken[],
+  raw: string,
+  corrected: string
+): WordToken[] {
+  const added = new Map<string, number>();
+  for (const [symbol, pattern] of TYPED_SYMBOL_RES) {
+    const count = (text: string) => text.match(pattern)?.length ?? 0;
+    added.set(symbol, Math.max(0, count(corrected) - count(raw)));
+  }
+  return tokens.filter((token) => {
+    const symbol = SPOKEN_SYMBOLS.get(token.word);
+    const left = symbol === undefined ? 0 : (added.get(symbol) ?? 0);
+    if (left === 0) return true;
+    added.set(symbol!, left - 1);
+    return false;
+  });
 }
 
 function numberWords(tokens: readonly WordToken[]): string[] {
@@ -517,16 +594,31 @@ function normalizeWord(word: string): string {
   return NOT_FORMS.has(bare) ? "not" : bare;
 }
 
-/** Words with apostrophes dropped, every "not" form unified, and filler removed. */
-function contentTokens(text: string): WordToken[] {
+/**
+ * Words with apostrophes dropped, every "not" form unified, and filler
+ * removed. With `splitIdentifiers`, `project_id`, `db:generate` and
+ * `api.ts` are read as the words a speaker names them by.
+ */
+function contentTokens(text: string, splitIdentifiers: boolean): WordToken[] {
   const tokens: WordToken[] = [];
+  const push = (word: string, start: number) => {
+    tokens.push({
+      word: normalizeWord(word.toLowerCase()),
+      start,
+      end: start + word.length,
+    });
+  };
   for (const segment of wordSegmenter.segment(text)) {
     if (!segment.isWordLike) continue;
-    tokens.push({
-      word: normalizeWord(segment.segment.toLowerCase()),
-      start: segment.index,
-      end: segment.index + segment.segment.length,
-    });
+    if (!splitIdentifiers || !IDENTIFIER_JOIN_RE.test(segment.segment)) {
+      push(segment.segment, segment.index);
+      continue;
+    }
+    let offset = segment.index;
+    for (const part of segment.segment.split(/([._:]+)/u)) {
+      if (part && !IDENTIFIER_JOIN_RE.test(part)) push(part, offset);
+      offset += part.length;
+    }
   }
   const kept: WordToken[] = [];
   for (let i = 0; i < tokens.length; i++) {
@@ -736,7 +828,9 @@ export function validateCorrection(
   corrected: string,
   limits: CorrectionGuardLimits = CORRECTION_GUARD_LIMITS
 ): CorrectionGuardResult {
-  if (!keepsProtectedSpans(raw, corrected)) return { ok: false, reason: "protected_span" };
+  if (!keepsProtectedSpans(raw, corrected, limits.spokenSymbols)) {
+    return { ok: false, reason: "protected_span" };
+  }
 
   // Raw list markers are set aside only when the cleanup kept the same ones,
   // so a dictated "1." can't vanish as layout.
@@ -752,8 +846,8 @@ export function validateCorrection(
     correctedLayout.items >= 2 ? findEnumerators(rawText, rawProtectedRanges()) : [];
   // Number words come from the same pass as the word checks: no filler or
   // spoken command contains one.
-  const correctedTokens = contentTokens(correctedLayout.text);
-  const spokenTokens = contentTokens(rawText);
+  const correctedTokens = contentTokens(correctedLayout.text, limits.spokenSymbols);
+  const spokenTokens = contentTokens(rawText, limits.spokenSymbols);
   if (
     !keepsNumbers(
       rawText,
@@ -768,7 +862,12 @@ export function validateCorrection(
   }
 
   const correctedWords = correctedTokens.map((token) => token.word);
-  const rawTokens = mergeJoinedWords(spokenTokens, correctedWords);
+  const rawTokens = mergeJoinedWords(
+    limits.spokenSymbols
+      ? withoutSpokenSymbols(spokenTokens, rawText, correctedLayout.text)
+      : spokenTokens,
+    correctedWords
+  );
   const verdict = compareWords(
     rawTokens.map((token) => token.word),
     correctedWords,

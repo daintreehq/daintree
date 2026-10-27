@@ -213,6 +213,35 @@ const REPAIR = revise(FIRM, {
   ],
 });
 
+// Round 2: REPAIR declined to write "origin slash develop" as a path once the
+// tags rule said to change untagged words only for a mishearing; "really slow"
+// lost its "really"; a closing "Okay?" and a 48-word run-on survived; and agent
+// names went unfixed.
+const AGENT = revise(REPAIR, {
+  core: [
+    [
+      "Outside the tags, change a word only to fix a clear mishearing.",
+      "Outside the tags, change words only to fix a clear mishearing or to write what was spoken as a symbol, path, flag or identifier the way it's typed.",
+    ],
+    [
+      'Break a run-on into sentences where the speaker moved to a new thought, often at "and then", "so" or "and also", keeping every clause; a joining "and" or "so" that would start the new sentence may go when it carries no meaning.',
+      'A sentence that strings separate thoughts together with "and", "so" or "and then" for more than about 30 words is a run-on: break it into sentences at those joins, keeping every clause. A joining "and" or "so" that would start the new sentence goes when it carries no meaning.',
+    ],
+    [
+      '"pretty much", "honestly", "really" and "literally" when they only soften what is said.',
+      '"pretty much", "honestly" and "literally" when they only soften what is said, "really" tacked on as an aside ("so it\'s both, really", but never the "really" in "really slow"), and a closing "okay?" or "right?" that only asks the agent to agree.',
+    ],
+    [
+      'Corrected: "The login page hangs when the token expires, and I guess it\'s retrying forever. Can you cap the retries and show an error instead?"',
+      'Corrected: "The login page hangs when the token expires, and I guess it\'s retrying forever. Can you cap the retries and show an error instead?"\n- Target: "the export is slow on big projects and I want it to show progress so people know it\'s working and it should let them cancel halfway"\n  Corrected: "The export is slow on big projects. I want it to show progress so people know it\'s working, and it should let them cancel halfway."',
+    ],
+    [
+      "anthro pick: Anthropic",
+      "anthro pick: Anthropic\ncloud code/clawed code: Claude Code\ncodecs/code x: Codex",
+    ],
+  ],
+});
+
 export const PROMPT_VARIANTS: Readonly<Record<string, PromptVariant>> = {
   v11: { description: "the rules production sent before #14786", instructions: V11 },
   firm: {
@@ -222,6 +251,11 @@ export const PROMPT_VARIANTS: Readonly<Record<string, PromptVariant>> = {
   repair: {
     description: "round 1: firm, plus the fewest words a sentence needs to hold together",
     instructions: REPAIR,
+  },
+  agent: {
+    description:
+      "round 2: repair, with spoken symbols written out again, run-ons and closing tags named, and agent names in <terms>",
+    instructions: AGENT,
   },
   production: {
     description: "the rules production sends now",

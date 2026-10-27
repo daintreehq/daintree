@@ -369,8 +369,8 @@ export function corpusProblems(corpus: readonly CleanupCase[]): string[] {
         }
       }
     }
-    if (entry.uncertain?.length && entry.style !== "deepgram") {
-      problems.push(`${entry.id}: only Deepgram flags unsure words`);
+    if (entry.uncertain?.length && entry.style !== "deepgram" && entry.style !== "grok") {
+      problems.push(`${entry.id}: only Deepgram and Grok flag unsure words`);
     }
     try {
       locateUncertain(entry.raw, entry.uncertain ?? []);

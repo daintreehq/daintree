@@ -81,7 +81,7 @@ describe("corpusProblems", () => {
       'a: fix "the cache" is already in the raw transcript',
       'b: drop "um" leaves nothing to take out',
       'c: keep "branch changes now" is not in the raw',
-      "d: only Deepgram flags unsure words",
+      "d: only Deepgram and Grok flag unsure words",
       "d: duplicate id",
       'd: unsure phrase "cache" is not in the raw transcript',
       'e: keep "the branch" does not survive into "Invalidate the cache on change."',

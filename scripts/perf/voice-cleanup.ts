@@ -8,7 +8,14 @@ import {
 } from "../../shared/config/voiceCorrection";
 import { formatErrorMessage } from "../../shared/utils/errorMessage";
 import { buildOpenAIHeaders } from "../../shared/utils/openaiHeaders";
-import { EMPTY_VOICE_COMMAND_VOCABULARY } from "../../shared/utils/voiceAgentCommands";
+import { getAgentConfig } from "../../shared/config/agentRegistry";
+import { getBuiltinSlashCommands } from "../../shared/types/slashCommands";
+import {
+  buildVoiceCommandVocabulary,
+  EMPTY_VOICE_COMMAND_VOCABULARY,
+  type VoiceCommandVocabulary,
+} from "../../shared/utils/voiceAgentCommands";
+import type { VoiceCommandTarget } from "../../electron/services/voiceCommandTarget";
 import type {
   VoiceCorrectionRequest,
   VoiceCorrectionResult,
@@ -212,13 +219,34 @@ function parseArgs(argv: readonly string[]): Options | null {
   return options;
 }
 
-// Kept identical across variants: the project hints production sends, with no
-// names or command target, so every passage has the same context.
+// Kept identical across variants: the project hints production sends and the
+// agent the passage is typed into, with no workspace names, so every passage
+// has the same context.
 interface Profile {
   customDictionary: string[];
   projectName: string;
   projectPath: string;
   language: string;
+  /** Absent in runs from before #14786's second round, which sent no target. */
+  commandTarget?: VoiceCommandTarget;
+}
+
+function vocabularyOf(profile: Profile): VoiceCommandVocabulary {
+  return profile.commandTarget?.vocabulary ?? EMPTY_VOICE_COMMAND_VOCABULARY;
+}
+
+/** Claude Code with its built-in commands, as production describes a terminal running it. */
+function claudeCodeTarget(): VoiceCommandTarget {
+  const config = getAgentConfig("claude")!;
+  return {
+    agentId: "claude",
+    agentName: config.name,
+    isAssistant: false,
+    vocabulary: buildVoiceCommandVocabulary(
+      getBuiltinSlashCommands("claude"),
+      config.completionSources ?? []
+    ),
+  };
 }
 
 function profileFor(options: Options): Profile {
@@ -227,6 +255,7 @@ function profileFor(options: Options): Profile {
     projectName: "daintree",
     projectPath: "/Users/dev/Projects/daintree",
     language: "en",
+    commandTarget: claudeCodeTarget(),
   };
 }
 
@@ -266,13 +295,14 @@ function landUnder(
   entry: CleanupCase,
   reply: VoiceCorrectionProposal | undefined,
   limits: GuardVariant["limits"],
-  noReply: Disposition
+  noReply: Disposition,
+  vocabulary: VoiceCommandVocabulary
 ): Landing {
   if (!reply) {
     return { disposition: noReply, landed: entry.raw, landedScore: scoreText(entry, entry.raw) };
   }
   const landing = landCorrection(entry.raw, reply, {
-    vocabulary: EMPTY_VOICE_COMMAND_VOCABULARY,
+    vocabulary,
     startsPrompt: requestFor(entry).startsPrompt === true,
     limits,
   });
@@ -293,10 +323,14 @@ function landings(
   entry: CleanupCase,
   reply: VoiceCorrectionProposal | undefined,
   guards: readonly string[],
-  noReply: Disposition
+  noReply: Disposition,
+  vocabulary: VoiceCommandVocabulary
 ): Record<string, Landing> {
   return Object.fromEntries(
-    guards.map((guard) => [guard, landUnder(entry, reply, GUARD_VARIANTS[guard]!.limits, noReply)])
+    guards.map((guard) => [
+      guard,
+      landUnder(entry, reply, GUARD_VARIANTS[guard]!.limits, noReply, vocabulary),
+    ])
   );
 }
 
@@ -312,6 +346,7 @@ function toTrial(
   repeat: number,
   result: VoiceCorrectionResult,
   guards: readonly string[],
+  vocabulary: VoiceCommandVocabulary,
   totalMs: number,
   firstTextAt: number | null
 ): Trial {
@@ -325,7 +360,7 @@ function toTrial(
     ...(reply ? { reply } : {}),
     proposal,
     proposalScore: scoreText(entry, proposal),
-    landings: landings(entry, reply, guards, result.failed ? "failed" : "skipped"),
+    landings: landings(entry, reply, guards, result.failed ? "failed" : "skipped", vocabulary),
     roundTripMs: result.roundTrip ? Math.round(result.roundTrip.ms) : null,
     ...(firstTextAt !== null && result.roundTrip
       ? { firstTextMs: Math.round(firstTextAt - result.roundTrip.sentAt) }
@@ -507,7 +542,11 @@ function summarise(run: RunRecord, corpus: readonly CleanupCase[]): VariantSumma
   );
 }
 
-function landAdversarial(guards: readonly string[], corpus: readonly CleanupCase[]) {
+function landAdversarial(
+  guards: readonly string[],
+  corpus: readonly CleanupCase[],
+  vocabulary: VoiceCommandVocabulary
+) {
   const byId = new Map(corpus.map((entry) => [entry.id, entry]));
   return guards.flatMap((guard) =>
     ADVERSARIAL_PROPOSALS.flatMap(({ caseId, harm, proposal }): AdversarialResult[] => {
@@ -517,7 +556,8 @@ function landAdversarial(guards: readonly string[], corpus: readonly CleanupCase
         entry,
         { action: "replace", correctedText: proposal, confidence: "high" },
         GUARD_VARIANTS[guard]!.limits,
-        "skipped"
+        "skipped",
+        vocabulary
       );
       return [{ guard, caseId, harm, refusedBy: landing.rejectReason ?? null }];
     })
@@ -825,14 +865,15 @@ function rescore(
               entry,
               trial.reply as VoiceCorrectionProposal | undefined,
               guard.limits,
-              noReply
+              noReply,
+              vocabularyOf(run.profile)
             ),
           ])
         ),
       };
     });
   run.scoringVersion = VOICE_CLEANUP_SCORING_VERSION;
-  run.adversarial = landAdversarial(Object.keys(run.guards), corpus);
+  run.adversarial = landAdversarial(Object.keys(run.guards), corpus, vocabularyOf(run.profile));
   run.summaries = summarise(run, corpus);
   return { run, corpus };
 }
@@ -937,7 +978,7 @@ async function main(): Promise<number> {
       sent: requestFor(entry),
     })),
     parityMisses: 0,
-    adversarial: landAdversarial(guards, corpus),
+    adversarial: landAdversarial(guards, corpus, vocabularyOf(profile)),
     prices: MODEL_PRICES,
     predictionProbes: [],
     trials: [],
@@ -1010,11 +1051,22 @@ async function main(): Promise<number> {
           onText
         );
         const totalMs = performance.now() - started;
-        run.trials.push(toTrial(entry, variant, repeat, result, guards, totalMs, firstTextAt));
+        run.trials.push(
+          toTrial(
+            entry,
+            variant,
+            repeat,
+            result,
+            guards,
+            vocabularyOf(profile),
+            totalMs,
+            firstTextAt
+          )
+        );
         // The replay must land a reply exactly as the service just did.
         const replayed = result.proposal
           ? landCorrection(entry.raw, result.proposal, {
-              vocabulary: EMPTY_VOICE_COMMAND_VOCABULARY,
+              vocabulary: vocabularyOf(profile),
               startsPrompt: requestFor(entry).startsPrompt === true,
               limits: CORRECTION_GUARD_LIMITS,
             }).confirmedText
