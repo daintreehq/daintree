@@ -4044,7 +4044,11 @@ export interface GeneratedIpcInvokeMap {
     args: [
       sessionId: string,
       options?:
-        | { terminalId?: string | undefined; intent?: "rewrite" | "dictation" | undefined }
+        | {
+            terminalId?: string | undefined;
+            intent?: "rewrite" | "dictation" | undefined;
+            otherHost?: true | undefined;
+          }
         | undefined,
     ];
     result: import("../voice.js").VoiceStartOutcome;

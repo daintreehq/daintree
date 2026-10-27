@@ -156,6 +156,7 @@ describe("useEditorDomHandlers Enter from beforeinput", () => {
     p.latestRef = {
       current: {
         terminalId: "t1",
+        voiceId: "t1",
         disabled: false,
         isAutocompleteOpen: false,
         autocompleteItems: [],

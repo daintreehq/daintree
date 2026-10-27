@@ -272,6 +272,11 @@ interface UseTokenResolutionParams {
   setIsExpanded: Dispatch<SetStateAction<boolean>>;
   setActiveCompletionContext: Dispatch<SetStateAction<ActiveCompletionContext | null>>;
   terminalId: string;
+  /**
+   * Where dictation into this composer is kept, when not under the terminal
+   * (Canopy's reply): its target's id and project, which address the same draft.
+   */
+  voice?: { panelId: string; projectId?: string };
   cwd: string;
   agentId?: BuiltInAgentId;
   /**
@@ -289,10 +294,14 @@ export function useTokenResolution({
   setIsExpanded,
   setActiveCompletionContext,
   terminalId,
+  voice,
   cwd,
   agentId,
   expandContext = true,
 }: UseTokenResolutionParams) {
+  const ownVoice = voice !== undefined;
+  const voiceId = voice?.panelId ?? terminalId;
+  const voiceProjectId = voice?.projectId;
   const isSendingRef = useRef(false);
 
   /**
@@ -312,7 +321,11 @@ export function useTokenResolution({
       // could otherwise interleave and double-post.
       isSendingRef.current = true;
       try {
-        const correctionSnapshot = takeCorrectionSnapshot(terminalId, latest.projectId, text);
+        const correctionSnapshot = takeCorrectionSnapshot(
+          voiceId,
+          ownVoice ? voiceProjectId : latest.projectId,
+          text
+        );
         const terminalTokens = expandContext ? getAllAtTerminalTokens(text) : [];
         const selectionTokens = expandContext ? getAllAtSelectionTokens(text) : [];
         const diffTokens = expandContext ? getAllAtDiffTokens(text) : [];
@@ -407,7 +420,7 @@ export function useTokenResolution({
         // Learn dictionary words from manual corrections to dictated text. Uses
         // the original `text` (the human-authored content), not `resolvedText`
         // (which has @-token expansions spliced in).
-        detectDictionaryCorrections(terminalId, correctionSnapshot);
+        detectDictionaryCorrections(voiceId, correctionSnapshot);
 
         // History keeps what the human authored, so recalling it re-runs the
         // tokens rather than a frozen expansion — composed the same way, because
@@ -445,6 +458,9 @@ export function useTokenResolution({
       cwd,
       expandContext,
       terminalId,
+      voiceId,
+      voiceProjectId,
+      ownVoice,
       latestRef,
       setActiveCompletionContext,
       setIsExpanded,

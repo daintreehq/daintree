@@ -20,9 +20,17 @@ export function isCanopyReplyTarget(target: VoiceRecordingTarget | null | undefi
   return target?.surface === "canopy-reply";
 }
 
-/** The terminal main reads a dictation's context from: none for another host's. */
-export function voiceContextTerminalId(target: VoiceRecordingTarget): string | undefined {
-  return isCanopyReplyTarget(target) ? target.terminalId : target.panelId;
+/** Where main reads a dictation's terminal, vocabulary and file links from. */
+export interface VoiceContext {
+  terminalId?: string;
+  /** Typed to another host: nothing of this machine's belongs in the text. */
+  otherHost?: true;
+}
+
+export function voiceContext(target: VoiceRecordingTarget): VoiceContext {
+  if (!isCanopyReplyTarget(target)) return { terminalId: target.panelId };
+  if (target.otherHostId !== undefined) return { otherHost: true };
+  return target.terminalId !== undefined ? { terminalId: target.terminalId } : {};
 }
 
 export type CanopyReplyDictation =
@@ -46,7 +54,12 @@ export function registerCanopyReplyDictation(next: Resolver): () => void {
   };
 }
 
-/** Null while Canopy is open but its view hasn't loaded yet. */
-export function resolveCanopyReplyDictation(): CanopyReplyDictation | null {
-  return resolver?.() ?? null;
+export const NO_CANOPY_REPLY: CanopyReplyDictation = {
+  ok: false,
+  message: "Select an agent in Canopy to dictate a reply to it.",
+};
+
+/** With no inbox showing (still loading, or Canopy is off), there is no reply to dictate into. */
+export function resolveCanopyReplyDictation(): CanopyReplyDictation {
+  return resolver?.() ?? NO_CANOPY_REPLY;
 }

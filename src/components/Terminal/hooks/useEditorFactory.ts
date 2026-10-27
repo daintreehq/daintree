@@ -48,6 +48,8 @@ import { recordBuiltCompartmentConfig } from "./useCompartmentDriver";
 
 interface UseEditorFactoryParams {
   terminalId: string;
+  /** Where dictation into this composer is kept, for its correction review. */
+  voiceId: string;
   /** The draft key (`makeDraftKey`) of the draft this composer edits. */
   draftKeyRef: React.RefObject<string>;
   editorHostRef: React.RefObject<HTMLDivElement | null>;
@@ -98,6 +100,7 @@ interface UseEditorFactoryParams {
 
 export function useEditorFactory({
   terminalId,
+  voiceId,
   draftKeyRef,
   editorHostRef,
   editorViewRef,
@@ -115,6 +118,11 @@ export function useEditorFactory({
   plainPasteKeymap,
 }: UseEditorFactoryParams) {
   const initialValueRef = useRef(value);
+  // Read when a review swaps, not when the editor was built.
+  const voiceIdRef = useRef(voiceId);
+  useLayoutEffect(() => {
+    voiceIdRef.current = voiceId;
+  }, [voiceId]);
 
   useLayoutEffect(() => {
     const host = editorHostRef.current;
@@ -180,7 +188,7 @@ export function useEditorFactory({
         voiceRewriteTracker,
         createCorrectionReview({
           onShown: announceCorrectionShown,
-          onSwapped: (review, now) => rebaseCorrectionBaseline(terminalId, review, now),
+          onSwapped: (review, now) => rebaseCorrectionBaseline(voiceIdRef.current, review, now),
         }),
         EditorView.updateListener.of((update) => contextUpdateRef.current(update)),
         keymapCompartmentRef.current.of(

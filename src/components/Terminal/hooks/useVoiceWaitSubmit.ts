@@ -3,6 +3,7 @@ import { EditorView } from "@codemirror/view";
 import type { Compartment } from "@codemirror/state";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useVoiceRecordingStore } from "@/store";
+import type { VoiceRecordingTarget } from "@/store/voiceRecordingStore";
 import { useProjectStore } from "@/store/projectStore";
 import { usePanelStore } from "@/store/panelStore";
 import { takeLandedCorrection } from "@/services/voiceCorrectionLanding";
@@ -29,6 +30,11 @@ interface UseVoiceWaitSubmitParams {
    * current project's; left out, the current project's.
    */
   projectId?: string;
+  /**
+   * Where dictation into this composer is kept, when not under the terminal
+   * (Canopy's reply): its target's id and project, which address the same draft.
+   */
+  voice?: Pick<VoiceRecordingTarget, "panelId" | "projectId">;
   editorViewRef: React.RefObject<EditorView | null>;
   editableCompartmentRef: React.RefObject<Compartment>;
   sendFromEditor: (handBack?: SendHandBack) => void;
@@ -61,12 +67,16 @@ export function isVoiceSessionActiveFor(panelId: string): boolean {
 export function useVoiceWaitSubmit({
   terminalId,
   projectId,
+  voice,
   editorViewRef,
   editableCompartmentRef,
   sendFromEditor,
   claimSendHandBack,
   isDisabled,
 }: UseVoiceWaitSubmitParams) {
+  const ownVoice = voice !== undefined;
+  const voiceId = voice?.panelId ?? terminalId;
+  const voiceProjectId = voice ? voice.projectId : projectId;
   const sendFromEditorRef = useRef(sendFromEditor);
   const isDisabledRef = useRef(isDisabled);
   useEffect(() => {
@@ -104,21 +114,21 @@ export function useVoiceWaitSubmit({
       activeWaitRef.current = null;
       wait?.releaseKeys();
       wait?.controller.abort();
-      useTerminalInputStore.getState().setVoiceSubmitting(terminalId, false);
+      useTerminalInputStore.getState().setVoiceSubmitting(voiceId, false);
       setVoiceSubmitPhase(null);
     };
-  }, [terminalId]);
+  }, [voiceId]);
 
   // Escape cancels the send, not the correction: it still lands in the draft.
   const cancelVoiceWaitSubmit = useCallback(() => {
     const store = useTerminalInputStore.getState();
-    if (!store.isVoiceSubmitting(terminalId)) return false;
+    if (!store.isVoiceSubmitting(voiceId)) return false;
     activeAttemptRef.current = null;
     const wait = activeWaitRef.current;
     activeWaitRef.current = null;
     wait?.releaseKeys();
     wait?.controller.abort();
-    store.setVoiceSubmitting(terminalId, false);
+    store.setVoiceSubmitting(voiceId, false);
     setVoiceSubmitPhase(null);
     const view = editorViewRef.current;
     if (view) {
@@ -127,22 +137,22 @@ export function useVoiceWaitSubmit({
       });
     }
     return true;
-  }, [terminalId, editorViewRef, editableCompartmentRef]);
+  }, [voiceId, editorViewRef, editableCompartmentRef]);
 
   const startVoiceWaitSubmit = useCallback(
     (options?: VoiceWaitSubmitOptions) => {
       const store = useTerminalInputStore.getState();
-      if (store.isVoiceSubmitting(terminalId)) return;
+      if (store.isVoiceSubmitting(voiceId)) return;
 
       const attempt = ++attemptRef.current;
       activeAttemptRef.current = attempt;
       const isCurrentAttempt = () =>
         activeAttemptRef.current === attempt &&
-        useTerminalInputStore.getState().isVoiceSubmitting(terminalId);
+        useTerminalInputStore.getState().isVoiceSubmitting(voiceId);
 
       // Before the lock below, so a press during the wait counts against it.
       const handBack = claimSendHandBackRef.current?.();
-      store.setVoiceSubmitting(terminalId, true);
+      store.setVoiceSubmitting(voiceId, true);
       setVoiceSubmitPhase("finishing");
 
       // Aborted by a second Enter, the wait ends and the send goes with the
@@ -192,7 +202,7 @@ export function useVoiceWaitSubmit({
 
       void (async () => {
         try {
-          if (isVoiceSessionActiveFor(terminalId)) {
+          if (isVoiceSessionActiveFor(voiceId)) {
             await voiceRecordingService.stop("Submitting command.", {
               preserveLiveText: true,
               announce: false,
@@ -207,12 +217,9 @@ export function useVoiceWaitSubmit({
           // a second Enter, even one while the transcript was finishing, says
           // to send what stands; the send drops what is still on its way
           // (#14611, #14780).
-          if (
-            !controller.signal.aborted &&
-            voiceRecordingService.hasPendingCorrection(terminalId)
-          ) {
+          if (!controller.signal.aborted && voiceRecordingService.hasPendingCorrection(voiceId)) {
             setVoiceSubmitPhase("polishing");
-            await voiceRecordingService.waitForPendingCorrections(terminalId, controller.signal);
+            await voiceRecordingService.waitForPendingCorrections(voiceId, controller.signal);
             if (!isCurrentAttempt()) return;
           }
 
@@ -257,7 +264,7 @@ export function useVoiceWaitSubmit({
           if (activeWaitRef.current?.controller === controller) activeWaitRef.current = null;
           if (activeAttemptRef.current === attempt) {
             activeAttemptRef.current = null;
-            useTerminalInputStore.getState().setVoiceSubmitting(terminalId, false);
+            useTerminalInputStore.getState().setVoiceSubmitting(voiceId, false);
             setVoiceSubmitPhase(null);
             const v = editorViewRef.current;
             if (v) {
@@ -269,14 +276,14 @@ export function useVoiceWaitSubmit({
         }
       })();
     },
-    [terminalId, editorViewRef, editableCompartmentRef, cancelVoiceWaitSubmit]
+    [terminalId, voiceId, editorViewRef, editableCompartmentRef, cancelVoiceWaitSubmit]
   );
 
   useEffect(
     () =>
       voiceRecordingService.onSpokenSend(
-        terminalId,
-        projectId ?? useProjectStore.getState().currentProject?.id,
+        voiceId,
+        ownVoice ? voiceProjectId : (voiceProjectId ?? useProjectStore.getState().currentProject?.id),
         () => {
           if (isDisabledRef.current?.()) {
             void voiceRecordingService.stop("Dictation stopped.", { reason: "send" });
@@ -285,27 +292,27 @@ export function useVoiceWaitSubmit({
           startVoiceWaitSubmit({ spoken: true });
         }
       ),
-    [terminalId, projectId, startVoiceWaitSubmit]
+    [voiceId, voiceProjectId, ownVoice, startVoiceWaitSubmit]
   );
 
   // Read at the key press rather than from the last render: a hotkey stop
   // registers its correction before any render shows it.
   const hasPendingVoiceCorrection = useCallback(
-    () => voiceRecordingService.hasPendingCorrection(terminalId),
-    [terminalId]
+    () => voiceRecordingService.hasPendingCorrection(voiceId),
+    [voiceId]
   );
 
   /** A send from the editor that waits for dictation still finishing or being corrected. */
   const submitFromEditor = useCallback(() => {
     if (
-      isVoiceSessionActiveFor(terminalId) ||
-      voiceRecordingService.hasPendingCorrection(terminalId)
+      isVoiceSessionActiveFor(voiceId) ||
+      voiceRecordingService.hasPendingCorrection(voiceId)
     ) {
       startVoiceWaitSubmit();
       return;
     }
     sendFromEditorRef.current();
-  }, [terminalId, startVoiceWaitSubmit]);
+  }, [voiceId, startVoiceWaitSubmit]);
 
   return {
     startVoiceWaitSubmit,

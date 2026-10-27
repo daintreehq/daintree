@@ -58,6 +58,13 @@ import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { VOICE_INPUT_SETTINGS_CHANGED_EVENT } from "@/lib/voiceInputSettingsEvents";
 import { registerEscapeFallback } from "@/lib/escapeStack";
+import { useCanopyStore } from "@/store/canopyStore";
+import {
+  isCanopyReplyTarget,
+  resolveCanopyReplyDictation,
+  voiceContext,
+  type VoiceContext,
+} from "@/services/canopyReplyDictation";
 import { keybindingService } from "@/services/KeybindingService";
 import { logDebug, logInfo, logWarn, logError } from "@/utils/logger";
 import { voiceErrorLogFields } from "@shared/utils/voiceLogFields";
@@ -305,6 +312,8 @@ interface WarmAudio {
 interface PendingCorrection {
   panelId: string;
   projectId?: string;
+  /** Taken at the stop: a later session's target is not this one's. */
+  context: VoiceContext;
   /**
    * The recent-dictations entry this pass cleans up, when its passages hold
    * every word the session heard; null when they hold only part of it.
@@ -1036,6 +1045,8 @@ class VoiceRecordingService {
         // loaded, the panel's absence is expected.
         const currentProjectId = useProjectStore.getState().currentProject?.id;
         const isClosed = (target: VoiceRecordingTarget) => {
+          // A Canopy reply names no panel; its row going away is Canopy's to handle.
+          if (isCanopyReplyTarget(target)) return false;
           if (target.projectId && currentProjectId !== target.projectId) return false;
           const found = state.panelsById[target.panelId];
           return !found || found.location === "trash";
@@ -2306,7 +2317,7 @@ class VoiceRecordingService {
     timeline.expectReport();
     const started = window.electron.voiceInput
       .start(sessionId, {
-        terminalId: target.panelId,
+        ...voiceContext(target),
         ...(target.rewrite ? { intent: "rewrite" as const } : {}),
       })
       .then(
@@ -2793,6 +2804,7 @@ class VoiceRecordingService {
     const correction: PendingCorrection = {
       panelId,
       projectId,
+      context: voiceContext(target),
       // Cleanup over part of the session (an edit or a send got there first)
       // would stand in for all of it, so only a pass over every word counts.
       historyId:
@@ -2944,7 +2956,7 @@ class VoiceRecordingService {
     try {
       const result = await window.electron.voiceInput.correct({
         rawText: passage.text,
-        terminalId: correction.panelId,
+        ...correction.context,
         ...(passage.context ? { recentContext: [passage.context] } : {}),
         startsPrompt: passage.startsPrompt,
         ...(correction.sessionId ? { sessionId: correction.sessionId } : {}),
@@ -3368,6 +3380,13 @@ class VoiceRecordingService {
       return;
     }
 
+    // Canopy covers the grid while it's open, so the key goes to the selected
+    // row's reply, ahead of a lock or the assistant behind it, or nowhere.
+    if (useCanopyStore.getState().isOpen) {
+      await this.toggleCanopyReply();
+      return;
+    }
+
     // Locked target overrides focus routing entirely — synchronous read before
     // any await so the value reflects the user's pin at the moment the hotkey
     // fired (mirrors the assistant-focus pattern below for #6959). When the
@@ -3427,6 +3446,17 @@ class VoiceRecordingService {
     }
 
     await this.startOrToggle(target);
+  }
+
+  private async toggleCanopyReply(): Promise<void> {
+    const reply = resolveCanopyReplyDictation();
+    if (!reply.ok) {
+      useVoiceRecordingStore.getState().announce(reply.message);
+      this.reportStartFailure("Dictation unavailable", reply.message);
+      return;
+    }
+    reply.focus();
+    await this.startOrToggle(reply.target);
   }
 
   /**
@@ -3688,6 +3718,14 @@ class VoiceRecordingService {
     const { pendingTarget, activeTarget } = useVoiceRecordingStore.getState();
     const target = pendingTarget ?? activeTarget;
     if (!target) return false;
+
+    // Only while its row is still the selected one: there is no pane to bring forward.
+    if (isCanopyReplyTarget(target)) {
+      const reply = useCanopyStore.getState().isOpen ? resolveCanopyReplyDictation() : null;
+      if (!reply?.ok || reply.target.panelId !== target.panelId) return false;
+      reply.focus();
+      return true;
+    }
 
     const currentProjectId = useProjectStore.getState().currentProject?.id;
     if (target.projectId && currentProjectId !== target.projectId) {

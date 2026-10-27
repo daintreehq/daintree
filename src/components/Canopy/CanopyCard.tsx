@@ -66,6 +66,12 @@ import { CanopyTerminal, type CanopyStreamState } from "./CanopyTerminal";
 import { CanopyTitle } from "./CanopyTitle";
 import type { CanopyAsideActions } from "./CanopyRowMenu";
 import { ownCanopyTerminalApi, type CanopyTerminalApi } from "./canopyHostSource";
+import {
+  DICTATION_OWNER_ATTR,
+  canopyReplyVoiceId,
+  type CanopyReplyDictation,
+} from "@/services/canopyReplyDictation";
+import type { VoiceRecordingTarget } from "@/store/voiceRecordingStore";
 
 const LazyHybridInputBar = lazy(() =>
   import("@/components/Terminal/HybridInputBar").then((m) => ({ default: m.HybridInputBar }))
@@ -108,6 +114,8 @@ export interface CanopyCardHandle {
    * there is no reply, in the live terminal. Always lands somewhere in the pane.
    */
   focusComposer: () => boolean;
+  /** Where the dictation key dictates for this agent: its reply, or why not. */
+  dictation: () => CanopyReplyDictation;
 }
 
 /** Where the keyboard lands in the pane when it opens: what the user was in on the agent before. */
@@ -529,7 +537,35 @@ export function CanopyCard({
     frame = requestAnimationFrame(() => attempt(1));
     return true;
   };
-  useImperativeHandle(ref, () => ({ handleKey, focusComposer }));
+  // Its own dictation, apart from the grid pane's composer on the same terminal.
+  // Another host's terminal gives main nothing of this machine's to read.
+  const voiceTarget: VoiceRecordingTarget = {
+    panelId: canopyReplyVoiceId(item.runId, otherHostId),
+    panelTitle: `Reply to ${row.title}`,
+    surface: "canopy-reply",
+    ...(otherHostId !== undefined ? { otherHostId } : { terminalId: item.runId }),
+  };
+  const dictation = (): CanopyReplyDictation => {
+    if (!canReply) {
+      return {
+        ok: false,
+        message: "It's asking for a secret. Type it straight into the terminal above.",
+      };
+    }
+    if (reconnecting) {
+      return { ok: false, message: "Its host is reconnecting. Try dictation again once it's back." };
+    }
+    if (stream.watchId === null) {
+      return {
+        ok: false,
+        message: stream.ended
+          ? "Its terminal has ended, so there's nothing to reply to."
+          : "Its terminal is still connecting. Try dictation again in a moment.",
+      };
+    }
+    return { ok: true, target: voiceTarget, focus: () => void focusComposer() };
+  };
+  useImperativeHandle(ref, () => ({ handleKey, focusComposer, dictation }));
 
   const agentId = isBuiltInAgentId(run.agentId) ? run.agentId : undefined;
   // The grid's chip rules: nothing while idle, and a settled agent keeps its
@@ -610,7 +646,7 @@ export function CanopyCard({
       aria-label={`${row.title}, ${KIND_LABEL[item.kind]}`}
       aria-describedby={describedBy}
       data-canopy-detail=""
-      {...{ [CLOSE_OWNER_ATTR]: "" }}
+      {...{ [CLOSE_OWNER_ATTR]: "", [DICTATION_OWNER_ATTR]: "" }}
       onFocusCapture={() => setFocused(true)}
       onBlurCapture={(event) => {
         const next = event.relatedTarget;
@@ -920,6 +956,7 @@ export function CanopyCard({
                 ref={composerRef}
                 isolated
                 otherHostId={otherHostId}
+                voiceTarget={voiceTarget}
                 terminalId={item.runId}
                 cwd={otherHost ? "" : (run.cwd ?? "")}
                 agentId={agentId}

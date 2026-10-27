@@ -2267,6 +2267,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       startsPrompt?: boolean;
       /** The dictation the passage came from: its context was read while it ran. */
       sessionId?: string;
+      /** Dictated into a terminal on another host: cleaned up without this machine's vocabulary. */
+      otherHost?: true;
     }): Promise<{
       action: "no_change" | "replace";
       correctedText: string;

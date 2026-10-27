@@ -14,6 +14,8 @@ interface LatestRefShape {
   selectedIndex: number;
   value: string;
   terminalId: string;
+  /** Where dictation into the composer is kept: a voice send locks it under this. */
+  voiceId: string;
   onSendKey?: (key: string) => void;
   isVoiceActiveForPanel: boolean;
   isExpanded: boolean;
@@ -103,7 +105,7 @@ export function useEditorDomHandlers({
             submitAfterCompositionRef.current = true;
             return true;
           }
-          if (useTerminalInputStore.getState().isVoiceSubmitting(latest.terminalId)) {
+          if (useTerminalInputStore.getState().isVoiceSubmitting(latest.voiceId)) {
             event.preventDefault();
             return true;
           }
@@ -128,7 +130,7 @@ export function useEditorDomHandlers({
           if (!submitAfterCompositionRef.current) return false;
           submitAfterCompositionRef.current = false;
           const latest = latestRef.current;
-          if (latest && useTerminalInputStore.getState().isVoiceSubmitting(latest.terminalId)) {
+          if (latest && useTerminalInputStore.getState().isVoiceSubmitting(latest.voiceId)) {
             return false;
           }
           setTimeout(() => sendFromEditorRef.current(), 0);

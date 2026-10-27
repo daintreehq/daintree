@@ -55,6 +55,11 @@ import { useCanopyInboxFocus } from "./useCanopyInboxFocus";
 import { useCanopyInboxUndo } from "./useCanopyInboxUndo";
 import { useCanopyInboxActions } from "./useCanopyInboxActions";
 import { useCanopyInboxKeyboard } from "./useCanopyInboxKeyboard";
+import {
+  NO_CANOPY_REPLY,
+  registerCanopyReplyDictation,
+  type CanopyReplyDictation,
+} from "@/services/canopyReplyDictation";
 import { placeOf } from "./canopyInboxPlace";
 import { CanopyAssistantPane, CanopyAssistantRow } from "./CanopyAssistantList";
 import { canopyAssistantDomId } from "./openAssistantItem";
@@ -817,6 +822,17 @@ function CanopyInbox({
     menuOpenChanged,
     requestRank,
   });
+
+  // The dictation key goes to the selected agent's reply wherever the keyboard
+  // is in Canopy; with no agent's pane showing, nowhere, never the grid behind.
+  const dictationRef = useRef<() => CanopyReplyDictation>(() => NO_CANOPY_REPLY);
+  useEffect(() => {
+    dictationRef.current = () =>
+      (selectedAssistant === null && focusedItem !== null
+        ? detailRef.current?.dictation()
+        : undefined) ?? NO_CANOPY_REPLY;
+  });
+  useEffect(() => registerCanopyReplyDictation(() => dictationRef.current()), []);
 
   // The host a selected run is on, for the pane beside it; null for the window's own.
   const focusedHostId = focusedItem ? placeOf(focusedItem, hostId, ownHostId).hostId : null;

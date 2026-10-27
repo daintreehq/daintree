@@ -154,6 +154,8 @@ interface VoiceSession {
   // The starting view's project at start (#14599). File links fall back to it
   // when no terminal vouches for a worktree.
   readonly projectInfo: { name?: string; path?: string };
+  // Dictated into a terminal on another host: nothing of this machine's.
+  readonly otherHost: boolean;
   /** The terminal being dictated into, as the renderer named it at start. */
   readonly terminalId: string | undefined;
   /** "rewrite" records an instruction for selected text, forwarded as spoken. */
@@ -734,6 +736,7 @@ async function resolveFileLinkCwd(
   session: VoiceSession,
   ptyClient: PtyClient | undefined
 ): Promise<string | null> {
+  if (session.otherHost) return null;
   const { terminalId } = resolveKeytermTarget(session.projectId, session.terminalId, ptyClient);
   if (terminalId && ptyClient) {
     const terminal = await ptyClient.getTerminalAsync(terminalId).catch(() => null);
@@ -782,6 +785,8 @@ interface CorrectionPrep {
   readonly webContentsId: number;
   readonly projectId: string | null;
   readonly terminalId: string | undefined;
+  // Read for a terminal on another host: none of this machine's project or names.
+  readonly otherHost: boolean;
   readonly vocabulary: Promise<VoiceDictionaryEntry[]>;
   readonly commandTarget: Promise<VoiceCommandTarget | null>;
   readonly names: { names: string[] };
@@ -802,7 +807,8 @@ function findCorrectionPrep(
       prep.sessionId === request.sessionId &&
       prep.webContentsId === ctx.webContentsId &&
       prep.projectId === ctx.projectId &&
-      prep.terminalId === request.terminalId
+      prep.terminalId === request.terminalId &&
+      prep.otherHost === (request.otherHost === true)
   );
 }
 
@@ -1065,6 +1071,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       webContentsId: ctx.webContentsId,
       projectId: ctx.projectId,
       projectInfo: getProjectInfo(ctx.projectId),
+      otherHost: options?.otherHost === true,
       terminalId: options?.terminalId,
       intent: options?.intent ?? "dictation",
       commandTarget: null,
@@ -1138,6 +1145,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       webContentsId: session.webContentsId,
       projectId: session.projectId,
       terminalId,
+      otherHost: session.otherHost,
       vocabulary,
       commandTarget: resolveVoiceCommandTarget(
         deps.ptyClient,
@@ -1161,7 +1169,13 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       if (session.ended || !mayCorrect(settings)) return;
       correctionService ??= new VoiceCorrectionService();
       await correctionService.warm(
-        correctionSettingsFor(settings, session.projectId, entries, commandTarget, knownNames)
+        correctionSettingsFor(
+          settings,
+          prep.otherHost ? null : session.projectId,
+          entries,
+          commandTarget,
+          prep.otherHost ? [] : knownNames
+        )
       );
     };
     const attempt = () => {
@@ -1200,7 +1214,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // non-fatal — we just start without keyterms.
     const keytermTarget = resolveKeytermTarget(session.projectId, terminalId, deps.ptyClient);
     const vocabulary = readVocabulary(
-      resolveVocabularyProject(session.projectId, terminalId, deps.ptyClient)
+      session.otherHost
+        ? null
+        : resolveVocabularyProject(session.projectId, terminalId, deps.ptyClient)
     );
     const projectDictionary = vocabulary.then(dictionaryTerms);
     const names = gatherDictationNames({
@@ -1345,6 +1361,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         parts.length > 0 &&
         liveSettings.correctionEnabled &&
         liveSettings.resolveFileLinks &&
+        !session.otherHost &&
         liveSettings.openaiApiKey &&
         mayReferenceFile(writtenText)
           ? randomUUID()
@@ -1829,6 +1846,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       correctionService = new VoiceCorrectionService();
     }
 
+    const otherHost = request.otherHost === true;
     // The terminal's output follows the keyterms' ownership rule: terminalId
     // is empty for a terminal another project owns.
     const { terminalId } = resolveKeytermTarget(ctx.projectId, request.terminalId, deps.ptyClient);
@@ -1846,15 +1864,21 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         currentCommandTarget(prep, terminalId),
         prep.terminalOutput ?? readTerminalOutputForCorrection(deps.ptyClient, terminalId),
       ]);
-      knownNames = prep.names.names;
+      knownNames = otherHost ? [] : prep.names.names;
     } else {
       [vocabulary, commandTarget, terminalOutput] = await Promise.all([
-        readVocabulary(resolveVocabularyProject(ctx.projectId, request.terminalId, deps.ptyClient)),
+        readVocabulary(
+          otherHost
+            ? null
+            : resolveVocabularyProject(ctx.projectId, request.terminalId, deps.ptyClient)
+        ),
         resolveVoiceCommandTarget(deps.ptyClient, terminalId, COMMAND_TARGET_CORRECTION_BUDGET_MS),
         readTerminalOutputForCorrection(deps.ptyClient, terminalId),
       ]);
       knownNames =
-        lastSessionNames?.webContentsId === ctx.webContentsId ? lastSessionNames.names : [];
+        !otherHost && lastSessionNames?.webContentsId === ctx.webContentsId
+          ? lastSessionNames.names
+          : [];
     }
     const result = await correctionService.correct(
       {
@@ -1865,7 +1889,13 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         startsPrompt: request.startsPrompt === true,
         ...(request.uncertain ? { uncertain: request.uncertain } : {}),
       },
-      correctionSettingsFor(settings, ctx.projectId, vocabulary, commandTarget, knownNames)
+      correctionSettingsFor(
+        settings,
+        otherHost ? null : ctx.projectId,
+        vocabulary,
+        commandTarget,
+        knownNames
+      )
     );
     // Main's share of the wait, for the session summary: up to the request
     // going out, and the round trip, when there was one.

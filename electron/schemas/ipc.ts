@@ -779,6 +779,9 @@ export const VoiceInputStartOptionsSchema = z
     // words reach the renderer as spoken: no formatting commands, paragraph
     // splits or file links.
     intent: z.enum(["dictation", "rewrite"]).optional(),
+    // The text goes to a terminal on another host (a Canopy reply): this
+    // machine's project vocabulary and file links have no place in it.
+    otherHost: z.literal(true).optional(),
   })
   .optional();
 
@@ -800,6 +803,8 @@ export const VoiceInputCorrectPayloadSchema = z.object({
     .max(12_000)
     .optional()
     .catch(undefined),
+  /** Dictated into a terminal on another host: cleaned up without this machine's vocabulary. */
+  otherHost: z.literal(true).optional(),
 });
 
 export const VoiceInputRewritePayloadSchema = z.object({
