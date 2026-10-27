@@ -57,9 +57,9 @@ function commandAgentOf(terminal: AgentFields): string | undefined {
 }
 
 /**
- * The built-in agent `terminalId` runs now, found as the lookup below finds
- * it but without discovering its commands. Null for none; undefined when the
- * terminal couldn't be read in time, so the caller can't tell.
+ * The agent `terminalId` runs now if it takes commands, found as the lookup
+ * below finds it but without discovering them: null where that lookup finds
+ * no target, undefined when the terminal couldn't be read in time.
  */
 export async function readVoiceCommandAgent(
   ptyClient: PtyClient | undefined,
@@ -75,7 +75,8 @@ export async function readVoiceCommandAgent(
     if (terminal === TIMED_OUT) return undefined;
     if (!terminal) return null;
     const agentId = commandAgentOf(terminal);
-    return isBuiltInAgentId(agentId) ? agentId : null;
+    if (!isBuiltInAgentId(agentId)) return null;
+    return getAgentConfig(agentId)?.completionSources?.length ? agentId : null;
   } catch {
     return undefined;
   }

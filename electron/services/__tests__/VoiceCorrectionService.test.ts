@@ -1695,10 +1695,32 @@ describe("VoiceCorrectionService timing and warm-up", () => {
 
     const start = now;
     await svc.warm(SETTINGS);
-    for (let minute = 1; minute <= 4; minute++) {
+    for (let minute = 1; minute <= 3; minute++) {
       now = start + minute * 60_000;
       await svc.warm(SETTINGS);
     }
+    // Timed from when it went out, not from when its reply was read.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    now = start + 4 * 60_000;
+    await svc.warm(SETTINGS);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("times a passage's use of the prompt from when it went out", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        now += 1_500;
+        return makeFetchResponse({ action: "no_change", corrected_text: "" });
+      })
+      .mockResolvedValue(drainedResponse());
+    vi.stubGlobal("fetch", fetchMock);
+    const svc = new VoiceCorrectionService();
+
+    const start = now;
+    await svc.correct({ rawText: "fix the parser" }, SETTINGS);
+    now = start + 3 * 60_000;
+    await svc.warm(SETTINGS);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
