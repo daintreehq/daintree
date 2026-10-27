@@ -125,6 +125,8 @@ import {
 import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 import { isDictationKey } from "../../services/menuAccelerators.js";
 import { registerPageDictationKey } from "../../services/voice/pageDictationKey.js";
+import { holdDictationView } from "../../services/voice/dictationViewHold.js";
+import { LOCAL_HOST_ID, parseHostScopedKey } from "../../../shared/types/remoteHosts.js";
 import {
   getAllAppWebContents,
   getAppWebContents,
@@ -159,6 +161,12 @@ const CORRECTION_PREP_MEMORY = 4;
 // A rewrite reads its project's name here at once; from a host it waits this
 // long at most, and goes without.
 const HOST_PROJECT_READ_BUDGET_MS = 500;
+// The renderer asks for a stopped dictation's cleanup as soon as the stop
+// resolves; its view stays held this long for the request to arrive.
+const CLEANUP_HANDOFF_MS = 5_000;
+// A cleanup request's hold outlasts the longest correction the service waits
+// for, so it only ever lapses on a request that never settled.
+const CLEANUP_REQUEST_HOLD_MS = 90_000;
 
 /**
  * One dictation session, named by the id its renderer minted. Everything a
@@ -174,6 +182,9 @@ interface VoiceSession {
   // The starting view's project at start (#14599). File links fall back to it
   // when no terminal vouches for a worktree.
   readonly projectInfo: { name?: string; path?: string };
+  // What the starting view calls its workspace, for every other view to name
+  // it by: a host's project or scratch has no name on this machine.
+  readonly workspaceName: string | null;
   // Dictated into a terminal outside this view (another host's or project's):
   // nothing of the view's own project belongs in the text.
   readonly outsideView: boolean;
@@ -194,6 +205,8 @@ interface VoiceSession {
   readonly controller: AbortController;
   unsubscribe: (() => void) | null;
   unwatchDestroyed: (() => void) | null;
+  // Keeps its view out of eviction while it runs (#14773).
+  releaseView: (() => void) | null;
   // The renderer streams audio from the moment it sends the start request,
   // before main has loaded the service, assembled keyterms, and created a
   // provider. Chunks for a session still starting are held here and handed to
@@ -249,18 +262,30 @@ function isLive(session: VoiceSession): boolean {
   return liveSession === session && !session.ended;
 }
 
+/**
+ * Where a session's view runs: the host its workspace is on and the workspace
+ * as that host knows it, never the view key, which only this machine reads.
+ */
+function workspaceOf(session: VoiceSession): { hostId: string; workspaceId: string | null } {
+  if (!session.projectId) return { hostId: LOCAL_HOST_ID, workspaceId: null };
+  const { hostId, projectId } = parseHostScopedKey(session.projectId);
+  return { hostId, workspaceId: projectId };
+}
+
 /** The live session as one view sees it: none when that view owns it. */
 function liveSessionUpdateFor(webContentsId: number): VoiceLiveSessionUpdate {
   const session = liveSession;
   if (!session || session.ended || session.webContentsId === webContentsId) {
     return { revision: liveSessionRevision, session: null };
   }
+  const { hostId, workspaceId } = workspaceOf(session);
   return {
     revision: liveSessionRevision,
     session: {
       sessionId: session.id,
-      projectId: session.projectId,
-      projectName: session.projectInfo.name ?? null,
+      hostId,
+      projectId: workspaceId,
+      projectName: session.projectInfo.name ?? session.workspaceName,
     },
   };
 }
@@ -352,6 +377,14 @@ function endSession(session: VoiceSession, reason: VoiceSessionEndReason): void 
   session.unsubscribe = null;
   session.unwatchDestroyed?.();
   session.unwatchDestroyed = null;
+  // A stop's cleanup still writes into the view's draft, so the view is handed
+  // to a short hold for the request to arrive. Taken before the session's own
+  // goes, so no eviction finds the view free in between.
+  if (reason === "stopped" && !session.sender.isDestroyed()) {
+    holdCleanupHandoff(session.webContentsId);
+  }
+  session.releaseView?.();
+  session.releaseView = null;
   // Abort any in-flight file-link detection / resolution.
   session.controller.abort();
   logInfo("[VoiceInput] Session ended", {
@@ -372,6 +405,30 @@ function endSession(session: VoiceSession, reason: VoiceSessionEndReason): void 
       report,
     });
   }
+}
+
+/** What one passage's cleanup came back as. */
+interface CorrectReply {
+  action: "no_change" | "replace";
+  correctedText: string;
+  failed?: true;
+  timing?: VoiceCorrectionTiming;
+}
+
+// Handoff holds still running, ended early when the handlers go away.
+const cleanupHandoffs = new Set<() => void>();
+
+function holdCleanupHandoff(webContentsId: number): void {
+  const release = holdDictationView(webContentsId);
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const end = () => {
+    if (timer) clearTimeout(timer);
+    cleanupHandoffs.delete(end);
+    release();
+  };
+  timer = setTimeout(end, CLEANUP_HANDOFF_MS);
+  timer.unref?.();
+  cleanupHandoffs.add(end);
 }
 
 const SUPERSEDED: VoiceStartOutcome = { status: "superseded" };
@@ -1118,6 +1175,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       projectId: ctx.projectId,
       // A host's project is resolved on the host.
       projectInfo: hostPaneOf(ctx.projectId) ? {} : getProjectInfo(ctx.projectId),
+      workspaceName: options?.workspaceName ?? null,
       outsideView: options?.outsideView === true,
       terminalId: options?.terminalId,
       intent: options?.intent ?? "dictation",
@@ -1128,6 +1186,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       controller: new AbortController(),
       unsubscribe: null,
       unwatchDestroyed: null,
+      // Taken before the first await, so no eviction can take the view
+      // between the start and the session being live (#14773).
+      releaseView: holdDictationView(ctx.webContentsId),
       preStartAudio: { chunks: [], bytes: 0, overflowed: false },
       overflowReported: false,
       handedOff,
@@ -1861,12 +1922,14 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
 
   // Another view's indicator. The owner's own window brings it forward: a
   // switch asked from any other window would release the owner's cached view
-  // to open its workspace there, ending the session it was meant to show.
+  // to open its workspace there, ending the session it was meant to show. The
+  // view on screen there may be on another host than the owner's, so it is
+  // told the host as well as the workspace (#14773).
   const handleRevealLive = (sessionId: string): boolean => {
     const session = liveSession;
     if (!session || session.id !== sessionId || session.ended) return false;
     if (session.sender.isDestroyed()) return false;
-    const reveal = { sessionId, workspaceId: session.projectId };
+    const reveal = { sessionId, ...workspaceOf(session) };
     const win = getWindowForWebContents(session.sender);
     if (win && !win.isDestroyed()) {
       // The view on screen there switches to the owner's workspace.
@@ -2033,17 +2096,28 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
   const handleCorrect = async (
     ctx: IpcContext,
     request: VoiceInputCorrectPayload
-  ): Promise<{
-    action: "no_change" | "replace";
-    correctedText: string;
-    failed?: true;
-    timing?: VoiceCorrectionTiming;
-  }> => {
+  ): Promise<CorrectReply> => {
     const startedAt = performance.now();
     const settings = getVoiceSettings();
     if (!mayCorrect(settings) || !request.rawText.trim()) {
       return { action: "no_change", correctedText: request.rawText };
     }
+    // The answer lands in the asking view's draft, so the view is kept until
+    // it has (#14773).
+    const releaseView = holdDictationView(ctx.webContentsId, CLEANUP_REQUEST_HOLD_MS);
+    try {
+      return await correctPassage(ctx, request, settings, startedAt);
+    } finally {
+      releaseView();
+    }
+  };
+
+  const correctPassage = async (
+    ctx: IpcContext,
+    request: VoiceInputCorrectPayload,
+    settings: VoiceInputSettings,
+    startedAt: number
+  ): Promise<CorrectReply> => {
 
     const svc = (correctionService ??= new VoiceCorrectionService());
     // The request is its passage's alone. Only the view that sent it going
@@ -2127,6 +2201,19 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
   ): Promise<VoiceRewriteOutcome> => {
     const settings = getVoiceSettings();
     if (!settings.openaiApiKey) return { status: "unavailable" };
+    const releaseView = holdDictationView(ctx.webContentsId, CLEANUP_REQUEST_HOLD_MS);
+    try {
+      return await rewriteSelection(ctx, request, settings);
+    } finally {
+      releaseView();
+    }
+  };
+
+  const rewriteSelection = async (
+    ctx: IpcContext,
+    request: VoiceInputRewritePayload,
+    settings: VoiceInputSettings
+  ): Promise<VoiceRewriteOutcome> => {
     if (!correctionService) {
       correctionService = new VoiceCorrectionService();
     }
@@ -2213,6 +2300,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     ipcMain.removeListener(CHANNELS.VOICE_INPUT_AUDIO_CHUNK, handleAudioChunk);
     if (liveSession) endSession(liveSession, "cancelled");
     if (drainingSession) endSession(drainingSession, "cancelled");
+    for (const end of [...cleanupHandoffs]) end();
     drainingSession = null;
     service?.destroy();
     service = null;

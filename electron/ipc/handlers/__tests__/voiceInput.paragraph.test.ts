@@ -52,6 +52,8 @@ const shared = vi.hoisted(() => ({
   fileLinkCalls: [] as string[],
   /** The project the fake view belongs to, when a test needs one. */
   viewProjectId: null as string | null,
+  /** When set, a correction or rewrite answers only once it settles. */
+  cleanupGate: null as null | Promise<void>,
 }));
 
 vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
@@ -94,8 +96,9 @@ vi.mock("../../../services/VoiceCorrectionService.js", () => ({
   VoiceCorrectionService: function VoiceCorrectionService(this: Record<string, unknown>) {
     this.warm = () => Promise.resolve();
     this.preconnect = () => {};
-    this.correct = function (request: unknown, settings: unknown) {
+    this.correct = async function (request: unknown, settings: unknown) {
       shared.correctionCalls.push({ request, settings });
+      await shared.cleanupGate;
       if (shared.correctionFailed) {
         const { rawText } = request as { rawText: string };
         return Promise.resolve({
@@ -113,9 +116,10 @@ vi.mock("../../../services/VoiceCorrectionService.js", () => ({
         confirmedText: "hello world",
       });
     };
-    this.rewrite = function (request: unknown, settings: unknown) {
+    this.rewrite = async function (request: unknown, settings: unknown) {
       shared.rewriteCalls.push({ request, settings });
-      return Promise.resolve({ status: "replace", text: "Shorter." });
+      await shared.cleanupGate;
+      return { status: "replace", text: "Shorter." };
     };
     this.detectFileLinkTokens = function (utterance: string) {
       shared.fileLinkCalls.push(utterance);
@@ -200,6 +204,7 @@ vi.mock("../../channels.js", () => ({
 
 // ── Module import (once) ───────────────────────────────────────────────────
 import { registerVoiceInputHandlers, getVoiceSettings, validateOpenAIKey } from "../voiceInput.js";
+import { isDictationViewHeld } from "../../../services/voice/dictationViewHold.js";
 import { ValidationError } from "../../validationError.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -327,6 +332,30 @@ describe("voiceInput — IPC handler surface", () => {
       model: "gpt-6-luna",
       apiKey: "sk-test",
     });
+  });
+
+  it("correct keeps the asking view until its answer is back (#14773)", async () => {
+    const handleCorrect = getHandler("voice-input:correct") as (
+      e: unknown,
+      request: unknown
+    ) => Promise<unknown>;
+    const view = { ...fakeEvent.sender, id: 2 } as unknown as Electron.WebContents;
+    let answer!: () => void;
+    shared.cleanupGate = new Promise<void>((resolve) => {
+      answer = resolve;
+    });
+
+    try {
+      const pending = handleCorrect({ sender: view }, { rawText: "helo world" });
+      await Promise.resolve();
+      expect(isDictationViewHeld(view)).toBe(true);
+
+      answer();
+      await pending;
+      expect(isDictationViewHeld(view)).toBe(false);
+    } finally {
+      shared.cleanupGate = null;
+    }
   });
 
   it("correct tells the renderer when the request failed", async () => {
@@ -2490,6 +2519,33 @@ describe("voiceInput — rewrite instructions", () => {
       "voice-input:transcription-complete",
       "voice-input:paragraph-boundary",
     ]);
+  });
+
+  it("rewrite keeps the asking view until its answer is back (#14773)", async () => {
+    const handleRewrite = getHandler("voice-input:rewrite") as (
+      e: unknown,
+      request: unknown
+    ) => Promise<unknown>;
+    const view = fakeEvent.sender as unknown as Electron.WebContents;
+    let answer!: () => void;
+    shared.cleanupGate = new Promise<void>((resolve) => {
+      answer = resolve;
+    });
+
+    try {
+      const pending = handleRewrite(fakeEvent, {
+        selectedText: "a long sentence",
+        instruction: "make it shorter",
+      });
+      await Promise.resolve();
+      expect(isDictationViewHeld(view)).toBe(true);
+
+      answer();
+      await pending;
+      expect(isDictationViewHeld(view)).toBe(false);
+    } finally {
+      shared.cleanupGate = null;
+    }
   });
 
   it("rewrite validates the payload and hands it to the correction model", async () => {

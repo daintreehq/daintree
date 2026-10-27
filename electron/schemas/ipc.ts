@@ -14,6 +14,7 @@ import {
   VOICE_REWRITE_MAX_INSTRUCTION_CHARS,
   VOICE_REWRITE_MAX_SELECTION_CHARS,
 } from "../../shared/config/voiceCorrection.js";
+import { VOICE_WORKSPACE_NAME_MAX_LENGTH } from "../../shared/types/voice.js";
 
 /** Schema for a launch hint — built-in agent id or plugin-provided string. */
 const LaunchAgentIdSchema = z.union([z.enum(BUILT_IN_AGENT_IDS), z.string().min(1)]);
@@ -783,6 +784,9 @@ export const VoiceInputStartOptionsSchema = z
     // another host's or another project's): the view's own project vocabulary
     // and file links have no place in it.
     outsideView: z.literal(true).optional(),
+    // What the asking view calls its workspace, so views on other hosts can
+    // name it: this machine has no name for a host's project or scratch.
+    workspaceName: z.string().min(1).max(VOICE_WORKSPACE_NAME_MAX_LENGTH).optional(),
   })
   .optional();
 
