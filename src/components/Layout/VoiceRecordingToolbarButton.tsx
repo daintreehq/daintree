@@ -1,5 +1,5 @@
 import { useEffect, useRef, type ReactNode } from "react";
-import { History, Lock, Mic } from "lucide-react";
+import { Lock, Mic } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -17,7 +17,6 @@ import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { RecentDictationMenuItems } from "./RecentDictationMenuItems";
 import { focusRecoveredComposer } from "@/services/recentDictationRecovery";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
-import { useRecentDictationsStore } from "@/store/recentDictationsStore";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
 import { useScratchStore } from "@/store/scratchStore";
 import { actionService } from "@/services/ActionService";
@@ -147,44 +146,6 @@ function VoiceElsewhereIndicator({
 }
 
 /**
- * Shown while nothing records but this session has dictations to recover
- * (#14637), so the voice menu is still there after a dictation went wrong.
- */
-function VoiceHistoryButton({
-  "data-toolbar-item": dataToolbarItem,
-}: {
-  "data-toolbar-item"?: string;
-}) {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          variant="ghost"
-          size="icon"
-          data-toolbar-item={dataToolbarItem}
-          onClick={() => {
-            void actionService.dispatch("voiceInput.openRecentDictations", undefined, {
-              source: "user",
-            });
-          }}
-          className="toolbar-icon-button relative mr-0.5 text-text-secondary"
-          aria-label="Recent dictations"
-          data-testid="voice-history-button"
-        >
-          <History className="h-4 w-4" />
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent side="bottom">
-        <div className="flex flex-col gap-0.5">
-          <span className="font-medium">Recent dictations</span>
-          <span className="text-text-secondary">Click to add one to a draft or copy it</span>
-        </div>
-      </TooltipContent>
-    </Tooltip>
-  );
-}
-
-/**
  * The voice button's right-click menu, the same in every state it shows in:
  * whatever the state adds first, then the recent dictations, then the
  * toolbar's own items.
@@ -261,7 +222,6 @@ export function VoiceRecordingToolbarButton({
   const micDeviceLabel = useVoiceRecordingStore((state) => state.micDeviceLabel);
   const pauseStopWarning = useVoiceRecordingStore((state) => state.pauseStopWarning);
   const idleStopWarning = useVoiceRecordingStore((state) => state.idleStopWarning);
-  const hasRecentDictations = useRecentDictationsStore((state) => state.dictations.length > 0);
   const shortcut = useEffectiveCombo("voiceInput.toggle");
   const pauseShortcut = useEffectiveCombo("voiceInput.togglePause");
   const hover = useShortcutHintHover("voiceInput.toggle");
@@ -433,13 +393,6 @@ export function VoiceRecordingToolbarButton({
       return (
         <VoiceToolbarMenu>
           <VoiceLockedButton label={lockedLabel} data-toolbar-item={dataToolbarItem} />
-        </VoiceToolbarMenu>
-      );
-    }
-    if (!isActive && hasRecentDictations) {
-      return (
-        <VoiceToolbarMenu>
-          <VoiceHistoryButton data-toolbar-item={dataToolbarItem} />
         </VoiceToolbarMenu>
       );
     }
