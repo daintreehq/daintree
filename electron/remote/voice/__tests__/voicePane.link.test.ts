@@ -128,6 +128,26 @@ describe("dictating into a host's pane reads the pane from that host", () => {
     expect(read?.keyterms.terminalTerms).toEqual(many.slice(0, MAX_PANE_TERMS));
   });
 
+  it("keeps an answer whole when one of its strings is longer than the Shell takes", async () => {
+    const commandTarget = START.commandTarget!;
+    const [review] = commandTarget.vocabulary.entries;
+    deps.readStart.mockResolvedValueOnce({
+      ...START,
+      keyterms: { ...START.keyterms, terminalTerms: ["x".repeat(10_000), "hostPaneOf"] },
+      commandTarget: {
+        ...commandTarget,
+        vocabulary: {
+          ...commandTarget.vocabulary,
+          entries: [{ ...review!, description: "d".repeat(10_000) }],
+        },
+      },
+    });
+    const read = await client.readStart(HOST, SCOPE, { timeoutMs: 500 });
+    expect(read?.keyterms.terminalTerms).toEqual(["hostPaneOf"]);
+    expect(read?.commandTarget?.vocabulary.entries[0]?.token).toBe("/review");
+    expect(read?.names).toEqual(START.names);
+  });
+
   it("re-reads the vocabulary as a dictionary, dropping entries that aren't one", async () => {
     deps.readStart.mockResolvedValueOnce({
       ...START,

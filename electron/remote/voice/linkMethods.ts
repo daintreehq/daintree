@@ -138,15 +138,27 @@ export const VoicePaneFilesResultSchema = z.object({
 
 export const VoicePaneProjectResultSchema = z.object({ project: ProjectInfoSchema });
 
+// A term too long for the schema would fail the whole answer, and none that
+// long is ever said aloud.
+function fitTerms(terms: readonly string[]): string[] {
+  return terms.filter((term) => term.length <= MAX_TEXT_LENGTH).slice(0, MAX_PANE_TERMS);
+}
+
 /** What a host sends, cut to what the Shell accepts. */
 export function fitPaneStart(context: PaneStartContext): PaneStartContext {
+  const { branchName } = context.keyterms;
   return {
     ...context,
     vocabulary: context.vocabulary.slice(0, MAX_PANE_VOCABULARY),
+    names: {
+      hosts: fitTerms(context.names.hosts),
+      projects: fitTerms(context.names.projects),
+      worktrees: fitTerms(context.names.worktrees),
+    },
     keyterms: {
-      ...context.keyterms,
-      repoNames: context.keyterms.repoNames.slice(0, MAX_PANE_TERMS),
-      terminalTerms: context.keyterms.terminalTerms.slice(0, MAX_PANE_TERMS),
+      repoNames: fitTerms(context.keyterms.repoNames),
+      branchName: branchName && branchName.length <= MAX_TEXT_LENGTH ? branchName : null,
+      terminalTerms: fitTerms(context.keyterms.terminalTerms),
     },
     commandTarget: fitCommandTarget(context.commandTarget),
   };
@@ -161,13 +173,20 @@ export function fitPaneCorrection(context: PaneCorrectionContext): PaneCorrectio
 }
 
 function fitCommandTarget(target: VoiceCommandTarget | null): VoiceCommandTarget | null {
-  if (!target || target.vocabulary.entries.length <= MAX_PANE_COMMANDS) return target;
-  // Most likely first, so the cut drops the least likely.
+  if (!target) return null;
   return {
     ...target,
     vocabulary: {
       ...target.vocabulary,
-      entries: target.vocabulary.entries.slice(0, MAX_PANE_COMMANDS),
+      // Most likely first, so the cut drops the least likely. A long
+      // description is cut rather than costing the answer.
+      entries: target.vocabulary.entries
+        .slice(0, MAX_PANE_COMMANDS)
+        .map((entry) =>
+          entry.description.length > MAX_TEXT_LENGTH
+            ? { ...entry, description: entry.description.slice(0, MAX_TEXT_LENGTH) }
+            : entry
+        ),
     },
   };
 }
