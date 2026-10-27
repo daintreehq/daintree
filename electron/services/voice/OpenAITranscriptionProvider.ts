@@ -1409,7 +1409,9 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
       logDebug(`${P} Emitting complete transcript to renderer`, {
         itemId,
         length: transcript.length,
-        ...boundary,
+        endOfSpeech: boundary.endOfSpeech === true,
+        endsAtPause: boundary.endsAtPause === true,
+        incomplete: boundary.incomplete === true,
       });
       this.emit({
         type: "complete",
