@@ -807,6 +807,31 @@ describe("DeepgramTranscriptionProvider", () => {
     provider.stop();
   });
 
+  // Cleanup is told where the speaker stopped (#14897): only endpointing says so.
+  it("marks only a speech_final paused, never a mid-speech final or a stop's flush", async () => {
+    const provider = new DeepgramTranscriptionProvider();
+    const completes: Array<{ text: string; paused: boolean }> = [];
+    provider.onEvent((e) => {
+      if (e.type === "complete") completes.push({ text: e.text, paused: e.paused === true });
+    });
+
+    const { socket } = await bringSessionReady(provider);
+    socket.simulateMessage(resultsMessage("Fix the bug", { is_final: true }));
+    socket.simulateMessage(resultsMessage("in the parser.", { is_final: true, speech_final: true }));
+    // What CloseStream or Finalize flushes comes back final, never speech_final.
+    socket.simulateMessage({
+      ...resultsMessage("and the lexer", { is_final: true }),
+      from_finalize: true,
+    });
+
+    expect(completes).toEqual([
+      { text: "Fix the bug", paused: false },
+      { text: "in the parser.", paused: true },
+      { text: "and the lexer", paused: false },
+    ]);
+    provider.stop();
+  });
+
   // The words already landed; a "send it" among them waits on this.
   it("reports an empty speech_final with no preview as a bare end of speech", async () => {
     const provider = new DeepgramTranscriptionProvider();
@@ -822,9 +847,10 @@ describe("DeepgramTranscriptionProvider", () => {
 
     expect(events).toEqual([
       expect.objectContaining({ text: "Fix it, send it.", itemId: expect.any(String) }),
-      { type: "complete", text: "", endOfSpeech: true },
+      { type: "complete", text: "", endOfSpeech: true, paused: true },
     ]);
     expect(events[0]).not.toHaveProperty("endOfSpeech");
+    expect(events[0]).not.toHaveProperty("paused");
     provider.stop();
   });
 
@@ -843,7 +869,13 @@ describe("DeepgramTranscriptionProvider", () => {
     const [delta, complete] = events;
     const itemId = delta && "itemId" in delta ? delta.itemId : undefined;
     expect(itemId).toEqual(expect.any(String));
-    expect(complete).toEqual({ type: "complete", text: "", itemId, endOfSpeech: true });
+    expect(complete).toEqual({
+      type: "complete",
+      text: "",
+      itemId,
+      endOfSpeech: true,
+      paused: true,
+    });
     provider.stop();
   });
 

@@ -440,6 +440,10 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
   // answers it, the one whose utterance started before that point, ends
   // because Enter did, not because the speaker paused.
   private finalizeAtSeconds: number | null = null;
+  // Where this connection's audio stood when the stop's audio.done went out.
+  // The server answers it with a final for whatever it still held, which no
+  // pause closed.
+  private stopAtSeconds: number | null = null;
   // The onset guard heard speech since the last utterance final, so the
   // server may have an utterance open before any preview of it arrived.
   private speechSinceFinal = false;
@@ -464,13 +468,17 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
       // With nothing open the server has nothing to finalise, and the next
       // utterance's own final must still end speech.
       if (this.utteranceItemId !== null || this.speechSinceFinal) {
-        this.finalizeAtSeconds =
-          (this.unconfirmedOffset + this.unconfirmedBytes) / AUDIO_BYTES_PER_SECOND;
+        this.finalizeAtSeconds = this.sentSeconds();
       }
       logDebug(`${P} → Finalize (paragraph boundary)`);
     } catch (err) {
       logWarn(`${P} Failed to send Finalize`, voiceErrorLogFields(err));
     }
+  }
+
+  /** How much audio this connection has sent, in its own timeline. */
+  private sentSeconds(): number {
+    return (this.unconfirmedOffset + this.unconfirmedBytes) / AUDIO_BYTES_PER_SECOND;
   }
 
   private emit(event: VoiceTranscriptionEvent): void {
@@ -1167,6 +1175,13 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
     const forced =
       this.finalizeAtSeconds !== null && (start === null || start < this.finalizeAtSeconds);
     this.finalizeAtSeconds = null;
+    // After a stop, only an utterance that ended an endpoint or more before
+    // it was closed by the speaker's silence rather than by the stop.
+    const endedAt = start === null || duration === null ? null : start + duration;
+    const stopped =
+      this.stopAtSeconds !== null &&
+      (endedAt === null || this.stopAtSeconds - endedAt < this.tuning.endpointingMs / 1000);
+    const end = forced ? {} : { endOfSpeech: true, ...(stopped ? {} : { paused: true }) };
     this.speechSinceFinal = this.onsetSpeaking;
     this.resetUtterance();
     if (itemId || full) {
@@ -1175,11 +1190,11 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
         text: full,
         ...(uncertain.length > 0 ? { uncertain } : {}),
         itemId: itemId ?? nextUtteranceItemId(),
-        ...(forced ? {} : { endOfSpeech: true, paused: true }),
+        ...end,
       });
     } else if (!forced) {
       // Nothing was said in it; it only marks that the utterance ended.
-      this.emit({ type: "complete", text: "", endOfSpeech: true, paused: true });
+      this.emit({ type: "complete", text: "", ...end });
     }
     // The final lands a moment after the pause that ended it, so the speaker
     // may already have gone on; say so, as Deepgram's VAD would have.
@@ -1403,6 +1418,7 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
     this.lockedChunks = [];
     this.connectionCompletedEnd = 0;
     this.finalizeAtSeconds = null;
+    this.stopAtSeconds = null;
     const unconfirmed = this.unconfirmedAudio;
     const buffered = this.preConnectBuffer;
     this.unconfirmedAudio = [];
@@ -1454,6 +1470,7 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
     this.resetUtterance();
     this.connectionCompletedEnd = 0;
     this.finalizeAtSeconds = null;
+    this.stopAtSeconds = null;
     this.speechSinceFinal = false;
     this.resetOnset();
     this.replayEvictionWarned = false;
@@ -1592,6 +1609,7 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
     // audio.done asks the server to flush what it has: the remaining results,
     // then transcript.done, then it closes.
     try {
+      this.stopAtSeconds = this.sentSeconds();
       this.connection.send(JSON.stringify({ type: "audio.done" }));
       logInfo(`${P} → audio.done`);
     } catch {
@@ -1660,6 +1678,7 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
       this.settleDrain("timeout");
     }, DRAIN_TIMEOUT_MS);
     try {
+      this.stopAtSeconds = this.sentSeconds();
       this.connection?.send(JSON.stringify({ type: "audio.done" }));
       logInfo(`${P} → audio.done (after late ready)`);
     } catch {

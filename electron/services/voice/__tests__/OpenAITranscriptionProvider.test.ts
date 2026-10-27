@@ -1336,7 +1336,7 @@ describe("OpenAITranscriptionProvider", () => {
       service.stop();
     });
 
-    it("never marks a segment cut at a short pause as ending at a pause", async () => {
+    it("marks a segment cut at a short pause as paused, never as ending at a pause", async () => {
       const service = new OpenAITranscriptionProvider({
         minSegmentMs: 8_000,
         maxSegmentMs: 15_000,
@@ -1357,7 +1357,7 @@ describe("OpenAITranscriptionProvider", () => {
       });
 
       expect(events.filter((e) => e.type === "complete")).toEqual([
-        { type: "complete", text: "fix the leak", itemId: "item-A" },
+        { type: "complete", text: "fix the leak", itemId: "item-A", paused: true },
       ]);
       service.stop();
     });
@@ -3398,7 +3398,14 @@ describe("OpenAITranscriptionProvider — item identity and ordering (#13109)", 
     });
 
     expect(events.filter((e) => e.type === "complete")).toEqual([
-      { type: "complete", text: "", itemId: "item-A", endOfSpeech: true, endsAtPause: true },
+      {
+        type: "complete",
+        text: "",
+        itemId: "item-A",
+        endOfSpeech: true,
+        endsAtPause: true,
+        paused: true,
+      },
     ]);
     service.stop();
   });
@@ -3419,7 +3426,7 @@ describe("OpenAITranscriptionProvider — item identity and ordering (#13109)", 
     });
 
     expect(events.filter((e) => e.type === "complete")).toEqual([
-      { type: "complete", text: "", itemId: "item-A", endsAtPause: true },
+      { type: "complete", text: "", itemId: "item-A", endsAtPause: true, paused: true },
     ]);
     service.stop();
   });
@@ -3455,6 +3462,66 @@ describe("OpenAITranscriptionProvider — item identity and ordering (#13109)", 
 
     expect(pauses(events)).toEqual([true, false, false]);
     service.stop();
+  });
+
+  function spokenPauses(events: VoiceTranscriptionEvent[]) {
+    return events.flatMap((e) => (e.type === "complete" ? [e.paused === true] : []));
+  }
+
+  // Cleanup is told where the speaker stopped (#14897): only a commit made at
+  // a pause the VAD heard says so, however the silence after it reads.
+  it("marks speech-end and gap commits paused, never a cap cut that silence follows", async () => {
+    const service = new OpenAITranscriptionProvider({ minSegmentMs: 8_000, maxSegmentMs: 15_000 });
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+
+    const { socket } = await bringSessionReady(service);
+    const worker = latestVadWorker();
+    vadCommitSegment(service, worker);
+    feedCommittableAudio(service);
+    worker.emitSpeechStart();
+    vi.advanceTimersByTime(8_000);
+    worker.emitPause();
+    feedCommittableAudio(service);
+    vi.advanceTimersByTime(15_000);
+    // Speech ends straight after the cap, with too little audio left to commit.
+    worker.emitSpeechEnd();
+    expect(socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")).toHaveLength(3);
+
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-B" });
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-C" });
+    socket.simulateMessage("conversation.item.done", done("item-A", "fix the bug"));
+    socket.simulateMessage("conversation.item.done", done("item-B", "in the parser"));
+    socket.simulateMessage("conversation.item.done", done("item-C", "and the lexer"));
+
+    expect(spokenPauses(events)).toEqual([true, true, false]);
+    // The cut still ends speech for a send; it just isn't where they paused.
+    expect(endsOfSpeech(events)).toEqual([false, false, true]);
+    expect(pauses(events)).toEqual([true, false, false]);
+    service.stop();
+  });
+
+  it("never marks the commit a stop flushes paused", async () => {
+    const service = new OpenAITranscriptionProvider();
+    const events: VoiceTranscriptionEvent[] = [];
+    service.onEvent((e) => events.push(e));
+
+    const { socket } = await bringSessionReady(service);
+    const worker = latestVadWorker();
+    vadCommitSegment(service, worker);
+    feedCommittableAudio(service);
+    worker.emitSpeechStart();
+    const drainPromise = service.stopGracefully();
+    expect(socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")).toHaveLength(2);
+
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-A" });
+    socket.simulateMessage("input_audio_buffer.committed", { item_id: "item-B" });
+    socket.simulateMessage("conversation.item.done", done("item-A", "fix the bug"));
+    socket.simulateMessage("conversation.item.done", done("item-B", "and the tests"));
+    await drainPromise;
+
+    expect(spokenPauses(events)).toEqual([true, false]);
   });
 
   it("keeps each pause on its own commit when a transcript beats its ack", async () => {
@@ -5414,7 +5481,13 @@ describe("OpenAITranscriptionProvider — recovery window (#14796)", () => {
     // The old preview gives way to the replay's transcript, which keeps the pause.
     expect(events.filter((e) => e.type === "complete")).toEqual([
       { type: "complete", text: "", itemId: "item-A" },
-      { type: "complete", text: "new paragraph", itemId: "item-B", endsAtPause: true },
+      {
+        type: "complete",
+        text: "new paragraph",
+        itemId: "item-B",
+        endsAtPause: true,
+        paused: true,
+      },
     ]);
     service.stop();
   });
