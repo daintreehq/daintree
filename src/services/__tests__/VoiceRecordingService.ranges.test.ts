@@ -402,6 +402,7 @@ describe("VoiceRecordingService — dictation ranges (#14597)", () => {
       rawText: "hello again",
       correctedText: "Hello, again.",
       baseline: { raw: "hello again", corrected: "Hello, again." },
+      sessionId: voiceStore.getState().panelBuffers[PANEL]?.dictationSessionId,
       write: {
         before: "Intro. Hello there. hello again",
         after: "Intro. Hello there. Hello, again.",
@@ -647,6 +648,7 @@ describe("VoiceRecordingService — correction over dictated ranges (#14613)", (
       rawText: "first part typed note second part",
       correctedText: "FIRST PART typed note SECOND PART",
       baseline: { raw: "first part second part", corrected: "FIRST PART SECOND PART" },
+      sessionId: voiceStore.getState().panelBuffers[PANEL]?.dictationSessionId,
       // Passage by passage, so the composer leaves what was typed between them alone.
       write: {
         before: "Intro. first part typed note second part",

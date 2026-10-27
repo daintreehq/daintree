@@ -412,7 +412,7 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
   });
 
   it("lets Restore on a chunk that landed while recording move it within the stop's baseline", async () => {
-    const { service, say, pause, draft, flush, baseline } = await setup();
+    const { service, voiceStore, say, pause, draft, flush, baseline } = await setup();
     const { takeLandedCorrection, rebaseCorrectionBaseline } =
       await import("../voiceCorrectionLanding");
     correct.mockResolvedValueOnce({ action: "replace", correctedText: CLEANED_OPENING });
@@ -422,6 +422,8 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
     await flush();
     const landed = takeLandedCorrection(PANEL, undefined, draft());
     expect(landed?.baseline).toMatchObject({ raw: OPENING_TEXT, corrected: CLEANED_OPENING });
+    // The session still running, whose review its words carry (#14875).
+    expect(landed?.sessionId).toBe(voiceStore.getState().panelBuffers[PANEL]?.dictationSessionId);
 
     correct.mockResolvedValueOnce({ action: "no_change", correctedText: NEXT });
     await service.stop();

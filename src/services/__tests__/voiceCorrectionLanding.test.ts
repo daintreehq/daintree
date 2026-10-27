@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import {
+  isLatestDictation,
   rebaseCorrectionBaseline,
   recordCorrectionLanded,
   takeLandedCorrection,
@@ -11,6 +12,7 @@ const correction = {
   rawText: "hello there",
   correctedText: "Hello, there.",
   baseline: { raw: "hello there", corrected: "Hello, there." },
+  sessionId: "session-1",
 };
 const draft = `Intro. ${correction.correctedText}`;
 
@@ -52,8 +54,33 @@ describe("landed corrections", () => {
       rawText: "same",
       correctedText: "same",
       baseline: null,
+      sessionId: "session-1",
     });
     expect(takeLandedCorrection("term-1", "p1", "same")).toBeNull();
+  });
+});
+
+describe("isLatestDictation", () => {
+  beforeEach(() => {
+    useVoiceRecordingStore.setState({ panelBuffers: {} });
+  });
+
+  it("holds for its own dictation, stopped or not, until another begins on the panel (#14875)", () => {
+    const voice = useVoiceRecordingStore.getState();
+    voice.beginSession({ panelId: "term-1" }, "session-1");
+    expect(isLatestDictation("term-1", correction)).toBe(true);
+    voice.finishSession();
+    expect(isLatestDictation("term-1", correction)).toBe(true);
+
+    voice.beginSession({ panelId: "term-2" }, "session-2");
+    expect(isLatestDictation("term-1", correction)).toBe(true);
+
+    voice.beginSession({ panelId: "term-1" }, "session-3");
+    expect(isLatestDictation("term-1", correction)).toBe(false);
+  });
+
+  it("holds when the panel keeps no dictation to compare with", () => {
+    expect(isLatestDictation("term-1", correction)).toBe(true);
   });
 });
 

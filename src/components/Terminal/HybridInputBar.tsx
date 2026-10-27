@@ -132,12 +132,17 @@ import {
   clearComposerHistory,
   createComboboxAttributes,
   captureRewriteSelection,
+  endCorrectionReview,
   outsideDraftWrite,
   selectionAfterOutsideWrite,
   readImageChipPaths,
   replayLandedCorrection,
 } from "./inputEditorExtensions";
-import { outsideWriteChange, takeLandedCorrection } from "@/services/voiceCorrectionLanding";
+import {
+  isLatestDictation,
+  outsideWriteChange,
+  takeLandedCorrection,
+} from "@/services/voiceCorrectionLanding";
 import { takeScratchLanded } from "@/services/voiceScratchCommand";
 import { registerComposerSelectionSource } from "@/services/voiceRewriteSelection";
 import type { VoiceDraftSend } from "@/services/voiceDraftSend";
@@ -1010,6 +1015,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       const view = editorViewRef.current;
       if (!view) return;
       const landed = takeLandedCorrection(terminalId, projectId, draft);
+      const reviewed = landed !== null && isLatestDictation(voiceId, landed);
       const scratched = takeScratchLanded(terminalId, projectId, draft);
       // Only what differs is replaced, so an append leaves the image and
       // file chips already in the draft attached.
@@ -1024,13 +1030,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           inputState.caretMovingDraftRevision > appliedBefore
             ? undefined
             : selectionAfterOutsideWrite(view.state, view.hasFocus, change, pendingSelection);
-        view.dispatch(outsideDraftWrite(change, draft, landed, selection));
+        view.dispatch(outsideDraftWrite(change, draft, landed, selection, reviewed));
         // Emptied from outside (sent or cleared elsewhere): nothing to undo into.
         // A spoken "scratch that" or a cancelled dictation that empties it is
         // an edit, so undo brings the words back.
         if (draft === "" && !scratched) clearComposerHistory(view);
       } else {
-        if (landed) replayLandedCorrection(view, landed);
+        if (landed) replayLandedCorrection(view, landed, reviewed);
         // Words that replaced a selection with the same text change nothing,
         // but the selection still collapses after them.
         if (pendingSelection) {
@@ -1040,6 +1046,19 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         }
       }
     }, [externalDraftRevision, terminalId, projectId]);
+
+    // A new dictation puts the last correction behind the user, so its review
+    // ends as the session begins, before any of its words land (#14875).
+    useEffect(
+      () =>
+        useVoiceRecordingStore.subscribe((state, prev) => {
+          const session = state.panelBuffers[voiceId]?.dictationSessionId;
+          if (!session || session === prev.panelBuffers[voiceId]?.dictationSessionId) return;
+          const view = editorViewRef.current;
+          if (view) endCorrectionReview(view);
+        }),
+      [voiceId]
+    );
 
     // Steps taken while another screen drove are the driver's, not this
     // view's: none survive a takeover (the sync above lands the latest first).

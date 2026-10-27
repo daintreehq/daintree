@@ -311,6 +311,29 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611, #14780)", () =
     expect(view.state.doc.toString()).toBe("hello wrld");
   });
 
+  it("syncs a correction a newer dictation overtook without its review, still undoable (#14875)", async () => {
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+    dictate(PANEL_ID, "hello wrld");
+    const result = renderComposer({
+      extensions: [createComposerHistory(), createCorrectionReview()],
+      holdSend: true,
+    });
+
+    await act(async () => {
+      result.current.startVoiceWaitSubmit();
+    });
+    useVoiceRecordingStore.getState().beginSession({ panelId: PANEL_ID }, "session-next");
+    await act(async () => {
+      pending.resolve({ action: "replace", correctedText: "Hello world." });
+    });
+
+    expect(view.state.doc.toString()).toBe("Hello world.");
+    expect(view.contentDOM.querySelector(".cm-voice-restore")).toBeNull();
+    expect(undo(view)).toBe(true);
+    expect(view.state.doc.toString()).toBe("hello wrld");
+  });
+
   it("waits for a cleanup slower than two seconds and sends it cleaned", async () => {
     vi.useFakeTimers();
     const pending = deferred<CorrectResult>();

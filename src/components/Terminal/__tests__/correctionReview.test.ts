@@ -23,6 +23,7 @@ import {
   correctionLanded,
   createCorrectionReview,
   diffCorrection,
+  endCorrectionReview,
   replayLandedCorrection,
   restoreCorrection,
   type CorrectionReview,
@@ -363,6 +364,68 @@ describe("correction review", () => {
     expect(restoreCorrection(view)).toBe(false);
     expect(view.state.doc.toString()).toBe(INTRO + CORRECTED);
     expect(onSwapped).not.toHaveBeenCalled();
+  });
+
+  it("ends on request, leaving the text, the caret and the undo step as they were (#14875)", () => {
+    const view = mount(INTRO + RAW);
+    land(view, review);
+    const { doc, selection } = view.state;
+    const depth = undoDepth(view.state);
+    const dispatch = vi.spyOn(view, "dispatch");
+
+    endCorrectionReview(view);
+    expect(marked(view)).toEqual([]);
+    expect(restoreControl(view)).toBeNull();
+    expect(view.state.doc).toBe(doc);
+    expect(view.state.selection.eq(selection)).toBe(true);
+    expect(undoDepth(view.state)).toBe(depth);
+    expect(restoreCorrection(view)).toBe(false);
+
+    endCorrectionReview(view);
+    vi.advanceTimersByTime(VOICE_CORRECTION_MARK_DWELL_MS + VOICE_CORRECTION_MARK_FADE_MS);
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    dispatch.mockRestore();
+    expect(onSwapped).not.toHaveBeenCalled();
+
+    undoKey(view);
+    expect(view.state.doc.toString()).toBe(INTRO + RAW);
+    expect(onSwapped).toHaveBeenLastCalledWith(review, "raw");
+  });
+
+  it("lands a correction out of review on request, and brings the review back on redo", () => {
+    const view = mount(INTRO + RAW);
+    const after = INTRO + CORRECTED;
+    view.dispatch(
+      outsideDraftWrite(
+        minimalDocChange(view.state.doc.toString(), after)!,
+        after,
+        review,
+        undefined,
+        false
+      )
+    );
+
+    expect(view.state.doc.toString()).toBe(after);
+    expect(marked(view)).toEqual([]);
+    expect(restoreControl(view)).toBeNull();
+    expect(onShown).not.toHaveBeenCalled();
+
+    undoKey(view);
+    expect(view.state.doc.toString()).toBe(INTRO + RAW);
+    expect(onSwapped).toHaveBeenLastCalledWith(review, "raw");
+    redoKey(view);
+    expect(marked(view)).toEqual(["Open", "Zustand store."]);
+    expect(onSwapped).toHaveBeenLastCalledWith(review, "corrected");
+  });
+
+  it("replays a correction out of review on request, as an undoable swap", () => {
+    const view = mount(INTRO + CORRECTED);
+    replayLandedCorrection(view, review, false);
+
+    expect(restoreControl(view)).toBeNull();
+    expect(undoDepth(view.state)).toBe(1);
+    undoKey(view);
+    expect(view.state.doc.toString()).toBe(INTRO + RAW);
   });
 
   it("drops its pending deadline when the editor goes away", () => {
