@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { contentHash } from "../../e2e/helpers/voiceReplayScore";
 import {
@@ -7,6 +7,7 @@ import {
   type VoiceReasoningEffort,
 } from "../../shared/config/voiceCorrection";
 import { formatErrorMessage } from "../../shared/utils/errorMessage";
+import { buildOpenAIHeaders } from "../../shared/utils/openaiHeaders";
 import type {
   VoiceCorrectionRequest,
   VoiceCorrectionResult,
@@ -154,6 +155,7 @@ function parseArgs(argv: readonly string[]): Options | null {
         throw new Error(`unknown option ${flag}`);
     }
   }
+  if (options.variants.length === 0) throw new Error("--variants names no variant");
   if (new Set(options.variants.map((variant) => variant.id)).size !== options.variants.length) {
     throw new Error("a variant is listed twice");
   }
@@ -178,15 +180,13 @@ function profileFor(options: Options): Profile {
   };
 }
 
+const ROUTING = {
+  ...(process.env.OPENAI_ORG_ID ? { organizationId: process.env.OPENAI_ORG_ID } : {}),
+  ...(process.env.OPENAI_PROJECT_ID ? { projectId: process.env.OPENAI_PROJECT_ID } : {}),
+};
+
 function settingsFor(variant: Variant, profile: Profile, apiKey: string): VoiceCorrectionSettings {
-  return {
-    ...profile,
-    model: variant.model,
-    reasoningEffort: variant.effort,
-    apiKey,
-    ...(process.env.OPENAI_ORG_ID ? { organizationId: process.env.OPENAI_ORG_ID } : {}),
-    ...(process.env.OPENAI_PROJECT_ID ? { projectId: process.env.OPENAI_PROJECT_ID } : {}),
-  };
+  return { ...profile, model: variant.model, reasoningEffort: variant.effort, apiKey, ...ROUTING };
 }
 
 function requestFor(entry: CleanupCase): VoiceCorrectionRequest {
@@ -238,9 +238,14 @@ function toTrial(
 interface PredictionProbe {
   model: string;
   endpoint: "responses" | "chat/completions";
+  /** The API answered with a success status; nothing else counts as support. */
+  accepted: boolean;
   status: number | null;
+  /** The error's code, else its type, else what went wrong on the way. */
   code: string | null;
 }
+
+const PROBE_TIMEOUT_MS = 15_000;
 
 // One request per endpoint asking for Predicted Outputs alongside the strict
 // JSON format cleanup uses, recording only whether the API took it.
@@ -284,14 +289,32 @@ async function probePredictedOutputs(model: string, apiKey: string): Promise<Pre
     try {
       const response = await fetch(`https://api.openai.com/v1/${endpoint}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+        headers: {
+          "Content-Type": "application/json",
+          ...buildOpenAIHeaders(apiKey, ROUTING.organizationId, ROUTING.projectId),
+        },
         body: JSON.stringify(body),
+        signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
       });
-      const data = (await response.json().catch(() => ({}))) as { error?: { code?: unknown } };
-      const code = typeof data.error?.code === "string" ? data.error.code : null;
-      probes.push({ model, endpoint, status: response.status, code });
-    } catch {
-      probes.push({ model, endpoint, status: null, code: "network_error" });
+      const data = (await response.json().catch(() => ({}))) as {
+        error?: { code?: unknown; type?: unknown };
+      };
+      const code =
+        typeof data.error?.code === "string"
+          ? data.error.code
+          : typeof data.error?.type === "string"
+            ? data.error.type
+            : null;
+      probes.push({ model, endpoint, accepted: response.ok, status: response.status, code });
+    } catch (error) {
+      const timedOut = error instanceof DOMException && error.name === "TimeoutError";
+      probes.push({
+        model,
+        endpoint,
+        accepted: false,
+        status: null,
+        code: timedOut ? "timeout" : "network_error",
+      });
     }
   }
   return probes;
@@ -313,12 +336,17 @@ const usd = (value: number | null, digits = 5) =>
 function qualityRow(variant: string, quality: QualitySummary): string {
   const { totals } = quality;
   const rate = (value: number, of: number) => (of === 0 ? "–" : pct(value));
-  return `| ${variant} | ${rate(quality.repairRate, totals.repairable)} | ${rate(quality.fixRate, totals.fixes)} | ${rate(quality.dropRate, totals.drops)} | ${rate(quality.keepRate, totals.keeps)} | ${pct(quality.referenceMatchRate)} | ${pct(quality.rawWer)} → ${pct(quality.wer)} | ${quality.broken} | ${quality.novelWords} | ${quality.trialsWithMeaningRisk} |`;
+  return `| ${variant} | ${rate(quality.repairRate, totals.repairable)} | ${rate(quality.fixRate, totals.fixes)} | ${rate(quality.dropRate, totals.drops)} | ${rate(quality.keepRate, totals.keeps)} | ${pct(quality.referenceMatchRate)} | ${pct(quality.rawWer)} → ${pct(quality.wer)} | ${quality.broken} | ${quality.novelWords} | ${quality.addedWords} | ${quality.trialsWithMeaningRisk} |`;
 }
 
+const QUALITY_HEADER = [
+  "| Variant | Repaired | Fixes | Drops | Keeps | Matches ref | WER raw → clean | Broken | Novel | Added | Risky trials |",
+  "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+];
+
 function latencyCells(latency: LatencySummary): string {
-  if (latency.count === 0) return "– | – | – | –";
-  return `${ms(latency.p50)} | ${ms(latency.p95)} | ${ms(latency.max)} | ${pct(latency.overTarget)}`;
+  if (latency.count === 0) return "0 | – | – | – | –";
+  return `${latency.count} | ${ms(latency.p50)} | ${ms(latency.p95)} | ${ms(latency.max)} | ${pct(latency.overTarget)}`;
 }
 
 interface RunRecord {
@@ -337,7 +365,17 @@ interface RunRecord {
   profile: Profile;
   promptHash: string;
   corpusHash: string;
-  corpus: Array<{ id: string; style: TranscriptStyle; source: string; chars: number }>;
+  /** Each passage as it was sent, so a later rescore can tell whether its input has changed since. */
+  corpus: Array<{
+    id: string;
+    style: TranscriptStyle;
+    source: string;
+    chars: number;
+    inputHash: string;
+    sent: VoiceCorrectionRequest;
+  }>;
+  /** Passages a rescore left out because the corpus no longer has them, or no longer sends them the same. */
+  rescoreExclusions?: Array<{ id: string; reason: "removed" | "input changed"; trials: number }>;
   prices: typeof MODEL_PRICES;
   predictionProbes: PredictionProbe[];
   trials: Trial[];
@@ -351,21 +389,29 @@ function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): string {
     `# Dictation cleanup benchmark: ${run.label}`,
     "",
     `${run.startedAt} · ${run.git.revision.slice(0, 10)}${run.git.dirty ? " (dirty)" : ""} · ${corpus.length} passages (${longCases} of ${PROMPT_LENGTH_MIN_CHARS}+ chars) × ${run.repeats} repeat(s) · seed ${run.seed}${run.complete ? "" : " · **incomplete**"}`,
-    "",
+    ""
+  );
+  if (run.rescoreExclusions?.length) {
+    lines.push(
+      `Rescored with scoring v${run.scoringVersion}, leaving out ${run.rescoreExclusions
+        .map((excluded) => `${excluded.id} (${excluded.reason}, ${excluded.trials} trials)`)
+        .join(", ")}.`,
+      ""
+    );
+  }
+  lines.push(
     "## What landed",
     "",
-    "The text the service handed back, the checks applied. Repaired: reference words the raw transcript had wrong that came back right. Fixes: written forms landed exactly. Broken: words the raw had right that were lost or changed. Novel: words in neither the raw nor the reference. Risky trials: any broken or novel word.",
+    "The text the service handed back, the checks applied. Repaired: reference words the raw transcript had wrong that came back right. Fixes: written forms landed exactly. Keeps: the case's own, plus every code span, reference, flag, path and number in the raw transcript. Broken: words the raw had right that were lost or changed. Novel: words in neither the raw nor the reference. Added: words inserted beyond any the raw already had extra. Risky trials: any broken, novel or added word.",
     "",
-    "| Variant | Repaired | Fixes | Drops | Keeps | Matches ref | WER raw → clean | Broken | Novel | Risky trials |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ...QUALITY_HEADER,
     ...run.summaries.map((summary) => qualityRow(summary.variant, summary.landed)),
     "",
     "## What the model proposed",
     "",
     "Before the guards: the rejected candidates scored as if they had landed.",
     "",
-    "| Variant | Repaired | Fixes | Drops | Keeps | Matches ref | WER raw → clean | Broken | Novel | Risky trials |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ...QUALITY_HEADER,
     ...run.summaries.map((summary) => qualityRow(summary.variant, summary.proposed)),
     "",
     "## Dispositions",
@@ -384,13 +430,13 @@ function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): string {
     "",
     "## Latency (ms)",
     "",
-    `Round trip is the service's own: request out to reply read. Total is all of \`correct()\`. Over target: share above ${SEND_WAIT_TARGET_MS} ms.`,
+    `Round trip is the service's own, request out to reply read, over the requests that came back readable (n). Total is all of \`correct()\` for every trial, the wait for a preconnect and failures included. Over target: share above ${SEND_WAIT_TARGET_MS} ms.`,
     "",
-    "| Variant | p50 | p95 | max | over target | prompt-length p50 | p95 | max | over target | total p50 | total p95 |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    "| Variant | n | p50 | p95 | max | over target | prompt-length n | p50 | p95 | max | over target | total n | p50 | p95 | max | over target |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ...run.summaries.map(
       (summary) =>
-        `| ${summary.variant} | ${latencyCells(summary.roundTrip)} | ${latencyCells(summary.promptLengthRoundTrip)} | ${ms(summary.total.p50)} | ${ms(summary.total.p95)} |`
+        `| ${summary.variant} | ${latencyCells(summary.roundTrip)} | ${latencyCells(summary.promptLengthRoundTrip)} | ${latencyCells(summary.total)} |`
     ),
     "",
     "## Tokens and cost",
@@ -437,11 +483,11 @@ function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): string {
     lines.push(
       "## Predicted Outputs",
       "",
-      "| Model | Endpoint | Status | Code |",
+      "| Model | Endpoint | Status | Answer |",
       "| --- | --- | --- | --- |",
       ...run.predictionProbes.map(
         (probe) =>
-          `| ${probe.model} | ${probe.endpoint} | ${probe.status ?? "–"} | ${probe.code ?? "accepted"} |`
+          `| ${probe.model} | ${probe.endpoint} | ${probe.status ?? "–"} | ${probe.accepted ? "accepted" : (probe.code ?? "refused")} |`
       ),
       ""
     );
@@ -482,6 +528,7 @@ function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): string {
         trial.landedScore.lostKeeps.length ? `lost ${trial.landedScore.lostKeeps.join(", ")}` : "",
         trial.landedScore.broken ? `${trial.landedScore.broken} broken` : "",
         trial.landedScore.novelWords ? `${trial.landedScore.novelWords} novel` : "",
+        trial.landedScore.addedWords ? `${trial.landedScore.addedWords} added` : "",
       ].filter(Boolean);
       const proposed =
         trial.disposition === "rejected" ? ` — proposed ${JSON.stringify(trial.proposal)}` : "";
@@ -494,8 +541,13 @@ function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): string {
   return lines.join("\n");
 }
 
-// The passages a saved run sent, as the corpus has them today, with every
-// trial scored again. Passages since removed from the corpus drop out.
+function inputHash(entry: CleanupCase): string {
+  return contentHash(JSON.stringify(requestFor(entry)));
+}
+
+// A saved run scored again with today's references and checks. A passage the
+// corpus no longer has, or no longer sends exactly as it did, can't be: its
+// replies answered a different input. Those are left out and named.
 function rescore(file: string): { run: RunRecord; corpus: CleanupCase[] } {
   const run = JSON.parse(readFileSync(file, "utf8")) as RunRecord;
   if (run.schemaVersion !== VOICE_CLEANUP_SCHEMA_VERSION) {
@@ -504,7 +556,22 @@ function rescore(file: string): { run: RunRecord; corpus: CleanupCase[] } {
     );
   }
   const current = new Map(CLEANUP_CORPUS.map((entry) => [entry.id, entry]));
-  const corpus = run.corpus.flatMap(({ id }) => current.get(id) ?? []);
+  const corpus: CleanupCase[] = [];
+  run.rescoreExclusions = [];
+  for (const saved of run.corpus) {
+    const entry = current.get(saved.id);
+    const reason = !entry
+      ? "removed"
+      : inputHash(entry) !== saved.inputHash
+        ? "input changed"
+        : null;
+    if (reason) {
+      const trials = run.trials.filter((trial) => trial.caseId === saved.id).length;
+      run.rescoreExclusions.push({ id: saved.id, reason, trials });
+    } else {
+      corpus.push(entry!);
+    }
+  }
   const kept = new Set(corpus.map((entry) => entry.id));
   run.trials = run.trials
     .filter((trial) => kept.has(trial.caseId))
@@ -526,7 +593,7 @@ async function main(): Promise<number> {
   try {
     options = parseArgs(process.argv.slice(2));
   } catch (error) {
-    console.error(`[voice-cleanup] ${formatErrorMessage(error)}\n\n${USAGE}`);
+    console.error(`[voice-cleanup] ${formatErrorMessage(error, "bad arguments")}\n\n${USAGE}`);
     return 1;
   }
   if (!options) {
@@ -536,6 +603,9 @@ async function main(): Promise<number> {
 
   if (options.rescore) {
     const { run, corpus } = rescore(options.rescore);
+    for (const excluded of run.rescoreExclusions ?? []) {
+      console.error(`[voice-cleanup] left out ${excluded.id}: ${excluded.reason}`);
+    }
     const report = renderReport(run, corpus);
     const out = options.rescore.replace(/\.json$/, "") + "-rescored.md";
     writeFileSync(out, `${report}\n`);
@@ -599,22 +669,34 @@ async function main(): Promise<number> {
       style: entry.style,
       source: entry.source,
       chars: entry.raw.length,
+      inputHash: inputHash(entry),
+      sent: requestFor(entry),
     })),
     prices: MODEL_PRICES,
     predictionProbes: [],
     trials: [],
     summaries: [],
   };
+  // Written whole and renamed into place after every request, so an
+  // interrupted run keeps every reply it paid for.
   const save = () => {
     run.summaries = options.variants.map((variant) =>
       summariseVariant(variant.id, run.trials, corpus)
     );
-    writeFileSync(jsonPath, `${JSON.stringify(run, null, 2)}\n`);
+    writeFileSync(`${jsonPath}.tmp`, `${JSON.stringify(run, null, 2)}\n`);
+    renameSync(`${jsonPath}.tmp`, jsonPath);
   };
+  save();
+  process.once("SIGINT", () => {
+    save();
+    console.error(`\n[voice-cleanup] interrupted; kept ${run.trials.length} trials in ${jsonPath}`);
+    process.exit(130);
+  });
 
   if (options.probePrediction) {
     for (const model of new Set(options.variants.map((variant) => variant.model))) {
       run.predictionProbes.push(...(await probePredictedOutputs(model, apiKey)));
+      save();
     }
   }
 
@@ -646,8 +728,8 @@ async function main(): Promise<number> {
         );
         run.trials.push(toTrial(entry, variant, repeat, result, performance.now() - started));
         done++;
+        save();
       }
-      save();
       if (done % 30 < options.variants.length || done === total) {
         console.error(`[voice-cleanup] ${done}/${total}`);
       }

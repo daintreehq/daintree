@@ -1,4 +1,5 @@
 import { alignWords, normaliseWords } from "../../../e2e/helpers/voiceReplayScore";
+import { scanProtectedSpans } from "../../../shared/utils/voiceProtectedSpans";
 import type { CleanupCase } from "./voiceCleanupCorpus";
 
 /**
@@ -8,12 +9,14 @@ import type { CleanupCase } from "./voiceCleanupCorpus";
  * Word scores run over `normaliseWords`, which ignores case, punctuation and
  * spacing, so they say whether the right words came through in the right
  * order. Whether they were written right (`--watch`, `useShallow`, a numbered
- * list) is what `fixes` checks, character for character.
+ * list) is what `fixes` checks, character for character, and whether the code,
+ * references, flags, paths and numbers the speaker gave came through untouched
+ * is what the keep checks see, since the word scores can't.
  */
 
-export const VOICE_CLEANUP_SCHEMA_VERSION = 1;
+export const VOICE_CLEANUP_SCHEMA_VERSION = 2;
 // Bump when a definition below changes, so runs scored differently aren't compared.
-export const VOICE_CLEANUP_SCORING_VERSION = 1;
+export const VOICE_CLEANUP_SCORING_VERSION = 2;
 
 /** Today's send yardstick (#14793): the wait a send used to give cleanup. */
 export const SEND_WAIT_TARGET_MS = 2000;
@@ -32,11 +35,15 @@ export interface TextScore {
   broken: number;
   /** Words in neither the raw transcript nor the reference: what an answer or a rewrite adds. */
   novelWords: number;
+  /** Words inserted that the raw transcript didn't already have extra: a repeated or invented phrase. */
+  addedWords: number;
   fixesLanded: number;
   missedFixes: string[];
   dropsLanded: number;
   missedDrops: string[];
   keepsKept: number;
+  /** Explicit keeps, plus every protected span and number in the raw transcript. */
+  keepsTotal: number;
   lostKeeps: string[];
   /** The same words, order and lines as an accepted reference, ignoring case and punctuation. */
   matchesReference: boolean;
@@ -74,10 +81,57 @@ function countKept(haystack: string, keep: string): number {
   return haystack.match(new RegExp(lead + escapeRegExp(rest.join("")), "gu"))?.length ?? 0;
 }
 
-/** Whole-word, case-insensitive: "um" isn't found in "umbrella". */
+/**
+ * Whole words, any case, with any punctuation or spacing between them: "um"
+ * isn't found in "umbrella", and "can you can you" is still the stutter
+ * "can you, can you" was.
+ */
 function countPhrase(haystack: string, phrase: string): number {
-  const pattern = new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(phrase)}(?![\\p{L}\\p{N}])`, "giu");
+  const words = phrase
+    .split(/[^\p{L}\p{N}']+/u)
+    .filter(Boolean)
+    .map(escapeRegExp);
+  const pattern = new RegExp(
+    `(?<![\\p{L}\\p{N}])${words.join("[\\s\\p{P}]+")}(?![\\p{L}\\p{N}])`,
+    "giu"
+  );
   return haystack.match(pattern)?.length ?? 0;
+}
+
+const DIGIT_RUN_RE = /(?<!\p{N})\p{N}+(?:[.,:]\p{N}+)*(?!\p{N})/gu;
+
+function countDigitRun(haystack: string, run: string): number {
+  return (haystack.match(DIGIT_RUN_RE) ?? []).filter((found) => found === run).length;
+}
+
+interface KeepCheck {
+  label: string;
+  count: (text: string) => number;
+}
+
+/**
+ * Everything a cleanup must hand back as it was: the case's own keeps, and the
+ * code, references, URLs, flags, paths and numbers in the raw transcript, by
+ * the rule the meaning guard enforces. Each must come back as often as the raw
+ * transcript has it.
+ */
+function keepChecks(entry: CleanupCase): KeepCheck[] {
+  const checks: KeepCheck[] = (entry.keep ?? []).map((keep) => ({
+    label: keep,
+    count: (text) => countKept(text, keep),
+  }));
+  const seen = new Set(entry.keep ?? []);
+  for (const { text: span } of scanProtectedSpans(entry.raw)) {
+    if (seen.has(span)) continue;
+    seen.add(span);
+    checks.push({ label: span, count: (text) => countOccurrences(text, span) });
+  }
+  for (const run of entry.raw.match(DIGIT_RUN_RE) ?? []) {
+    if (seen.has(run)) continue;
+    seen.add(run);
+    checks.push({ label: run, count: (text) => countDigitRun(text, run) });
+  }
+  return checks;
 }
 
 function lineWords(text: string): string[] {
@@ -145,6 +199,15 @@ export function scoreText(entry: CleanupCase, text: string): TextScore {
     if (left > 0) allowed.set(word, left - 1);
     else novelWords++;
   }
+  // Inserted words the raw transcript didn't insert too: kept filler is no
+  // addition, but taking some out doesn't pay for words put in elsewhere.
+  const rawInserted = countWords(rawAlignment.inserted);
+  let addedWords = 0;
+  for (const word of textAlignment.inserted) {
+    const left = rawInserted.get(word) ?? 0;
+    if (left > 0) rawInserted.set(word, left - 1);
+    else addedWords++;
+  }
 
   const missedFixes = entry.fixes.filter(
     (fix) => countOccurrences(text, fix) < Math.max(1, countOccurrences(entry.reference, fix))
@@ -153,8 +216,10 @@ export function scoreText(entry: CleanupCase, text: string): TextScore {
   const missedDrops = drops.filter(
     (drop) => countPhrase(text, drop) > countPhrase(entry.reference, drop)
   );
-  const keeps = entry.keep ?? [];
-  const lostKeeps = keeps.filter((keep) => countKept(text, keep) < countKept(entry.raw, keep));
+  const keeps = keepChecks(entry);
+  const lostKeeps = keeps
+    .filter((keep) => keep.count(text) < keep.count(entry.raw))
+    .map((keep) => keep.label);
 
   const lines = lineWords(text);
   return {
@@ -164,11 +229,13 @@ export function scoreText(entry: CleanupCase, text: string): TextScore {
     repairable,
     broken,
     novelWords,
+    addedWords,
     fixesLanded: entry.fixes.length - missedFixes.length,
     missedFixes,
     dropsLanded: drops.length - missedDrops.length,
     missedDrops,
     keepsKept: keeps.length - lostKeeps.length,
+    keepsTotal: keeps.length,
     lostKeeps,
     matchesReference: references.some((reference) => sameLines(lines, lineWords(reference))),
     untouched: text === entry.raw,
@@ -213,11 +280,13 @@ export function corpusProblems(corpus: readonly CleanupCase[]): string[] {
         problems.push(`${entry.id}: drop "${drop}" leaves nothing to take out`);
       }
     }
-    for (const keep of entry.keep ?? []) {
-      if (countKept(entry.raw, keep) === 0)
-        problems.push(`${entry.id}: keep "${keep}" is not in the raw`);
-      if (countKept(entry.reference, keep) < countKept(entry.raw, keep)) {
-        problems.push(`${entry.id}: keep "${keep}" does not survive into the reference`);
+    for (const keep of keepChecks(entry)) {
+      const required = keep.count(entry.raw);
+      if (required === 0) problems.push(`${entry.id}: keep "${keep.label}" is not in the raw`);
+      for (const reference of acceptedReferences(entry)) {
+        if (keep.count(reference) < required) {
+          problems.push(`${entry.id}: keep "${keep.label}" does not survive into "${reference}"`);
+        }
       }
     }
     if (entry.uncertain?.length && entry.style !== "deepgram") {
@@ -324,6 +393,7 @@ export interface QualitySummary {
   totals: { repairable: number; fixes: number; drops: number; keeps: number };
   broken: number;
   novelWords: number;
+  addedWords: number;
   /** Trials that lost a word the raw transcript had right, or added one it never said. */
   trialsWithMeaningRisk: number;
   fixRate: number;
@@ -353,8 +423,10 @@ export interface VariantSummary {
   proposed: QualitySummary;
   /** Passages already right that came back byte for byte. */
   cleanUntouched: { kept: number; of: number };
+  /** Requests that came back with a reply the service could read; failures are left out. */
   roundTrip: LatencySummary;
   promptLengthRoundTrip: LatencySummary;
+  /** Every trial's whole `correct()`, failures and the wait for a preconnect included. */
   total: LatencySummary;
   tokens: {
     meanInput: number;
@@ -378,6 +450,7 @@ function summariseQuality(
   let repairable = 0;
   let broken = 0;
   let novelWords = 0;
+  let addedWords = 0;
   let risky = 0;
   let fixes = 0;
   let fixesTotal = 0;
@@ -387,6 +460,7 @@ function summariseQuality(
   let keepsTotal = 0;
   let matches = 0;
   let rawEdits = 0;
+  let rawReferenceWords = 0;
   let textEdits = 0;
   let referenceWords = 0;
   for (const { entry, score } of rows) {
@@ -394,15 +468,20 @@ function summariseQuality(
     repairable += score.repairable;
     broken += score.broken;
     novelWords += score.novelWords;
-    if (score.broken > 0 || score.novelWords > 0) risky++;
+    addedWords += score.addedWords;
+    if (score.broken > 0 || score.novelWords > 0 || score.addedWords > 0) risky++;
     fixes += score.fixesLanded;
     fixesTotal += entry.fixes.length;
     drops += score.dropsLanded;
     dropsTotal += entry.drops?.length ?? 0;
     keeps += score.keepsKept;
-    keepsTotal += entry.keep?.length ?? 0;
+    keepsTotal += score.keepsTotal;
     if (score.matchesReference) matches++;
-    rawEdits += scoreText(entry, entry.raw).edits;
+    // Against the reference the raw transcript is closest to, which needn't be
+    // the one this text is: the baseline must be the same for every variant.
+    const raw = scoreText(entry, entry.raw);
+    rawEdits += raw.edits;
+    rawReferenceWords += raw.referenceWords;
     textEdits += score.edits;
     referenceWords += score.referenceWords;
   }
@@ -411,12 +490,13 @@ function summariseQuality(
     totals: { repairable, fixes: fixesTotal, drops: dropsTotal, keeps: keepsTotal },
     broken,
     novelWords,
+    addedWords,
     trialsWithMeaningRisk: risky,
     fixRate: ratio(fixes, fixesTotal),
     dropRate: ratio(drops, dropsTotal),
     keepRate: ratio(keeps, keepsTotal),
     referenceMatchRate: ratio(matches, rows.length),
-    rawWer: ratio(rawEdits, referenceWords),
+    rawWer: ratio(rawEdits, rawReferenceWords),
     wer: ratio(textEdits, referenceWords),
   };
 }
@@ -456,7 +536,10 @@ export function summariseVariant(
     }
   }
   const clean = rows.filter(({ entry }) => entry.raw === entry.reference);
-  const timed = rows.filter(({ trial }) => trial.roundTripMs !== null);
+  // A request that failed fast would flatter the cleanups that came back.
+  const timed = rows.filter(
+    ({ trial }) => trial.roundTripMs !== null && trial.disposition !== "failed"
+  );
   const billed = rows.flatMap(({ trial }) => (trial.usage ? [trial.usage] : []));
   const costs = rows.map(({ trial }) => trial.costUsd);
   const knownCosts = costs.every((cost) => cost !== null) ? (costs as number[]) : null;

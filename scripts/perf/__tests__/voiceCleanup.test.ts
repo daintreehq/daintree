@@ -39,19 +39,24 @@ describe("cleanup corpus", () => {
     }
   });
 
-  it("scores every reference as a perfect cleanup of its own case", () => {
-    const imperfect = CLEANUP_CORPUS.filter((entry) => {
-      const score = scoreText(entry, entry.reference);
-      return (
-        !score.matchesReference ||
-        score.broken > 0 ||
-        score.novelWords > 0 ||
-        score.missedFixes.length > 0 ||
-        score.missedDrops.length > 0 ||
-        score.lostKeeps.length > 0
-      );
-    });
-    expect(imperfect.map((entry) => entry.id)).toEqual([]);
+  it("scores every accepted reference as a perfect cleanup of its own case", () => {
+    const imperfect = CLEANUP_CORPUS.flatMap((entry) =>
+      [entry.reference, ...(entry.alsoAccept ?? [])].flatMap((reference) => {
+        const score = scoreText(entry, reference);
+        const fixesApply = reference === entry.reference;
+        const perfect =
+          score.matchesReference &&
+          score.edits === 0 &&
+          score.broken === 0 &&
+          score.novelWords === 0 &&
+          score.addedWords === 0 &&
+          (!fixesApply || score.missedFixes.length === 0) &&
+          score.missedDrops.length === 0 &&
+          score.lostKeeps.length === 0;
+        return perfect ? [] : [`${entry.id}: ${reference}`];
+      })
+    );
+    expect(imperfect).toEqual([]);
   });
 });
 
@@ -63,6 +68,8 @@ describe("corpusProblems", () => {
       makeCase({ id: "c", keep: ["branch changes now"] }),
       makeCase({ id: "d", uncertain: ["cash"] }),
       makeCase({ id: "d", style: "deepgram", uncertain: ["cache"] }),
+      makeCase({ id: "e", keep: ["the branch"], reference: "Invalidate the cache on change." }),
+      makeCase({ id: "f", fixes: ["the cache", "rebuild"], raw: "um rerun --watch", drops: [] }),
     ]);
     expect(problems).toEqual([
       'a: fix "the cache" is already in the raw transcript',
@@ -71,6 +78,9 @@ describe("corpusProblems", () => {
       "d: only Deepgram flags unsure words",
       "d: duplicate id",
       'd: unsure phrase "cache" is not in the raw transcript',
+      'e: keep "the branch" does not survive into "Invalidate the cache on change."',
+      'f: fix "rebuild" is not in the reference',
+      'f: keep "--watch" does not survive into "Invalidate the cache when the branch changes."',
     ]);
   });
 });
@@ -107,7 +117,22 @@ describe("scoreText", () => {
     expect(scoreText(entry, "Invalidate the cache.")).toMatchObject({ repaired: 1, broken: 4 });
     expect(
       scoreText(entry, "Invalidate the cache when the branch changes, then rebuild it.")
-    ).toMatchObject({ broken: 0, novelWords: 3 });
+    ).toMatchObject({ broken: 0, novelWords: 3, addedWords: 3 });
+  });
+
+  it("counts an insertion built from words it was allowed, and a known word used too often", () => {
+    const entry = makeCase({});
+    // The misheard word put back beside its fix: nothing is novel, but it was added.
+    expect(scoreText(entry, "Invalidate the cache when the branch changes, cash.")).toMatchObject({
+      broken: 0,
+      novelWords: 0,
+      addedWords: 1,
+    });
+    expect(
+      scoreText(entry, "Invalidate the cache when the branch changes the branch.")
+    ).toMatchObject({ novelWords: 2, addedWords: 2 });
+    // Filler the raw transcript already had is not an addition.
+    expect(scoreText(entry, entry.raw.replace("cash", "cache")).addedWords).toBe(0);
   });
 
   it("counts a word changed for another as broken, not repaired", () => {
@@ -123,7 +148,49 @@ describe("scoreText", () => {
       fixes: [],
     });
     expect(scoreText(entry, "Bring the umbrella.").missedDrops).toEqual([]);
+    expect(scoreText(entry, "Bring the umbrella and the umbrella.").missedDrops).toEqual([]);
     expect(scoreText(entry, "Um, bring the umbrella.").missedDrops).toEqual(["um"]);
+  });
+
+  it("still finds a stutter whose punctuation was taken out", () => {
+    const entry = makeCase({
+      raw: "can you, can you check the logs",
+      reference: "Can you check the logs?",
+      fixes: [],
+      drops: ["can you, can you"],
+    });
+    expect(scoreText(entry, "Can you check the logs?").missedDrops).toEqual([]);
+    expect(scoreText(entry, "Can you can you check the logs?").missedDrops).toEqual([
+      "can you, can you",
+    ]);
+    expect(scoreText(entry, "Can you. Can you check the logs?").missedDrops).toEqual([
+      "can you, can you",
+    ]);
+  });
+
+  it("holds the raw transcript's code, references, flags, paths and numbers without being told to", () => {
+    const entry = makeCase({
+      raw: "um in @src/App.tsx rename `isOpen` and run it with --watch twice, 3 times in shared/config",
+      reference:
+        "In @src/App.tsx rename `isOpen` and run it with --watch twice, 3 times in shared/config.",
+      fixes: [],
+    });
+    const kept = scoreText(entry, entry.reference);
+    expect(kept.lostKeeps).toEqual([]);
+    expect(kept.keepsTotal).toBe(5);
+    // Every one survives the word normaliser, which drops the symbols.
+    const mangled = scoreText(
+      entry,
+      "In src/App.tsx rename isOpen and run it with watch twice, three times in shared config."
+    );
+    expect(mangled.edits).toBe(0);
+    expect(mangled.lostKeeps).toEqual([
+      "@src/App.tsx",
+      "`isOpen`",
+      "--watch",
+      "shared/config",
+      "3",
+    ]);
   });
 
   it("needs every copy of a kept span, letter for letter but for the first one's case", () => {
@@ -149,7 +216,21 @@ describe("scoreText", () => {
       drops: [],
     });
     expect(scoreText(entry, "Run it with -- watch.").missedFixes).toEqual(["--watch"]);
+    expect(scoreText(entry, "Run it with --WATCH.").missedFixes).toEqual(["--watch"]);
     expect(scoreText(entry, "Run it with --watch.").missedFixes).toEqual([]);
+  });
+
+  it("needs a fix as many times as the reference has it", () => {
+    const entry = makeCase({
+      raw: "run dash dash watch then dash dash watch again",
+      reference: "Run --watch, then --watch again.",
+      fixes: ["--watch"],
+      drops: [],
+    });
+    expect(scoreText(entry, "Run --watch, then dash dash watch again.").missedFixes).toEqual([
+      "--watch",
+    ]);
+    expect(scoreText(entry, entry.reference).missedFixes).toEqual([]);
   });
 
   it("matches a reference by words and lines, and takes any accepted alternative", () => {
@@ -162,9 +243,9 @@ describe("scoreText", () => {
     });
     expect(scoreText(entry, "1. read the test\n\n2. find the race").matchesReference).toBe(true);
     expect(scoreText(entry, "1. Read the test. 2. Find the race.").matchesReference).toBe(false);
-    expect(scoreText(entry, "First, read the test. Second, find the race.").matchesReference).toBe(
-      true
-    );
+    const alternative = scoreText(entry, "First, read the test. Second, find the race.");
+    // Scored against the alternative it matches, not the list it doesn't.
+    expect(alternative).toMatchObject({ matchesReference: true, edits: 0, broken: 0 });
   });
 });
 
@@ -186,7 +267,8 @@ describe("requestCost", () => {
     const usage = { inputTokens: 3_000, cachedTokens: 2_944, outputTokens: 43 };
     // 56 uncached at $1, 2,944 cached at $0.05, 43 output at $5, per million.
     expect(requestCost("gpt-6.1-terra", usage)).toBeCloseTo((56 + 147.2 + 215) / 1e6, 12);
-    expect(requestCost("gpt-6-luna", usage)).toBeLessThan(requestCost("gpt-6.1-terra", usage)!);
+    // The same at $0.10, $0.01 and $0.50.
+    expect(requestCost("gpt-6-luna", usage)).toBeCloseTo((5.6 + 29.44 + 21.5) / 1e6, 12);
   });
 
   it("is unknown without a price or a usage", () => {
@@ -202,6 +284,7 @@ describe("percentile", () => {
     expect(percentile(values, 50)).toBe(10);
     expect(percentile(values, 95)).toBe(19);
     expect(percentile([7], 95)).toBe(7);
+    expect(percentile([3, 1, 2], 50)).toBe(2);
     expect(percentile([], 50)).toBeNull();
   });
 });
@@ -244,8 +327,21 @@ describe("summariseVariant", () => {
   }
 
   it("counts dispositions, clean passages kept and requests over the send yardstick", () => {
+    const usage = (inputTokens: number, cachedTokens: number, outputTokens: number) => ({
+      inputTokens,
+      cachedTokens,
+      outputTokens,
+      cacheWriteTokens: 0,
+      reasoningTokens: 0,
+    });
     const trials = [
       trial({ caseId: "short", landed: "commit and push", disposition: "declined" }),
+      trial({ caseId: "short", landed: "commit and push", disposition: "declined" }),
+      trial({
+        caseId: "short",
+        landed: "Commit and push.",
+        usage: usage(1_000, 900, 10),
+      }),
       trial({
         caseId: "long",
         landed: long.raw,
@@ -253,25 +349,28 @@ describe("summariseVariant", () => {
         disposition: "rejected",
         rejectReason: "edit_size",
         roundTripMs: 2_500,
+        usage: usage(3_000, 2_700, 30),
       }),
-      trial({ caseId: "long", landed: long.raw, disposition: "failed", roundTripMs: null }),
+      // A reply that failed fast must not pull the round-trip figures down.
+      trial({ caseId: "long", landed: long.raw, disposition: "failed", roundTripMs: 100 }),
       trial({ caseId: "short", landed: "x", variant: "b" }),
     ];
     const summary = summariseVariant("a", trials, corpus);
 
-    expect(summary.trials).toBe(3);
+    expect(summary.trials).toBe(5);
     expect(summary.dispositions).toEqual({
-      applied: 0,
-      declined: 1,
+      applied: 1,
+      declined: 2,
       rejected: 1,
       failed: 1,
       skipped: 0,
     });
     expect(summary.rejectReasons).toEqual({ edit_size: 1 });
-    expect(summary.cleanUntouched).toEqual({ kept: 1, of: 1 });
-    expect(summary.roundTrip).toMatchObject({ count: 2, max: 2_500, overTarget: 0.5 });
+    expect(summary.cleanUntouched).toEqual({ kept: 2, of: 3 });
+    expect(summary.roundTrip).toMatchObject({ count: 4, max: 2_500, overTarget: 0.25 });
     expect(summary.promptLengthRoundTrip).toMatchObject({ count: 1, p50: 2_500 });
-    expect(summary.total.count).toBe(3);
+    expect(summary.total.count).toBe(5);
+    expect(summary.tokens).toMatchObject({ meanInput: 2_000, cachedShare: 0.9, meanOutput: 20 });
     // The rejected proposal would have repaired the stale passage; nothing landed did.
     expect(summary.proposed.repairRate).toBeGreaterThan(summary.landed.repairRate);
     expect(summary.landed.repairRate).toBe(0);
@@ -280,12 +379,46 @@ describe("summariseVariant", () => {
   it("leaves the cost unknown when any request's is", () => {
     const trials = [
       trial({ caseId: "short", landed: "commit and push" }),
+      trial({ caseId: "short", landed: "commit and push", costUsd: 0.003 }),
       trial({ caseId: "short", landed: "commit and push", costUsd: null }),
     ];
     expect(summariseVariant("a", trials, corpus)).toMatchObject({
       meanCostUsd: null,
       totalCostUsd: null,
     });
-    expect(summariseVariant("a", trials.slice(0, 1), corpus).meanCostUsd).toBeCloseTo(0.001);
+    const priced = summariseVariant("a", trials.slice(0, 2), corpus);
+    expect(priced.meanCostUsd).toBeCloseTo(0.002);
+    expect(priced.totalCostUsd).toBeCloseTo(0.004);
+  });
+
+  it("scores every variant's raw baseline against the same reference", () => {
+    const entry = makeCase({
+      id: "alt",
+      raw: "um so can you check it",
+      reference: "Can you check it?",
+      alsoAccept: ["So can you check it?"],
+      fixes: [],
+      drops: [],
+    });
+    const rows = [
+      { variant: "a", landed: "So can you check it?" },
+      { variant: "b", landed: "Can you check it?" },
+    ].map(({ variant, landed }): Trial => ({
+      caseId: "alt",
+      variant,
+      repeat: 1,
+      disposition: "applied",
+      landed,
+      proposal: landed,
+      landedScore: scoreText(entry, landed),
+      proposalScore: scoreText(entry, landed),
+      roundTripMs: 1_000,
+      totalMs: 1_000,
+      costUsd: 0.001,
+    }));
+    const [a, b] = ["a", "b"].map((variant) => summariseVariant(variant, rows, [entry]));
+    expect(a!.landed.rawWer).toBe(b!.landed.rawWer);
+    expect(a!.landed.wer).toBe(0);
+    expect(b!.landed.wer).toBe(0);
   });
 });

@@ -1147,6 +1147,15 @@ describe("VoiceCorrectionService", () => {
       expect(result.action).toBe("no_change");
     });
 
+    it("says a command check turned the cleanup down, and what it would have written", async () => {
+      stubReply("/deploy");
+      const result = await new VoiceCorrectionService().correct(
+        { rawText: "run the deploy skill", startsPrompt: true },
+        { ...BASE_SETTINGS, commandTarget: targetFor("claude") }
+      );
+      expect(result.rejected).toEqual({ reason: "unknown_command", candidate: "/deploy" });
+    });
+
     it.each([
       ["claude", "Delete the unused imports in the auth module", "/delete"],
       ["claude", "Archive the old release branches", "/archive"],
@@ -1836,46 +1845,78 @@ describe("VoiceCorrectionService timing and warm-up", () => {
     expect(result.roundTrip).toEqual({ sentAt: 1_000, ms: 300 });
   });
 
-  it("reports the tokens a reply was billed for, a cut-off one included", async () => {
-    const usage = {
-      input_tokens: 4_200,
-      input_tokens_details: { cached_tokens: 3_968, cache_write_tokens: 0 },
-      output_tokens: 130,
-      output_tokens_details: { reasoning_tokens: 90 },
-    };
-    const reply = (status: string) =>
-      ({
-        ok: true,
-        status: 200,
-        json: async () => ({
-          status,
-          usage,
-          output_text: JSON.stringify({
-            action: "replace",
-            corrected_text: "Fix the parser.",
-            confidence: "high",
-          }),
-        }),
-      }) as unknown as Response;
+  it("reports the tokens each reply was billed for, a discarded one included", async () => {
+    const usage = (
+      input: number,
+      cached: number,
+      writes: number,
+      output: number,
+      reasoning: number
+    ) => ({
+      input_tokens: input,
+      input_tokens_details: { cached_tokens: cached, cache_write_tokens: writes },
+      output_tokens: output,
+      output_tokens_details: { reasoning_tokens: reasoning },
+    });
+    const valid = JSON.stringify({
+      action: "replace",
+      corrected_text: "Fix the parser.",
+      confidence: "high",
+    });
+    const reply = (body: Record<string, unknown>) =>
+      ({ ok: true, status: 200, json: async () => body }) as unknown as Response;
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValueOnce(reply("completed")).mockResolvedValueOnce(reply("incomplete"))
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          reply({
+            status: "completed",
+            usage: usage(4_200, 3_968, 120, 130, 90),
+            output_text: valid,
+          })
+        )
+        .mockResolvedValueOnce(
+          reply({
+            status: "incomplete",
+            usage: usage(4_300, 0, 0, 1_024, 1_000),
+            output_text: valid,
+          })
+        )
+        .mockResolvedValueOnce(
+          reply({
+            status: "completed",
+            usage: usage(4_100, 4_096, 0, 7, 0),
+            output_text: "{not json",
+          })
+        )
+        .mockResolvedValueOnce(reply({ status: "completed", output_text: valid }))
     );
     const svc = new VoiceCorrectionService();
-    const billed = {
+    const request = { rawText: "fix the parsr" };
+
+    const landed = await svc.correct(request, BASE_SETTINGS);
+    expect(landed.roundTrip?.usage).toEqual({
       inputTokens: 4_200,
       cachedTokens: 3_968,
-      cacheWriteTokens: 0,
+      cacheWriteTokens: 120,
       outputTokens: 130,
       reasoningTokens: 90,
-    };
+    });
 
-    const landed = await svc.correct({ rawText: "fix the parsr" }, BASE_SETTINGS);
-    expect(landed.roundTrip?.usage).toEqual(billed);
-
-    const cutOff = await svc.correct({ rawText: "fix the parsr" }, BASE_SETTINGS);
+    const cutOff = await svc.correct(request, BASE_SETTINGS);
     expect(cutOff.failed).toBe(true);
-    expect(cutOff.roundTrip?.usage).toEqual(billed);
+    expect(cutOff.roundTrip?.usage).toMatchObject({ inputTokens: 4_300, outputTokens: 1_024 });
+
+    const malformed = await svc.correct(request, BASE_SETTINGS);
+    expect(malformed.failed).toBe(true);
+    expect(malformed.roundTrip?.usage).toMatchObject({ inputTokens: 4_100, cachedTokens: 4_096 });
+
+    // No usage in the reply is an unknown bill, not a free one.
+    const unbilled = await svc.correct(request, BASE_SETTINGS);
+    expect(unbilled.action).toBe("replace");
+    expect(unbilled.roundTrip).toBeDefined();
+    expect(unbilled.roundTrip?.usage).toBeUndefined();
   });
 
   it("reports no round trip for a passage it never sent", async () => {

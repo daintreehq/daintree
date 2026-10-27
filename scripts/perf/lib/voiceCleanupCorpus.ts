@@ -213,8 +213,11 @@ export const REPLAY_TRANSCRIPTS: Readonly<Record<string, ReplayTranscripts>> = {
   "deepgram-keyterm": {
     openai: {
       raw: "Deepgram Nova three rejects the key term parameter when the list is too long, so cap it before building the URL.",
+      // Spoken numbers stay words: the prompt never turns "three" into a digit.
+      reference:
+        "Deepgram Nova three rejects the keyterm parameter when the list is too long, so cap it before building the URL.",
       fixes: ["keyterm"],
-      keep: ["Deepgram"],
+      keep: ["Deepgram", "three"],
     },
     deepgram: {
       raw: "Deepgram Nova 3 rejects the key term parameter when the list is too long, so cap it before building the URL.",
@@ -295,6 +298,9 @@ const AFTERNOON: readonly AuthoredCase[] = [
     raw: "Create an issue on beta using this data to pick the cleanup model.",
     reference: "Create an issue about using this data to pick the cleanup model.",
     fixes: ["about using this data"],
+    // Nothing in the project is called beta: the draft is about measurements.
+    recentContext: ["The benchmark has the guard rejections and latency for each model now."],
+    startsPrompt: false,
   },
   {
     id: "afternoon-about:deepgram",
@@ -304,6 +310,8 @@ const AFTERNOON: readonly AuthoredCase[] = [
     reference: "Create an issue about using this data to pick the cleanup model.",
     fixes: ["about using this data"],
     uncertain: ["on beta"],
+    recentContext: ["The benchmark has the guard rejections and latency for each model now."],
+    startsPrompt: false,
   },
   {
     id: "afternoon-tara:openai",

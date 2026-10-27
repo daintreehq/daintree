@@ -326,7 +326,7 @@ What the numbers can't claim: the audio is synthetic or pre-recorded through a f
 
 The corpus is 90 passages: the 18 replay clips as OpenAI and as Deepgram mishear them, mishearings from a real afternoon of dictation that only the rest of the sentence fixes ("we'd" for "would", "Tara" for "Terra", "WhisperFlow"), words that need the draft or the terminal to read right, prompt-length rambles with filler, self-corrections and spoken lists, passages that must come back untouched (including a person called Tara and a beta channel), and the 22 cleanup regression prompts from `electron/services/__tests__/fixtures/dictatedPrompts.ts`. No provider transcript of a replay clip has been saved yet, so each raw transcript is written in its provider's error style, which the corpus header describes. Deepgram passages carry the unsure-word spans cleanup sees as `<uncertain>`. Grok joins with #14769.
 
-Each passage has a reference (the message the speaker would have typed) and any of `fixes` (written forms cleanup must land, character for character), `drops` (filler and retracted words that must go, whole words, any case), `keep` (spans already right that must survive, every copy), unsure words, draft history and terminal output.
+Each passage has a reference (the message the speaker would have typed) and any of `fixes` (written forms cleanup must land, character for character), `drops` (filler and retracted words that must go: whole words, any case, whatever punctuation is left between them), `keep` (spans already right that must survive, every copy), unsure words, draft history and terminal output. Every code span, @-reference, URL, flag, path and number in the raw transcript is a keep too, found with the meaning guard's own `scanProtectedSpans`, since the word scores can't see a lost backtick or a `three` turned into `3`.
 
 | Score | Meaning |
 | --- | --- |
@@ -335,10 +335,11 @@ Each passage has a reference (the message the speaker would have typed) and any 
 | Matches ref | The same words, order and lines as an accepted reference, ignoring case and punctuation |
 | Broken | Reference words the raw had right that were lost or changed: what a summary or a wrong "fix" costs |
 | Novel | Words in neither the raw nor the reference: what an answer or a rewrite adds |
-| Risky trials | Trials with any broken or novel word |
+| Added | Inserted words the raw transcript didn't have extra already: a repeated phrase, or the misheard word put back beside its fix |
+| Risky trials | Trials with any broken, novel or added word |
 | Dispositions | Applied, declined (the model returned the passage as it was), rejected (with the check that fired), failed, skipped |
 
-Every score is reported twice: for what landed, and for what the model proposed before the checks. Latency is the service's own round trip (request out, reply read) at p50, p95 and max, overall and for passages of 140 characters and up, with the share over 2 s. Since #14780 a send waits for cleanup however long it takes, so 2 s is a yardstick, not a deadline. Cost per cleanup comes from the billed tokens at the prices in `lib/voiceCleanupScore.ts`, cached input at the cached rate.
+Every score is reported twice: for what landed, and for what the model proposed before the checks. Latency is the service's own round trip (request out, reply read) over the requests that came back readable, at p50, p95 and max with the sample count, overall and for passages of 140 characters and up, with the share over 2 s; the same for all of `correct()` across every trial, failures and the wait for a preconnect included. Since #14780 a send waits for cleanup however long it takes, so 2 s is a yardstick, not a deadline. Cost per cleanup comes from the billed tokens at the prices in `lib/voiceCleanupScore.ts`, cached input at the cached rate.
 
 | Option | Default | Effect |
 | --- | --- | --- |
@@ -349,11 +350,12 @@ Every score is reported twice: for what landed, and for what the model proposed 
 | `--seed` | `14793` | Request order |
 | `--label` | `run` | Prefix of the result file |
 | `--probe-prediction` | off | Asks each model for Predicted Outputs on both endpoints and records the answer |
-| `--rescore <run.json>` |  | Scores a saved run again with today's corpus and scoring, sending nothing |
+| `--dictionary` | none | Custom dictionary terms, the same for every variant |
+| `--rescore <run.json>` |  | Scores a saved run again with today's references and checks, sending nothing; a passage whose input changed or went away since is left out and named |
 
-`OPENAI_ORG_ID` and `OPENAI_PROJECT_ID` are sent when set. Results land in `.tmp/perf-results/voice-cleanup/<label>-<timestamp>.json` and `.md`, rewritten after every passage with `complete: false` until the run finishes. The Markdown ends with every passage the variants landed differently on the first pass, raw, reference and each result side by side.
+`OPENAI_ORG_ID` and `OPENAI_PROJECT_ID` are sent when set. Results land in `.tmp/perf-results/voice-cleanup/<label>-<timestamp>.json`, rewritten after every request with `complete: false` until the run finishes (Ctrl+C keeps what was paid for), and the Markdown report beside it at the end. The report closes with every passage the variants landed differently on the first pass, raw, reference and each result side by side.
 
-What the numbers can't claim: the raw transcripts are written to imitate each provider, not captured from it; the prompt cache is as warm as it stays for someone dictating steadily, and every passage of a repeat after the first may find more of itself cached; latency is one machine's network to OpenAI at one time of day, and excludes the stop drain, the main process's preparation and the composer; and no word score can see a meaning reversed with the same words, so read the differences by hand.
+What the numbers can't claim: the raw transcripts are written to imitate each provider, not captured from it; the prompt cache is as warm as it stays for someone dictating steadily, and every passage of a repeat after the first may find more of itself cached; the cache key names the model but not the effort, so two efforts of one model share a cache and the second to send a passage may find more of it there (`Cached` per variant shows how much); latency is one machine's network to OpenAI at one time of day, and excludes the stop drain, the main process's preparation and the composer; and no word score can see a meaning reversed with the same words, so read the differences by hand.
 
 ## Recovery and session scenarios (PERF-260..264, 280..285)
 
