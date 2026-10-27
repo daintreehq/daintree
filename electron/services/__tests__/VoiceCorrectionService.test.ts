@@ -16,7 +16,7 @@ import { getBuiltinSlashCommands } from "../../../shared/types/slashCommands.js"
 import { buildVoiceCommandVocabulary } from "../../../shared/utils/voiceAgentCommands.js";
 
 const BASE_SETTINGS = {
-  model: "gpt-6-luna",
+  model: "gpt-6.1-terra",
   apiKey: "sk-test",
   customDictionary: [] as string[],
 };
@@ -505,7 +505,7 @@ describe("VoiceCorrectionService", () => {
     expect(userMessage).toContain("Array<string>");
   });
 
-  it("sends gpt-6-luna with explicit none reasoning effort and strict JSON output", async () => {
+  it("sends the settings' model with explicit none reasoning effort and strict JSON output", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValue(makeFetchResponse({ corrected_text: "Corrected." }));
@@ -515,9 +515,9 @@ describe("VoiceCorrectionService", () => {
     await svc.correct({ rawText: "test" }, BASE_SETTINGS);
 
     const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
-    // gpt-6-luna defaults reasoning to "medium" when omitted, so the request
-    // must pin "none" explicitly — never leave the field off (issue #11365).
-    expect(body.model).toBe("gpt-6-luna");
+    // The dictation models default reasoning to "medium" when omitted, so the
+    // request must pin "none" explicitly — never leave the field off (issue #11365).
+    expect(body.model).toBe(BASE_SETTINGS.model);
     expect(body.reasoning).toEqual({ effort: "none" });
     expect(body.max_output_tokens).toBe(1024);
     expect(body.text.format.type).toBe("json_schema");
@@ -724,7 +724,10 @@ describe("VoiceCorrectionService", () => {
       const negation = await correctWith("um don't delete the branch yet", {
         corrected_text: "Um, delete the branch yet.",
       });
-      expect(negation.rejected).toEqual({ reason: "negation", candidate: "delete the branch yet." });
+      expect(negation.rejected).toEqual({
+        reason: "negation",
+        candidate: "delete the branch yet.",
+      });
 
       const applied = await correctWith("um wire up the racked component", {
         corrected_text: "Wire up the React component.",

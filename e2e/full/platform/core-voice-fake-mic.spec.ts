@@ -72,7 +72,7 @@ test.describe.serial("E2E: Voice Input — fake microphone smoke", () => {
       dictionary: [],
       transcriptionModel: "gpt-live-transcribe",
       correctionEnabled: false,
-      correctionModel: "gpt-6-luna",
+      correctionModel: "gpt-6.1-terra",
       correctionCustomInstructions: "",
       paragraphingStrategy: "spoken-command",
       resolveFileLinks: true,

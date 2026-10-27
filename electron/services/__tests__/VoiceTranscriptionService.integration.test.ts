@@ -39,7 +39,7 @@ describe("VoiceTranscriptionService integration", () => {
           // session.update, so this is the only place that failure surfaces.
           keyterms: ["Daintree", "PtyClient", "AC-42"],
           correctionEnabled: false,
-          correctionModel: "gpt-6-luna",
+          correctionModel: "gpt-6.1-terra",
           correctionCustomInstructions: "",
           paragraphingStrategy: "spoken-command",
           resolveFileLinks: true,

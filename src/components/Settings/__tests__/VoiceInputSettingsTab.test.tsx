@@ -113,7 +113,7 @@ function createVoiceInputApi(overrides: Partial<typeof window.electron.voiceInpu
       dictionary: [],
       transcriptionModel: "gpt-live-transcribe",
       correctionEnabled: false,
-      correctionModel: "gpt-6-luna",
+      correctionModel: "gpt-6.1-terra",
       correctionCustomInstructions: "",
       paragraphingStrategy: "spoken-command",
       resolveFileLinks: true,
@@ -149,7 +149,7 @@ describe("VoiceInputSettingsTab", () => {
           dictionary: [],
           transcriptionModel: "gpt-live-transcribe",
           correctionEnabled: false,
-          correctionModel: "gpt-6-luna",
+          correctionModel: "gpt-6.1-terra",
           correctionCustomInstructions: "",
           paragraphingStrategy: "spoken-command",
           resolveFileLinks: true,
@@ -176,7 +176,7 @@ describe("VoiceInputSettingsTab", () => {
           dictionary: [],
           transcriptionModel: "gpt-live-transcribe",
           correctionEnabled: false,
-          correctionModel: "gpt-6-luna",
+          correctionModel: "gpt-6.1-terra",
           correctionCustomInstructions: "",
           paragraphingStrategy: "spoken-command",
           resolveFileLinks: true,
@@ -204,7 +204,7 @@ describe("VoiceInputSettingsTab", () => {
         dictionary: [],
         transcriptionModel: "gpt-live-transcribe",
         correctionEnabled: false,
-        correctionModel: "gpt-6-luna",
+        correctionModel: "gpt-6.1-terra",
         correctionCustomInstructions: "",
         paragraphingStrategy: "spoken-command",
         resolveFileLinks: true,
@@ -237,7 +237,7 @@ describe("VoiceInputSettingsTab", () => {
           dictionary: [],
           transcriptionModel: "gpt-live-transcribe",
           correctionEnabled: false,
-          correctionModel: "gpt-6-luna",
+          correctionModel: "gpt-6.1-terra",
           correctionCustomInstructions: "",
           paragraphingStrategy: "spoken-command",
           resolveFileLinks: true,
@@ -271,7 +271,7 @@ describe("VoiceInputSettingsTab", () => {
           dictionary: [],
           transcriptionModel: "gpt-live-transcribe",
           correctionEnabled: false,
-          correctionModel: "gpt-6-luna",
+          correctionModel: "gpt-6.1-terra",
           correctionCustomInstructions: "",
           paragraphingStrategy: "spoken-command",
           resolveFileLinks: true,
@@ -330,8 +330,8 @@ describe("VoiceInputSettingsTab", () => {
   });
 
   it("does not render a correction-model selector when AI correction is enabled", async () => {
-    // gpt-6-luna replaced both the gpt-5-mini and gpt-5-nano tiers, so there
-    // is no longer a model choice to offer (issue #11365).
+    // Cleanup runs on one model, so there is no model choice to offer
+    // (issue #11365).
     window.electron = {
       voiceInput: createVoiceInputApi({
         getSettings: vi.fn().mockResolvedValue({
@@ -341,7 +341,7 @@ describe("VoiceInputSettingsTab", () => {
           dictionary: [],
           transcriptionModel: "gpt-live-transcribe",
           correctionEnabled: true,
-          correctionModel: "gpt-6-luna",
+          correctionModel: "gpt-6.1-terra",
           correctionCustomInstructions: "",
           paragraphingStrategy: "spoken-command",
           resolveFileLinks: true,
@@ -383,7 +383,7 @@ describe("VoiceInputSettingsTab", () => {
             dictionary: [],
             transcriptionModel: "gpt-live-transcribe",
             correctionEnabled: false,
-            correctionModel: "gpt-6-luna",
+            correctionModel: "gpt-6.1-terra",
             correctionCustomInstructions: "",
             paragraphingStrategy: "spoken-command",
             resolveFileLinks: true,

@@ -2967,7 +2967,7 @@ function buildElectronApi(): ElectronAPI {
           transcriptionProvider: "openai" | "deepgram" | "grok";
           transcriptionModel: "gpt-live-transcribe";
           correctionEnabled: boolean;
-          correctionModel: "gpt-6-luna";
+          correctionModel: "gpt-6.1-terra";
           correctionCustomInstructions: string;
           paragraphingStrategy: "spoken-command" | "manual";
           resolveFileLinks: boolean;

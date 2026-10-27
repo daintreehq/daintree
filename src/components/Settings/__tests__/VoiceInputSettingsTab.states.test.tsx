@@ -7,7 +7,7 @@ import {
   maskApiKey,
   recordingModeDescription,
 } from "../VoiceInputSettingsTab";
-import { VOICE_DICTATION_AI_MODEL } from "@shared/config/voiceCorrection";
+import { VOICE_CLEANUP_AI_MODEL } from "@shared/config/voiceCorrection";
 import type { SuggestedDictionaryEntry, VoiceDictionaryEntry } from "@shared/types";
 
 vi.mock("@/lib/voiceInputSettingsEvents", () => ({
@@ -40,7 +40,7 @@ const BASE = {
   transcriptionProvider: "openai",
   transcriptionModel: "gpt-live-transcribe",
   correctionEnabled: false,
-  correctionModel: "gpt-6-luna",
+  correctionModel: "gpt-6.1-terra",
   correctionCustomInstructions: "",
   paragraphingStrategy: "spoken-command",
   resolveFileLinks: true,
@@ -388,7 +388,7 @@ describe("VoiceInputSettingsTab copy", () => {
     const { container } = render(<VoiceInputSettingsTab />);
     await waitFor(() => expect(container.querySelector("#voice-ai-correction")).toBeTruthy());
     const text = container.querySelector("#voice-ai-correction")?.textContent ?? "";
-    expect(text).toContain(VOICE_DICTATION_AI_MODEL);
+    expect(text).toContain(VOICE_CLEANUP_AI_MODEL);
     expect(text).toContain("whole passage is corrected once");
     expect(text).not.toContain("GPT-5.6");
   });

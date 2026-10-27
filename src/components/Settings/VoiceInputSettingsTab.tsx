@@ -35,7 +35,7 @@ import { actionService } from "@/services/ActionService";
 import { KbdChord } from "@/components/ui/Kbd";
 import { voiceErrorLogFields } from "@shared/utils/voiceLogFields";
 import { VOICE_LANGUAGES } from "@shared/config/voiceLanguages";
-import { CORE_CORRECTION_PROMPT, VOICE_DICTATION_AI_MODEL } from "@shared/config/voiceCorrection";
+import { CORE_CORRECTION_PROMPT, VOICE_CLEANUP_AI_MODEL } from "@shared/config/voiceCorrection";
 import {
   VOICE_CLEANUP_KEY_FIELD,
   hasCleanupKey,
@@ -80,7 +80,7 @@ const DEFAULT_SETTINGS: VoiceInputSettings = {
   transcriptionProvider: "openai",
   transcriptionModel: "gpt-live-transcribe",
   correctionEnabled: true,
-  correctionModel: VOICE_DICTATION_AI_MODEL,
+  correctionModel: VOICE_CLEANUP_AI_MODEL,
   correctionCustomInstructions: "",
   paragraphingStrategy: "spoken-command",
   resolveFileLinks: true,
@@ -777,7 +777,7 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
       {settings.enabled && (
         <SettingsSection
           title="AI text correction"
-          description={`When you stop dictating, the whole passage is corrected once with ${VOICE_DICTATION_AI_MODEL} to fix technical terms, punctuation and filler words, resolve self-corrections, and lay out spoken lists. The text and the terminal's recent output, with credential-like lines removed, are sent to OpenAI.`}
+          description={`When you stop dictating, the whole passage is corrected once with ${VOICE_CLEANUP_AI_MODEL} to fix technical terms, punctuation and filler words, resolve self-corrections, and lay out spoken lists. The text and the terminal's recent output, with credential-like lines removed, are sent to OpenAI.`}
           id="voice-ai-correction"
         >
           {saveError("correction")}

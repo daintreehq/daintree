@@ -52,6 +52,7 @@ model and effort, against the live OpenAI API (needs OPENAI_API_KEY; costs money
   --repeats <n>         passes over the corpus (default 1)
   --cases <list>        only cases whose id starts with one of these
   --styles <list>       only these transcript styles (${STYLES.join(", ")})
+  --dictionary <list>   custom dictionary terms, the same for every variant (default none)
   --seed <n>            request order seed (default 14793)
   --label <name>        result file prefix (default run)
   --probe-prediction    also ask each model for Predicted Outputs and record the answer
@@ -68,6 +69,7 @@ interface Options {
   repeats: number;
   cases: string[];
   styles: TranscriptStyle[];
+  dictionary: string[];
   seed: number;
   label: string;
   probePrediction: boolean;
@@ -90,6 +92,7 @@ function parseArgs(argv: readonly string[]): Options | null {
     repeats: 1,
     cases: [],
     styles: [...STYLES],
+    dictionary: [],
     seed: 14793,
     label: "run",
     probePrediction: false,
@@ -132,6 +135,9 @@ function parseArgs(argv: readonly string[]): Options | null {
         options.styles = styles as TranscriptStyle[];
         break;
       }
+      case "--dictionary":
+        options.dictionary = list();
+        break;
       case "--seed":
         options.seed = count(0);
         break;
@@ -155,17 +161,26 @@ function parseArgs(argv: readonly string[]): Options | null {
 }
 
 // Kept identical across variants: the project hints production sends, with no
-// dictionary, names or command target, so every passage has the same context.
-const PROFILE = {
-  customDictionary: [] as string[],
-  projectName: "daintree",
-  projectPath: "/Users/dev/Projects/daintree",
-  language: "en",
-};
+// names or command target, so every passage has the same context.
+interface Profile {
+  customDictionary: string[];
+  projectName: string;
+  projectPath: string;
+  language: string;
+}
 
-function settingsFor(variant: Variant, apiKey: string): VoiceCorrectionSettings {
+function profileFor(options: Options): Profile {
   return {
-    ...PROFILE,
+    customDictionary: options.dictionary,
+    projectName: "daintree",
+    projectPath: "/Users/dev/Projects/daintree",
+    language: "en",
+  };
+}
+
+function settingsFor(variant: Variant, profile: Profile, apiKey: string): VoiceCorrectionSettings {
+  return {
+    ...profile,
     model: variant.model,
     reasoningEffort: variant.effort,
     apiKey,
@@ -319,7 +334,7 @@ interface RunRecord {
   seed: number;
   repeats: number;
   variants: Variant[];
-  profile: typeof PROFILE;
+  profile: Profile;
   promptHash: string;
   corpusHash: string;
   corpus: Array<{ id: string; style: TranscriptStyle; source: string; chars: number }>;
@@ -562,6 +577,7 @@ async function main(): Promise<number> {
   const jsonPath = path.join(RESULTS_DIR, `${options.label}-${stamp}.json`);
   const markdownPath = jsonPath.replace(/\.json$/, ".md");
 
+  const profile = profileFor(options);
   const run: RunRecord = {
     schemaVersion: VOICE_CLEANUP_SCHEMA_VERSION,
     scoringVersion: VOICE_CLEANUP_SCORING_VERSION,
@@ -575,8 +591,8 @@ async function main(): Promise<number> {
     seed: options.seed,
     repeats: options.repeats,
     variants: options.variants,
-    profile: PROFILE,
-    promptHash: contentHash(buildCorrectionSystemPrompt(PROFILE)),
+    profile,
+    promptHash: contentHash(buildCorrectionSystemPrompt(profile)),
     corpusHash: contentHash(JSON.stringify(corpus)),
     corpus: corpus.map((entry) => ({
       id: entry.id,
@@ -607,7 +623,7 @@ async function main(): Promise<number> {
   );
   // Production warms the prompt while the user dictates; so does this, once.
   for (const variant of options.variants) {
-    await services.get(variant.id)!.warm(settingsFor(variant, apiKey));
+    await services.get(variant.id)!.warm(settingsFor(variant, profile, apiKey));
   }
 
   const total = corpus.length * options.variants.length * options.repeats;
@@ -624,7 +640,10 @@ async function main(): Promise<number> {
         // As a stop drains, so a reply never waits on a fresh handshake.
         service.preconnect();
         const started = performance.now();
-        const result = await service.correct(requestFor(entry), settingsFor(variant, apiKey));
+        const result = await service.correct(
+          requestFor(entry),
+          settingsFor(variant, profile, apiKey)
+        );
         run.trials.push(toTrial(entry, variant, repeat, result, performance.now() - started));
         done++;
       }

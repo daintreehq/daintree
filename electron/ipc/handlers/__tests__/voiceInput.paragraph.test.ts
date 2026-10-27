@@ -167,7 +167,7 @@ vi.mock("../../../store.js", () => ({
           enabled: true,
           openaiApiKey: "sk-test",
           correctionEnabled: true,
-          correctionModel: "gpt-6-luna",
+          correctionModel: "gpt-6.1-terra",
           dictionary: [],
           correctionCustomInstructions: "",
           language: "en",
@@ -333,7 +333,7 @@ describe("voiceInput — IPC handler surface", () => {
       reason: "stop",
     });
     expect(shared.correctionCalls[0]?.settings).toMatchObject({
-      model: "gpt-6-luna",
+      model: "gpt-6.1-terra",
       apiKey: "sk-test",
     });
   });
@@ -882,7 +882,7 @@ describe.each(["deepgram", "grok"] as const)("voiceInput — spoken send on %s",
       deepgramApiKey: provider === "deepgram" ? "dg-test" : "",
       xaiApiKey: provider === "grok" ? "xai-test" : "",
       correctionEnabled: false,
-      correctionModel: "gpt-6-luna",
+      correctionModel: "gpt-6.1-terra",
       dictionary: [],
       correctionCustomInstructions: "",
       language: "en",
@@ -1746,7 +1746,7 @@ describe("voiceInput — manual paragraphing strategy", () => {
       enabled: true,
       openaiApiKey: "sk-test",
       correctionEnabled: true,
-      correctionModel: "gpt-6-luna",
+      correctionModel: "gpt-6.1-terra",
       dictionary: [],
       correctionCustomInstructions: "",
       language: "en",
@@ -1817,7 +1817,7 @@ describe("voiceInput — context keyterms wiring", () => {
       transcriptionProvider: provider,
       transcriptionModel: "gpt-live-transcribe",
       correctionEnabled: false,
-      correctionModel: "gpt-6-luna",
+      correctionModel: "gpt-6.1-terra",
       correctionCustomInstructions: "",
       paragraphingStrategy: "spoken-command",
       resolveFileLinks: true,
@@ -2507,41 +2507,44 @@ describe("getVoiceSettings migration", () => {
     }
   });
 
-  it("normalizes a stale correctionModel to gpt-6-luna and persists the cleanup", async () => {
+  it.each(["gpt-5-mini", "gpt-6-luna"])(
+    "normalizes a stale correctionModel (%s) to gpt-6.1-terra and persists the cleanup",
+    async (stale) => {
+      const { store } = await import("../../../store.js");
+      vi.mocked(store.get).mockReturnValueOnce({
+        enabled: true,
+        openaiApiKey: "sk-present",
+        correctionModel: stale,
+      });
+
+      const settings = getVoiceSettings();
+
+      expect(settings.correctionModel).toBe("gpt-6.1-terra");
+      // The read-time safety net writes the cleaned value through once so the
+      // stale model does not survive on disk (issue #11365).
+      expect(vi.mocked(store.set)).toHaveBeenCalledOnce();
+      const persisted = (
+        vi.mocked(store.set).mock.calls[0] as unknown as [string, Record<string, unknown>]
+      )[1];
+      expect(persisted.correctionModel).toBe("gpt-6.1-terra");
+      // Normalization must write the full merged object, not a defaults-only one —
+      // sibling settings must survive the cleanup write.
+      expect(persisted.enabled).toBe(true);
+      expect(persisted.openaiApiKey).toBe("sk-present");
+    }
+  );
+
+  it("does not write back when correctionModel is already gpt-6.1-terra", async () => {
     const { store } = await import("../../../store.js");
     vi.mocked(store.get).mockReturnValueOnce({
       enabled: true,
       openaiApiKey: "sk-present",
-      correctionModel: "gpt-5-mini",
+      correctionModel: "gpt-6.1-terra",
     });
 
     const settings = getVoiceSettings();
 
-    expect(settings.correctionModel).toBe("gpt-6-luna");
-    // The read-time safety net writes the cleaned value through once so the
-    // stale model does not survive on disk (issue #11365).
-    expect(vi.mocked(store.set)).toHaveBeenCalledOnce();
-    const persisted = (
-      vi.mocked(store.set).mock.calls[0] as unknown as [string, Record<string, unknown>]
-    )[1];
-    expect(persisted.correctionModel).toBe("gpt-6-luna");
-    // Normalization must write the full merged object, not a defaults-only one —
-    // sibling settings must survive the cleanup write.
-    expect(persisted.enabled).toBe(true);
-    expect(persisted.openaiApiKey).toBe("sk-present");
-  });
-
-  it("does not write back when correctionModel is already gpt-6-luna", async () => {
-    const { store } = await import("../../../store.js");
-    vi.mocked(store.get).mockReturnValueOnce({
-      enabled: true,
-      openaiApiKey: "sk-present",
-      correctionModel: "gpt-6-luna",
-    });
-
-    const settings = getVoiceSettings();
-
-    expect(settings.correctionModel).toBe("gpt-6-luna");
+    expect(settings.correctionModel).toBe("gpt-6.1-terra");
     expect(vi.mocked(store.set)).not.toHaveBeenCalled();
   });
 });
@@ -2714,7 +2717,7 @@ describe("voiceInput — spoken commands outside English", () => {
         enabled: true,
         openaiApiKey: "sk-test",
         correctionEnabled: false,
-        correctionModel: "gpt-6-luna",
+        correctionModel: "gpt-6.1-terra",
         dictionary: [],
         correctionCustomInstructions: "",
         language,
@@ -2909,7 +2912,7 @@ describe("voiceInput — rewrite instructions", () => {
       instruction: "make it shorter",
     });
     expect(shared.rewriteCalls[0]?.settings).toMatchObject({
-      model: "gpt-6-luna",
+      model: "gpt-6.1-terra",
       apiKey: "sk-test",
     });
 
