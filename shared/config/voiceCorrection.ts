@@ -19,6 +19,9 @@ export const VOICE_DICTATION_AI_MODEL = "gpt-6-luna" as const;
  */
 export const VOICE_DICTATION_REASONING_EFFORT = "none" as const;
 
+/** The Responses API reasoning tiers a voice-dictation request may ask for. */
+export type VoiceReasoningEffort = "none" | "low" | "medium" | "high";
+
 /** The longest selection a spoken rewrite takes, matching cleanup's passage cap. */
 export const VOICE_REWRITE_MAX_SELECTION_CHARS = 12_000;
 

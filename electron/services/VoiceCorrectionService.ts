@@ -9,6 +9,7 @@ import {
   buildRewriteSystemPrompt,
   type CorrectionPromptContext,
   type CorrectionTargetContext,
+  type VoiceReasoningEffort,
 } from "../../shared/config/voiceCorrection.js";
 import type { VoiceRewriteOutcome } from "../../shared/types/voice.js";
 import type { VoiceCorrectionVerdict } from "../../shared/types/voiceSessionSummary.js";
@@ -167,6 +168,8 @@ export interface VoiceRewriteRequest {
 
 export interface VoiceCorrectionSettings {
   model: string;
+  /** Overrides VOICE_DICTATION_REASONING_EFFORT for cleanup, its warm-up and rewrite. */
+  reasoningEffort?: VoiceReasoningEffort;
   apiKey: string;
   customDictionary: string[];
   knownNames?: string[];
@@ -203,14 +206,52 @@ export interface VoiceCorrectionResult {
   verdict: VoiceCorrectionVerdict;
   /** The request failed or was cancelled, so the raw text stands untried. */
   failed?: true;
-  /** When the OpenAI request went out (performance.now()) and how long it took; absent when none did. */
-  roundTrip?: { sentAt: number; ms: number };
+  /** The cleanup the model proposed and the check that turned it down; transcript content, so never logged. */
+  rejected?: { reason: VoiceCorrectionRejectReason; candidate: string };
+  /**
+   * When the OpenAI request went out (performance.now()), how long it took,
+   * and the tokens it was billed for when the reply said; absent when none went out.
+   */
+  roundTrip?: { sentAt: number; ms: number; usage?: VoiceCorrectionUsage };
+}
+
+export type VoiceCorrectionRejectReason =
+  CorrectionRejectReason | VoiceCommandEditRejection | "low_confidence";
+
+/** Reasoning tokens are part of `outputTokens`, and cached ones part of `inputTokens`. */
+export interface VoiceCorrectionUsage {
+  inputTokens: number;
+  cachedTokens: number;
+  cacheWriteTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+}
+
+interface ResponsesUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  input_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
+  output_tokens_details?: { reasoning_tokens?: number };
+}
+
+function readUsage(usage: ResponsesUsage | undefined): VoiceCorrectionUsage | undefined {
+  if (typeof usage?.input_tokens !== "number" || typeof usage.output_tokens !== "number") {
+    return undefined;
+  }
+  return {
+    inputTokens: usage.input_tokens,
+    cachedTokens: usage.input_tokens_details?.cached_tokens ?? 0,
+    cacheWriteTokens: usage.input_tokens_details?.cache_write_tokens ?? 0,
+    outputTokens: usage.output_tokens,
+    reasoningTokens: usage.output_tokens_details?.reasoning_tokens ?? 0,
+  };
 }
 
 /** Filled in as a correction's one request goes out and settles. */
 interface RequestTrace {
   sentAt?: number;
   settledAt?: number;
+  usage?: VoiceCorrectionUsage;
 }
 
 interface CorrectionApiResult {
@@ -225,11 +266,7 @@ interface CorrectionReply {
   output?: Array<{ content?: Array<{ text?: string }> }>;
   status?: string;
   incomplete_details?: { reason?: string };
-  usage?: {
-    input_tokens?: number;
-    output_tokens?: number;
-    input_tokens_details?: { cached_tokens?: number };
-  };
+  usage?: ResponsesUsage;
 }
 
 interface CorrectionStreamEvent {
@@ -364,7 +401,8 @@ export class VoiceCorrectionService {
     const result = await this.correctPassage(request, settings, trace, signal, onText);
     if (trace.sentAt === undefined) return result;
     const ms = (trace.settledAt ?? performance.now()) - trace.sentAt;
-    return { ...result, roundTrip: { sentAt: trace.sentAt, ms } };
+    const usage = trace.usage ? { usage: trace.usage } : {};
+    return { ...result, roundTrip: { sentAt: trace.sentAt, ms, ...usage } };
   }
 
   private async correctPassage(
@@ -443,6 +481,7 @@ export class VoiceCorrectionService {
             confidence: result.confidence,
             confirmedText: request.rawText,
             verdict: rejectionVerdict(rejection),
+            rejected: { reason: rejection, candidate },
           };
         }
         confirmedText = candidate;
@@ -663,7 +702,7 @@ export class VoiceCorrectionService {
           ],
           prompt_cache_key: REWRITE_CACHE_PREFIX,
           service_tier: "auto",
-          reasoning: { effort: VOICE_DICTATION_REASONING_EFFORT },
+          reasoning: { effort: settings.reasoningEffort ?? VOICE_DICTATION_REASONING_EFFORT },
           text: {
             format: {
               type: "json_schema",
@@ -927,7 +966,7 @@ export class VoiceCorrectionService {
       service_tier: "auto",
       // Explicit low-latency effort: gpt-6-luna defaults to "medium" when
       // omitted, so we pin the lowest tier rather than inherit that default.
-      reasoning: { effort: VOICE_DICTATION_REASONING_EFFORT },
+      reasoning: { effort: settings.reasoningEffort ?? VOICE_DICTATION_REASONING_EFFORT },
       text: {
         format: {
           type: "json_schema",
@@ -1081,7 +1120,8 @@ export class VoiceCorrectionService {
         body,
         signal,
         maxOutputTokens,
-        onText
+        onText,
+        trace
       );
       this.notePromptUsed(this.promptIdentity(settings, systemPrompt), sentAt);
       return result;
@@ -1096,7 +1136,8 @@ export class VoiceCorrectionService {
     body: string,
     signal: AbortSignal,
     maxOutputTokens: number,
-    onText: ((text: string) => void) | undefined
+    onText: ((text: string) => void) | undefined,
+    trace: RequestTrace
   ): Promise<Omit<VoiceCorrectionResult, "confirmedText" | "verdict">> {
     const response = await fetch(RESPONSES_URL, {
       method: "POST",
@@ -1115,6 +1156,8 @@ export class VoiceCorrectionService {
     const data = onText
       ? await this.readCorrectionStream(response, onText)
       : ((await response.json()) as CorrectionReply);
+    // A reply thrown away below was still billed.
+    trace.usage = readUsage(data.usage);
     // A cut-off reply can still parse, so check the status before the body:
     // the passage is corrected whole or not at all.
     if (data.status === "incomplete") {
