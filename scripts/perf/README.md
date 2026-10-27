@@ -364,6 +364,40 @@ Every score is reported twice: for what landed, and for what the model proposed 
 
 What the numbers can't claim: the raw transcripts are written to imitate each provider, not captured from it; the prompt cache is as warm as it stays for someone dictating steadily, and every passage of a repeat after the first may find more of itself cached; the cache key names the model but not the effort, so two efforts of one model share a cache and the second to send a passage may find more of it there (`Cached` per variant shows how much); latency is one machine's network to OpenAI at one time of day, and excludes the stop drain, the main process's preparation and the composer; and no word score can see a meaning reversed with the same words, so read the differences by hand.
 
+## OpenAI's preview against its final (`voice-preview-final`, #14852)
+
+`OPENAI_API_KEY=… npm run perf voice-preview-final` asks whether the words where OpenAI's final transcript of a segment differs from its live preview are the words it misheard, which would make them a free low-confidence hint for cleanup. It plays every replay clip (the same 18 prompts and cached `say` audio as `voice-replay`, or `VOICE_REPLAY_RECORDINGS_DIR` recordings) into the real `OpenAITranscriptionProvider`, against the live socket, three passes by default with the clip order shuffled from `--seed`. It costs about $0.017 per minute of audio, under ten cents for a default run, and never runs in CI.
+
+Everything between the audio and the events is production's: the session config, the `delay` tier, the client-side Silero VAD that cuts segments at pauses, the 8 s forced commit, the drain. Only Electron is swapped out. Under Node `electron` is a path string, so the script resolves it to a stub whose `utilityProcess.fork` runs the unmodified VAD worker in a Node child (`voice-preview-final-vad.ts`) and reports what the child says. Audio goes in as 100 ms chunks on the capture clock from the moment `start()` is called, as the microphone opens while the socket connects, and the stop comes as the clip runs out, as in `voice-replay`. Each session gets a fresh provider, and its VAD child has exited before the next one starts. Bias terms are off unless `--terms` sends every fixture term.
+
+A segment's preview is every delta the provider emitted for its item before the completion, which is what the composer showed; its final is the completion. A session is scored whole or not at all: a failed start, a reconnect, dropped audio, a VAD that never came up or failed, an error, a delta or completion without an item, or a segment settled without a final excludes it, and the report lists it with the reason.
+
+Words go through the replay benchmark's `normaliseWords`, so casing, punctuation, spacing and spelled-out numbers can't disagree. Each segment's final is aligned against its preview, and every run of words between matches is a span:
+
+| Kind | Meaning |
+| --- | --- |
+| changed | Final words in place of preview words with different letters |
+| spacing | The same letters split differently (`web socket` and `websocket`) |
+| inserted | Final words the preview didn't have, between matched words |
+| suffix | Final words after the preview's last match, where the preview had nothing |
+| no-preview | A segment whose preview had no words |
+| drop | Preview words the final left out: nothing to flag |
+
+The finals are then joined in order and aligned against the clip's reference, and each final word is right or wrong by that alignment, wrong being a substitution or an insertion. Four policies are fixed in `lib/voicePreviewFinalScore.ts` before any run: flag every word the preview didn't have (`any`), only words that replaced preview words (`substituted`), those less spacing (`changed`), and changed plus inserted (`interior`). Each reports how many words it flags, how many of those are wrong and right, its precision, the wrong words it misses and its recall, and its lift over the base wrong-word rate (1× is no better than random). The report also counts the finals that match their preview character for character, gives the headline under a literal normaliser (casing and punctuation only), and breaks it down by span kind, pass and clip.
+
+| Option | Default | Effect |
+| --- | --- | --- |
+| `--repeats` | `3` | Passes over the clips |
+| `--clips` | all | Only these clip ids |
+| `--terms` | off | Sends every fixture term as a bias term |
+| `--seed` | `14852` | Clip order |
+| `--label` | `run` | Prefix of the result file |
+| `--rescore <run.json>` |  | Scores a saved run again with today's references and scoring, sending nothing; a session whose clip is gone is excluded |
+
+Results land in `.tmp/perf-results/voice-preview-final/<label>-<timestamp>.json`, rewritten after every session with `complete: false` until the run finishes (Ctrl+C keeps what was paid for), with the Markdown report beside it. Both quote previews and finals, so they stay in `.tmp/`: the terminal gets only counts, and provider logging is held at warnings, which carry ids and lengths.
+
+What the numbers can't claim: the clips are synthesised speech, which a model hears more cleanly than a person in a room; a reference is the prompt the speaker meant, so a final can be marked wrong for writing a word the way it was said; 18 clips over a few passes are repeats of the same audio, not independent dictations; and a flag that points at the right words still doesn't show that cleanup fixes more with it.
+
 ## Recovery and session scenarios (PERF-260..264, 280..285)
 
 The last two families cover what the rest of the harness explicitly left out. PERF-046 and PERF-224 both measure how fast a killed host comes back and say plainly that the supervisor is not in the loop; PERF-203 measures the MCP tool-surface projection and says plainly that no server is. These close both halves.

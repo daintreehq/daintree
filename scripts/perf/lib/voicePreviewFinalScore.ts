@@ -252,6 +252,8 @@ export interface SessionScore {
   clip: string;
   pass: number;
   segments: number;
+  /** Segments whose final is their preview character for character, once trimmed. */
+  segmentsVerbatim: number;
   /** Segments with any span, drops included. */
   segmentsDisagreeing: number;
   /** Segments with any span under the literal normaliser. */
@@ -278,12 +280,14 @@ export function scoreSession(
 ): SessionScore {
   const words: FinalWord[] = [];
   const spans: SessionScore["spans"] = [];
+  let segmentsVerbatim = 0;
   let segmentsDisagreeing = 0;
   let segmentsDisagreeingLiteral = 0;
   let literalDisagreeingWords = 0;
   // Where each span's first final word sits in the session's joined words.
   const spanStarts: number[] = [];
   segments.forEach((segment, index) => {
+    if (segment.preview.trim() === segment.final.trim()) segmentsVerbatim++;
     const preview = normaliseWords(segment.preview);
     const final = normaliseWords(segment.final);
     const kinds = new Array<FinalWord["kind"]>(final.length).fill(null);
@@ -321,6 +325,7 @@ export function scoreSession(
     clip: observation.clip,
     pass: observation.pass,
     segments: segments.length,
+    segmentsVerbatim,
     segmentsDisagreeing,
     segmentsDisagreeingLiteral,
     words,
@@ -408,6 +413,7 @@ export interface RunSummary {
   scored: number;
   excluded: Array<{ clip: string; pass: number; reasons: string[] }>;
   segments: number;
+  segmentsVerbatim: number;
   segmentsDisagreeing: number;
   segmentsDisagreeingLiteral: number;
   finalWords: number;
@@ -438,6 +444,7 @@ export function summarise(
     scored: scored.length,
     excluded: [...excluded],
     segments: sum((s) => s.segments),
+    segmentsVerbatim: sum((s) => s.segmentsVerbatim),
     segmentsDisagreeing: sum((s) => s.segmentsDisagreeing),
     segmentsDisagreeingLiteral: sum((s) => s.segmentsDisagreeingLiteral),
     finalWords: any.finalWords,
@@ -606,6 +613,7 @@ export function renderHeadline(summary: RunSummary): string[] {
   return [
     `Scored ${summary.scored} of ${summary.sessions} sessions (${summary.excluded.length} excluded), ${summary.segments} segments, ${summary.finalWords} final words, WER ${pct(summary.wer)}.`,
     "",
+    `- Finals identical to their preview, character for character once trimmed: ${summary.segmentsVerbatim}/${summary.segments}.`,
     `- Segments where the final disagrees with the preview: ${summary.segmentsDisagreeing}/${summary.segments} (${pct(ratio(summary.segmentsDisagreeing, summary.segments))}); ${summary.segmentsDisagreeingLiteral} under the literal normaliser.`,
     `- Final words in a disagreement: ${summary.disagreeingWords}/${summary.finalWords} (${pct(ratio(summary.disagreeingWords, summary.finalWords))}); ${summary.literalDisagreeingWords} under the literal normaliser.`,
     `- Of those, wrong against the reference: ${any.flaggedWrong}; right: ${any.flaggedRight} (precision ${pct(any.precision)}, ${times(any.lift)} the base rate of ${pct(ratio(any.wrongWords, any.finalWords))}).`,
