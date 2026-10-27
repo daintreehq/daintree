@@ -75,6 +75,8 @@ const NEXT = "The other thing on my list is the login redirect.";
 
 const callbacks = new Map<string, Listener>();
 const correct = vi.fn<(request: CorrectRequest) => Promise<CorrectResult>>();
+const prefetchCorrections =
+  vi.fn<(payload: { sessionId: string; requests: CorrectRequest[] }) => Promise<void>>();
 const recordHistory = vi.fn();
 const setHistoryCorrection = vi.fn();
 let clock = 1_000;
@@ -109,6 +111,7 @@ function stubElectron() {
         stop: vi.fn().mockResolvedValue(undefined),
         cancel: vi.fn().mockResolvedValue(undefined),
         correct,
+        prefetchCorrections,
       },
       recentDictations: { record: recordHistory, setCorrectedText: setHistoryCorrection },
       systemSleep: { onSuspend: vi.fn(() => () => {}), onWake: vi.fn(() => () => {}) },
@@ -196,6 +199,7 @@ beforeEach(() => {
   vi.resetModules();
   callbacks.clear();
   correct.mockReset();
+  prefetchCorrections.mockReset().mockResolvedValue(undefined);
   recordHistory.mockReset();
   setHistoryCorrection.mockReset();
   clock = 1_000;
@@ -574,5 +578,76 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
       id: expect.any(String),
       correctedText: `${CLEANED_OPENING} The other thing is the login redirect.`,
     });
+  });
+});
+
+describe("VoiceRecordingService — prefetching the stop's cleanup at a pause", () => {
+  // Past the settle a pause's prefetch waits before it goes out.
+  const settled = () => new Promise<void>((resolve) => setTimeout(resolve, 200));
+
+  it("sends main the cleanup request the stop will send, once the words settle", async () => {
+    const { service, sessionId, say } = await setup();
+    correct.mockResolvedValue({ action: "no_change", correctedText: "" });
+
+    say("Run the tests.");
+    expect(prefetchCorrections).not.toHaveBeenCalled();
+    await settled();
+    expect(prefetchCorrections).toHaveBeenCalledTimes(1);
+    const prefetched = prefetchCorrections.mock.calls[0]![0];
+    expect(prefetched).toEqual({
+      sessionId,
+      requests: [expect.objectContaining({ rawText: "Run the tests.", sessionId })],
+    });
+
+    await service.stop();
+    expect(correct).toHaveBeenCalledTimes(1);
+    const { streamId, ...sent } = correct.mock.calls[0]![0] as CorrectRequest & {
+      streamId?: string;
+    };
+    expect(streamId).toEqual(expect.any(String));
+    expect(sent).toEqual(prefetched.requests[0]);
+  });
+
+  it("waits 150ms after the last words, starting over when more land", async () => {
+    const { say } = await setup();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      say("Run the");
+      vi.advanceTimersByTime(100);
+      say("tests now.");
+      vi.advanceTimersByTime(149);
+      expect(prefetchCorrections).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(prefetchCorrections).toHaveBeenCalledTimes(1);
+      expect(prefetchCorrections.mock.calls[0]![0].requests).toEqual([
+        expect.objectContaining({ rawText: "Run the tests now." }),
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("prefetches nothing while the stop drains, after the service goes, or with cleanup off", async () => {
+    const { service, voiceStore, say } = await setup();
+
+    say("Run the tests.");
+    voiceStore.getState().setStatus("finishing");
+    await settled();
+    expect(prefetchCorrections).not.toHaveBeenCalled();
+
+    voiceStore.getState().setStatus("recording");
+    say("Then commit.");
+    service.destroy();
+    await settled();
+    expect(prefetchCorrections).not.toHaveBeenCalled();
+  });
+
+  it("prefetches nothing with cleanup off", async () => {
+    const { voiceStore, say } = await setup();
+    voiceStore.getState().setCorrectionEnabled(false);
+
+    say("Run the tests.");
+    await settled();
+    expect(prefetchCorrections).not.toHaveBeenCalled();
   });
 });

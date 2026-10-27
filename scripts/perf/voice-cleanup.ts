@@ -24,7 +24,6 @@ import type {
   VoiceCorrectionService as VoiceCorrectionServiceType,
   VoiceCorrectionSettings,
 } from "../../electron/services/VoiceCorrectionService";
-import { CORRECTION_GUARD_LIMITS } from "../../electron/services/voiceCorrectionGuard";
 import {
   correctionOutcome,
   type VoiceCorrectionProposal,
@@ -39,7 +38,6 @@ import {
   type FixKind,
   type TranscriptStyle,
 } from "./lib/voiceCleanupCorpus";
-import { ADVERSARIAL_PROPOSALS, GUARD_VARIANTS, type GuardVariant } from "./lib/voiceCleanupGuards";
 import { PROMPT_VARIANTS } from "./lib/voiceCleanupPrompts";
 import {
   corpusProblems,
@@ -52,6 +50,7 @@ import {
   SEND_WAIT_TARGET_MS,
   seededShuffle,
   summariseVariant,
+  VOICE_CLEANUP_READABLE_SCHEMAS,
   VOICE_CLEANUP_SCHEMA_VERSION,
   VOICE_CLEANUP_SCORING_VERSION,
   type Disposition,
@@ -80,8 +79,6 @@ model and effort, against the live OpenAI API (needs OPENAI_API_KEY; costs money
                         luna and terra are aliases, any other model id is sent as is
   --prompts <list>      cleanup prompts, each run with every model:effort (default
                         production): ${Object.keys(PROMPT_VARIANTS).join(", ")}
-  --guards <list>       edit budgets every reply is landed under, sending nothing more
-                        (default v11,production): ${Object.keys(GUARD_VARIANTS).join(", ")}
   --repeats <n>         passes over the corpus (default 1)
   --cases <list>        only cases whose id starts with one of these
   --styles <list>       only these transcript styles (${STYLES.join(", ")})
@@ -91,7 +88,7 @@ model and effort, against the live OpenAI API (needs OPENAI_API_KEY; costs money
   --no-stream           ask for the whole reply at once, as cleanup did before it streamed
   --probe-prediction    also ask each model for Predicted Outputs and record the answer
   --rescore <run.json>  score a saved run again with today's corpus and scoring, sending
-                        nothing, landing its replies under --guards when given`;
+                        nothing, landing its replies as production lands them now`;
 
 interface Variant {
   /** `model:effort/prompt`. */
@@ -103,7 +100,6 @@ interface Variant {
 
 interface Options {
   variants: Variant[];
-  guards: string[] | null;
   repeats: number;
   cases: string[];
   styles: TranscriptStyle[];
@@ -142,7 +138,6 @@ function parseArgs(argv: readonly string[]): Options | null {
   let prompts = ["production"];
   const options: Options = {
     variants: [],
-    guards: null,
     repeats: 1,
     cases: [],
     styles: [...STYLES],
@@ -179,9 +174,6 @@ function parseArgs(argv: readonly string[]): Options | null {
         break;
       case "--prompts":
         prompts = namesIn(PROMPT_VARIANTS, "prompt", list());
-        break;
-      case "--guards":
-        options.guards = namesIn(GUARD_VARIANTS, "guard", list());
         break;
       case "--repeats":
         options.repeats = count(1);
@@ -318,7 +310,7 @@ function withoutReply(result: VoiceCorrectionResult): Disposition {
   return result.failed ? "failed" : "skipped";
 }
 
-/** What the service did with a passage, read the way a guard landing reads. */
+/** What the service did with a passage, read the way `land` reads a landing. */
 function dispositionOf(result: VoiceCorrectionResult): Disposition {
   if (!result.proposal) return withoutReply(result);
   if (result.rejected) return "rejected";
@@ -326,13 +318,13 @@ function dispositionOf(result: VoiceCorrectionResult): Disposition {
 }
 
 /**
- * A reply landed under one guard, the way the service lands it. Without a
- * reply the request failed or was skipped, and every guard keeps the raw text.
+ * A reply landed the way the service lands it, through production's own
+ * `correctionOutcome`. Without a reply the request failed or was skipped, and
+ * the raw text stands.
  */
-function landUnder(
+function land(
   entry: CleanupCase,
   reply: VoiceCorrectionProposal | undefined,
-  limits: GuardVariant["limits"],
   noReply: Disposition,
   vocabulary: VoiceCommandVocabulary
 ): Landing {
@@ -342,7 +334,6 @@ function landUnder(
   const landing = correctionOutcome(entry.raw, reply, {
     vocabulary,
     startsPrompt: requestFor(entry).startsPrompt === true,
-    limits,
   });
   const disposition: Disposition = landing.rejected
     ? "rejected"
@@ -357,21 +348,6 @@ function landUnder(
   };
 }
 
-function landings(
-  entry: CleanupCase,
-  reply: VoiceCorrectionProposal | undefined,
-  guards: readonly string[],
-  noReply: Disposition,
-  vocabulary: VoiceCommandVocabulary
-): Record<string, Landing> {
-  return Object.fromEntries(
-    guards.map((guard) => [
-      guard,
-      landUnder(entry, reply, GUARD_VARIANTS[guard]!.limits, noReply, vocabulary),
-    ])
-  );
-}
-
 function proposalText(entry: CleanupCase, reply: Trial["reply"]): string {
   return reply?.action === "replace" && reply.correctedText.trim()
     ? reply.correctedText.trim()
@@ -383,7 +359,6 @@ function toTrial(
   variant: Variant,
   repeat: number,
   result: VoiceCorrectionResult,
-  guards: readonly string[],
   vocabulary: VoiceCommandVocabulary,
   totalMs: number,
   firstTextAt: number | null
@@ -398,7 +373,7 @@ function toTrial(
     ...(reply ? { reply } : {}),
     proposal,
     proposalScore: scoreText(entry, proposal),
-    landings: landings(entry, reply, guards, withoutReply(result), vocabulary),
+    landing: land(entry, reply, withoutReply(result), vocabulary),
     roundTripMs: result.roundTrip ? Math.round(result.roundTrip.ms) : null,
     ...(firstTextAt !== null && result.roundTrip
       ? { firstTextMs: Math.round(firstTextAt - result.roundTrip.sentAt) }
@@ -507,28 +482,20 @@ const ms = (value: number | null) => (value === null ? "–" : `${Math.round(val
 const usd = (value: number | null, digits = 5) =>
   value === null ? "–" : `$${value.toFixed(digits)}`;
 
-function qualityRow(arm: string, quality: QualitySummary): string {
+function qualityRow(variant: string, quality: QualitySummary): string {
   const { totals } = quality;
   const rate = (value: number, of: number) => (of === 0 ? "–" : pct(value));
-  return `| ${arm} | ${pct(quality.agentReadyRate)} | ${rate(quality.repairRate, totals.repairable)} | ${rate(quality.misreadRate, totals.misreads)} | ${rate(quality.formRate, totals.forms)} | ${rate(quality.dropRate, totals.drops)} | ${rate(quality.splitRate, totals.splits)} | ${rate(quality.keepRate, totals.keeps)} | ${pct(quality.referenceMatchRate)} | ${pct(quality.rawWer)} → ${pct(quality.wer)} | ${quality.broken} | ${quality.novelWords} | ${quality.addedWords} | ${quality.trialsWithMeaningRisk} |`;
+  return `| ${variant} | ${pct(quality.agentReadyRate)} | ${rate(quality.repairRate, totals.repairable)} | ${rate(quality.misreadRate, totals.misreads)} | ${rate(quality.formRate, totals.forms)} | ${rate(quality.dropRate, totals.drops)} | ${rate(quality.splitRate, totals.splits)} | ${rate(quality.keepRate, totals.keeps)} | ${pct(quality.referenceMatchRate)} | ${pct(quality.rawWer)} → ${pct(quality.wer)} | ${quality.broken} | ${quality.novelWords} | ${quality.addedWords} | ${quality.trialsWithMeaningRisk} |`;
 }
 
 const QUALITY_HEADER = [
-  "| Arm | Ready | Repaired | Misreads | Forms | Drops | Splits | Keeps | Matches ref | WER raw → clean | Broken | Novel | Added | Risky trials |",
+  "| Variant | Ready | Repaired | Misreads | Forms | Drops | Splits | Keeps | Matches ref | WER raw → clean | Broken | Novel | Added | Risky trials |",
   "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
 ];
 
 function latencyCells(latency: LatencySummary): string {
   if (latency.count === 0) return "0 | – | – | – | –";
   return `${latency.count} | ${ms(latency.p50)} | ${ms(latency.p95)} | ${ms(latency.max)} | ${pct(latency.overTarget)}`;
-}
-
-interface AdversarialResult {
-  guard: string;
-  caseId: string;
-  harm: string;
-  /** The check that refused it; null when it landed. */
-  refusedBy: string | null;
 }
 
 export interface RunRecord {
@@ -550,8 +517,6 @@ export interface RunRecord {
     string,
     { description: string; instructions: CorrectionInstructions; hash: string }
   >;
-  /** Each edit budget the replies were landed under. */
-  guards: Record<string, GuardVariant>;
   profile: Profile;
   corpusHash: string;
   /** Each passage as it was sent, so a later rescore can tell whether its input has changed since. */
@@ -569,10 +534,10 @@ export interface RunRecord {
   rescoreExclusions?: Array<{ id: string; reason: "removed" | "input changed"; trials: number }>;
   /**
    * Replies the service landed differently from how the benchmark lands them
-   * under production's budget; anything but 0 means the guard replay is wrong.
+   * with production's checks; anything but 0 means the landed scores, and any
+   * rescore, land replies the service wouldn't have.
    */
   parityMisses: number;
-  adversarial: AdversarialResult[];
   prices: typeof MODEL_PRICES;
   predictionProbes: PredictionProbe[];
   trials: Trial[];
@@ -580,43 +545,12 @@ export interface RunRecord {
 }
 
 function summarise(run: RunRecord, corpus: readonly CleanupCase[]): VariantSummary[] {
-  return run.variants.flatMap((variant) =>
-    Object.keys(run.guards).map((guard) => summariseVariant(variant.id, guard, run.trials, corpus))
-  );
+  return run.variants.map((variant) => summariseVariant(variant.id, run.trials, corpus));
 }
-
-// Under the limits the run records, so a rescore that keeps a run's guards
-// lands these as it lands the run's replies.
-function landAdversarial(
-  guards: Readonly<Record<string, GuardVariant>>,
-  corpus: readonly CleanupCase[],
-  vocabulary: VoiceCommandVocabulary
-) {
-  const byId = new Map(corpus.map((entry) => [entry.id, entry]));
-  return Object.entries(guards).flatMap(([guard, { limits }]) =>
-    ADVERSARIAL_PROPOSALS.flatMap(({ caseId, harm, proposal }): AdversarialResult[] => {
-      const entry = byId.get(caseId);
-      if (!entry) return [];
-      const landing = landUnder(
-        entry,
-        { action: "replace", correctedText: proposal, confidence: "high" },
-        limits,
-        "skipped",
-        vocabulary
-      );
-      return [{ guard, caseId, harm, refusedBy: landing.rejectReason ?? null }];
-    })
-  );
-}
-
-const armName = (summary: VariantSummary) => `${summary.variant} · ${summary.guard}`;
 
 export function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): string {
   const lines: string[] = [];
   const longCases = corpus.filter((entry) => entry.raw.length >= PROMPT_LENGTH_MIN_CHARS).length;
-  const guards = Object.keys(run.guards);
-  const firstGuard = guards[0]!;
-  const perVariant = run.summaries.filter((summary) => summary.guard === firstGuard);
   lines.push(
     `# Dictation cleanup benchmark: ${run.label}`,
     "",
@@ -625,15 +559,11 @@ export function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): st
     `Prompts: ${Object.entries(run.prompts)
       .map(([name, prompt]) => `\`${name}\` (${prompt.hash.slice(0, 10)}, ${prompt.description})`)
       .join("; ")}.`,
-    "",
-    `Guards: ${Object.entries(run.guards)
-      .map(([name, guard]) => `\`${name}\` (${guard.description})`)
-      .join("; ")}.`,
     ""
   );
   if (run.parityMisses > 0) {
     lines.push(
-      `**${run.parityMisses} replies landed differently in the service than in the guard replay.** The guard rows can't be trusted until that's fixed.`,
+      `**${run.parityMisses} replies landed differently in the service than in the benchmark's replay of its checks.** The landed rows can't be trusted until that's fixed.`,
       ""
     );
   }
@@ -649,65 +579,41 @@ export function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): st
   lines.push(
     "## What landed",
     "",
-    "Each reply landed under each guard, model:effort/prompt · guard. Ready: the message the speaker would have typed (an accepted reference's words and lines, every misread and form fix and every drop landed, nothing kept lost, any run-on broken up). Repaired: reference words the raw transcript had wrong that came back right. Misreads: fixes for a word the raw transcript got wrong, one an agent would take for something else, landed exactly; a model or prompt choice rests on these. Forms: fixes that only write the speaker's own words the way they would have typed them, landed exactly; an agent reads those right either way. Drops: filler and retracted words taken out. Splits: run-ons broken into sentences under the passage's cap. Keeps: the case's own, plus every code span, reference, flag, path and number in the raw transcript. Broken: words the raw had right that were lost or changed. Novel: words in neither the raw nor the reference. Added: words inserted beyond any the raw already had extra. Risky trials: any broken, novel or added word, or a keep lost.",
+    "Each reply landed as production lands it, through the agent-command and low-confidence checks, per model:effort/prompt. Ready: the message the speaker would have typed (an accepted reference's words and lines, every misread and form fix and every drop landed, nothing kept lost, any run-on broken up). Repaired: reference words the raw transcript had wrong that came back right. Misreads: fixes for a word the raw transcript got wrong, one an agent would take for something else, landed exactly; a model or prompt choice rests on these. Forms: fixes that only write the speaker's own words the way they would have typed them, landed exactly; an agent reads those right either way. Drops: filler and retracted words taken out. Splits: run-ons broken into sentences under the passage's cap. Keeps: the case's own, plus every code span, reference, flag, path and number in the raw transcript. Broken: words the raw had right that were lost or changed. Novel: words in neither the raw nor the reference. Added: words inserted beyond any the raw already had extra. Risky trials: any broken, novel or added word, or a keep lost.",
     "",
     ...QUALITY_HEADER,
-    ...run.summaries.map((summary) => qualityRow(armName(summary), summary.landed)),
+    ...run.summaries.map((summary) => qualityRow(summary.variant, summary.landed)),
     "",
     "## What the model proposed",
     "",
     "Before any check: every reply scored as if it had landed.",
     "",
     ...QUALITY_HEADER,
-    ...perVariant.map((summary) => qualityRow(summary.variant, summary.proposed)),
+    ...run.summaries.map((summary) => qualityRow(summary.variant, summary.proposed)),
     "",
-    "## Dispositions and guard checks",
+    "## Dispositions",
     "",
-    "Caught: a proposal with a meaning risk that a guard check refused. Let through: one that landed. Held back: a proposal with no meaning risk that a guard check refused, so the raw text stayed (ready: it was the message the speaker would have typed). The confidence and command checks aren't guard checks.",
+    "Rejected: a reply the agent-command or low-confidence check turned down, so the raw text stayed.",
     "",
-    "| Arm | Applied | Declined | Rejected | Failed | Skipped | Reject reasons | Caught | Let through | Held back (ready) | Clean passages untouched |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    "| Variant | Applied | Declined | Rejected | Failed | Skipped | Reject reasons | Clean passages untouched |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ...run.summaries.map((summary) => {
       const d = summary.dispositions;
-      const g = summary.guardChecks;
       const reasons =
         Object.entries(summary.rejectReasons)
           .sort((a, b) => b[1] - a[1])
           .map(([reason, n]) => `${reason} ${n}`)
           .join(", ") || "–";
-      return `| ${armName(summary)} | ${d.applied} | ${d.declined} | ${d.rejected} | ${d.failed} | ${d.skipped} | ${reasons} | ${g.caught} | ${g.letThrough} | ${g.heldBack} (${g.heldBackReady}) | ${summary.cleanUntouched.kept}/${summary.cleanUntouched.of} |`;
+      return `| ${summary.variant} | ${d.applied} | ${d.declined} | ${d.rejected} | ${d.failed} | ${d.skipped} | ${reasons} | ${summary.cleanUntouched.kept}/${summary.cleanUntouched.of} |`;
     }),
-    ""
-  );
-  if (run.adversarial.length > 0) {
-    lines.push(
-      "## Cleanups that lose meaning, under each guard",
-      "",
-      "Hand-written cleanups that each do one kind of harm, landed under every guard. Some no word count can see; those land under all of them.",
-      "",
-      `| Passage | Harm | ${guards.join(" | ")} |`,
-      `| --- | --- | ${guards.map(() => "---").join(" | ")} |`
-    );
-    for (const { caseId, harm } of ADVERSARIAL_PROPOSALS) {
-      const cells = guards.map((guard) => {
-        const result = run.adversarial.find(
-          (entry) => entry.guard === guard && entry.caseId === caseId && entry.harm === harm
-        );
-        if (!result) return "–";
-        return result.refusedBy === null ? "**landed**" : `refused (${result.refusedBy})`;
-      });
-      lines.push(`| ${caseId} | ${harm} | ${cells.join(" | ")} |`);
-    }
-    lines.push("");
-  }
-  lines.push(
+    "",
     "## Latency (ms)",
     "",
-    `Per request, so the same under every guard. Round trip is the service's own, request out to reply read, over the requests that came back readable (n). Total is all of \`correct()\` for every trial, the wait for a preconnect and failures included. Over target: share above ${SEND_WAIT_TARGET_MS} ms.`,
+    `Round trip is the service's own, request out to reply read, over the requests that came back readable (n). Total is all of \`correct()\` for every trial, the wait for a preconnect and failures included. Over target: share above ${SEND_WAIT_TARGET_MS} ms.`,
     "",
     "| Variant | n | p50 | p95 | max | over target | prompt-length n | p50 | p95 | max | over target | total n | p50 | p95 | max | over target |",
     "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-    ...perVariant.map(
+    ...run.summaries.map(
       (summary) =>
         `| ${summary.variant} | ${latencyCells(summary.roundTrip)} | ${latencyCells(summary.promptLengthRoundTrip)} | ${latencyCells(summary.total)} |`
     ),
@@ -718,7 +624,7 @@ export function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): st
           "",
           "| Variant | n | p50 | p95 | max | over target | prompt-length n | p50 | p95 | max | over target |",
           "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-          ...perVariant.map(
+          ...run.summaries.map(
             (summary) =>
               `| ${summary.variant} | ${latencyCells(summary.firstText)} | ${latencyCells(summary.promptLengthFirstText)} |`
           ),
@@ -729,7 +635,7 @@ export function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): st
     "",
     "| Variant | Mean input | Cached | Mean output | Mean reasoning | Cache writes | Per cleanup | Run total |",
     "| --- | --- | --- | --- | --- | --- | --- | --- |",
-    ...perVariant.map(
+    ...run.summaries.map(
       (summary) =>
         `| ${summary.variant} | ${Math.round(summary.tokens.meanInput)} | ${pct(summary.tokens.cachedShare)} | ${Math.round(summary.tokens.meanOutput)} | ${Math.round(summary.tokens.meanReasoning)} | ${summary.tokens.cacheWrites} | ${usd(summary.meanCostUsd)} | ${usd(summary.totalCostUsd, 3)} |`
     ),
@@ -741,7 +647,7 @@ export function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): st
     lines.push(
       "## With and without recent prompts",
       "",
-      `Each passage sent with the prompts last sent to its terminal (#14855), beside the same passage sent without them, over the repeats both ran, under the \`${firstGuard}\` guard. Clean kept: passages that should come back untouched and did. Risky: trials with a broken, novel or added word. Cached: the share of input read from the prompt cache. Cache writes bill at 1.25 times the input rate.`,
+      "Each passage sent with the prompts last sent to its terminal (#14855), beside the same passage sent without them, over the repeats both ran. Clean kept: passages that should come back untouched and did. Risky: trials with a broken, novel or added word, or a keep lost. Cached: the share of input read from the prompt cache. Cache writes bill at 1.25 times the input rate.",
       "",
       "| Variant | Recent prompts | Trials | Misreads landed | Clean kept | Risky trials | Mean input | Cached | Cache writes | Per cleanup |",
       "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
@@ -766,7 +672,7 @@ export function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): st
         ["without", paired.map(([, trial]) => trial), bare],
       ];
       for (const [side, trials, entries] of sides) {
-        const summary = summariseVariant(variant.id, firstGuard, trials, entries);
+        const summary = summariseVariant(variant.id, trials, entries);
         lines.push(
           `| ${variant.id} | ${side} | ${summary.trials} | ${pct(summary.landed.misreadRate)} | ${summary.cleanUntouched.kept}/${summary.cleanUntouched.of} | ${summary.landed.trialsWithMeaningRisk} | ${Math.round(summary.tokens.meanInput)} | ${pct(summary.tokens.cachedShare)} | ${summary.tokens.cacheWrites} | ${usd(summary.meanCostUsd)} |`
         );
@@ -785,7 +691,7 @@ export function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): st
     lines.push(
       `## Ready, misreads and forms landed, by ${name}`,
       "",
-      `Under the \`${firstGuard}\` guard, each cell: ready trials / trials · misread fixes landed · form fixes landed.`,
+      "Each cell: ready trials / trials · misread fixes landed · form fixes landed.",
       "",
       `| ${name} | passages | ${run.variants.map((variant) => variant.id).join(" | ")} |`,
       `| --- | --- | ${run.variants.map(() => "---").join(" | ")} |`
@@ -795,18 +701,17 @@ export function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): st
         const rows = run.trials.filter(
           (trial) => trial.variant === variant.id && key(byId.get(trial.caseId)!) === value
         );
-        const scoreOf = (trial: Trial) => trial.landings[firstGuard]?.landedScore;
         const landed = (kind: FixKind) => {
           let count = 0;
           let total = 0;
           for (const trial of rows) {
             total += fixesOf(byId.get(trial.caseId)!, kind).length;
-            const score = scoreOf(trial);
-            count += (kind === "misread" ? score?.misreadsLanded : score?.formsLanded) ?? 0;
+            const score = trial.landing.landedScore;
+            count += kind === "misread" ? score.misreadsLanded : score.formsLanded;
           }
           return total ? `${count}/${total}` : "–";
         };
-        const ready = rows.filter((trial) => scoreOf(trial)?.agentReady).length;
+        const ready = rows.filter((trial) => trial.landing.landedScore.agentReady).length;
         return `${ready}/${rows.length} · ${landed("misread")} · ${landed("form")}`;
       });
       const count = corpus.filter((entry) => key(entry) === value).length;
@@ -829,10 +734,9 @@ export function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): st
     );
   }
 
-  // Every passage some arm didn't land ready on, or where the arms disagree,
-  // with each distinct text an arm landed across the repeats: the passages to
-  // read by hand, since no word score sees a reversed meaning.
-  const arms = run.variants.flatMap((variant) => guards.map((guard) => ({ variant, guard })));
+  // Every passage some variant didn't land ready on, or where the landed texts
+  // differ, with each distinct text a variant landed across the repeats: the
+  // passages to read by hand, since no word score sees a reversed meaning.
   const notes = (entry: CleanupCase, score: Trial["proposalScore"]) =>
     [
       score.agentReady ? "ready" : "",
@@ -849,13 +753,8 @@ export function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): st
     ].filter(Boolean);
   const toRead = corpus.filter((entry) => {
     const rows = run.trials.filter((trial) => trial.caseId === entry.id);
-    const texts = new Set(
-      rows.flatMap((trial) => guards.map((guard) => trial.landings[guard]?.landed))
-    );
-    return (
-      texts.size > 1 ||
-      rows.some((trial) => guards.some((guard) => !trial.landings[guard]?.landedScore.agentReady))
-    );
+    const texts = new Set(rows.map((trial) => trial.landing.landed));
+    return texts.size > 1 || rows.some((trial) => !trial.landing.landedScore.agentReady);
   });
   lines.push(`## Passages to read (${toRead.length})`, "");
   for (const entry of toRead) {
@@ -865,15 +764,15 @@ export function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): st
       `- raw: ${JSON.stringify(entry.raw)}`,
       `- reference: ${JSON.stringify(entry.reference)}`
     );
-    for (const { variant, guard } of arms) {
+    for (const variant of run.variants) {
       const rows = run.trials.filter(
         (trial) => trial.caseId === entry.id && trial.variant === variant.id
       );
       const seen = new Map<string, { count: number; landing: Landing; proposal: string }>();
       for (const trial of rows) {
-        const landing = trial.landings[guard];
-        if (!landing) continue;
-        const key = `${landing.landed}\u0000${trial.proposal}`;
+        const { landing } = trial;
+        // A declined reply and a failed request both land the raw text; each keeps its own row.
+        const key = `${landing.landed}\u0000${trial.proposal}\u0000${landing.disposition}\u0000${landing.rejectReason ?? ""}`;
         const known = seen.get(key);
         if (known) known.count++;
         else seen.set(key, { count: 1, landing, proposal: trial.proposal });
@@ -886,7 +785,7 @@ export function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): st
             ? ` — proposed ${JSON.stringify(proposal)} (${notes(entry, scoreText(entry, proposal)).join("; ")})`
             : "";
         lines.push(
-          `- ${variant.id} · ${guard}${count > 1 ? ` ×${count}` : ""}: ${JSON.stringify(landing.landed)} (${[disposition, ...notes(entry, landing.landedScore)].join("; ")})${proposed}`
+          `- ${variant.id}${count > 1 ? ` ×${count}` : ""}: ${JSON.stringify(landing.landed)} (${[disposition, ...notes(entry, landing.landedScore)].join("; ")})${proposed}`
         );
       }
     }
@@ -902,33 +801,52 @@ export function inputHash(entry: CleanupCase): string {
   return contentHash(JSON.stringify(entry.session ? { sent, session: entry.session } : sent));
 }
 
-// A saved run scored again with today's references and checks. A passage the
-// corpus no longer has, or no longer sends exactly as it did, can't be: its
-// replies answered a different input. Those are left out and named.
+/**
+ * A run as it was saved. Schema 3 held each reply landed under every guard the
+ * run named, beside those guards and the hand-written cleanups they refused; a
+ * rescore keeps none of that and lands each reply once.
+ */
+type SavedTrial = Omit<Trial, "landing"> & {
+  landing?: Landing;
+  landings?: Record<string, Landing>;
+};
+type SavedRun = Omit<RunRecord, "trials"> & {
+  trials: SavedTrial[];
+  guards?: unknown;
+  adversarial?: unknown;
+};
+
+// A saved run scored again with today's references and checks, its replies
+// landed as production lands them now. A passage the corpus no longer has, or
+// no longer sends exactly as it did, can't be: its replies answered a
+// different input. Those are left out and named.
 export function rescore(
   file: string,
-  guardNames: string[] | null = null,
   today: readonly CleanupCase[] = CLEANUP_CORPUS
 ): { run: RunRecord; corpus: CleanupCase[] } {
-  const run = JSON.parse(readFileSync(file, "utf8")) as RunRecord;
-  if (run.schemaVersion !== VOICE_CLEANUP_SCHEMA_VERSION) {
+  const {
+    guards: _guards,
+    adversarial: _adversarial,
+    ...saved
+  } = JSON.parse(readFileSync(file, "utf8")) as SavedRun;
+  if (!VOICE_CLEANUP_READABLE_SCHEMAS.includes(saved.schemaVersion)) {
     throw new Error(
-      `${file}: schema ${run.schemaVersion}, this script reads ${VOICE_CLEANUP_SCHEMA_VERSION}`
+      `${file}: schema ${saved.schemaVersion}, this script reads ${VOICE_CLEANUP_READABLE_SCHEMAS.join(" and ")}`
     );
   }
   const current = new Map(today.map((entry) => [entry.id, entry]));
   const corpus: CleanupCase[] = [];
-  run.rescoreExclusions = [];
-  for (const saved of run.corpus) {
-    const entry = current.get(saved.id);
+  const rescoreExclusions: NonNullable<RunRecord["rescoreExclusions"]> = [];
+  for (const passage of saved.corpus) {
+    const entry = current.get(passage.id);
     const reason = !entry
       ? "removed"
-      : inputHash(entry) !== saved.inputHash
+      : inputHash(entry) !== passage.inputHash
         ? "input changed"
         : null;
     if (reason) {
-      const trials = run.trials.filter((trial) => trial.caseId === saved.id).length;
-      run.rescoreExclusions.push({ id: saved.id, reason, trials });
+      const trials = saved.trials.filter((trial) => trial.caseId === passage.id).length;
+      rescoreExclusions.push({ id: passage.id, reason, trials });
     } else {
       corpus.push(entry!);
     }
@@ -939,37 +857,36 @@ export function rescore(
   if (problems.length > 0) {
     throw new Error(`the corpus has problems:\n  ${problems.join("\n  ")}`);
   }
-  // Guards named now are today's; otherwise the run's own, as it saved them.
-  if (guardNames) {
-    run.guards = Object.fromEntries(guardNames.map((name) => [name, GUARD_VARIANTS[name]!]));
-  }
   const kept = new Set(corpus.map((entry) => entry.id));
-  run.trials = run.trials
+  const vocabulary = vocabularyOf(saved.profile);
+  const trials = saved.trials
     .filter((trial) => kept.has(trial.caseId))
-    .map((trial) => {
+    .map(({ landings, ...trial }): Trial => {
       const entry = current.get(trial.caseId)!;
-      const noReply = Object.values(trial.landings)[0]?.disposition ?? "failed";
+      // All a saved landing still says is whether a request with no reply
+      // failed or was skipped; every reply lands again.
+      const recorded = trial.landing ?? Object.values(landings ?? {})[0];
       const proposal = proposalText(entry, trial.reply);
       return {
         ...trial,
         proposal,
         proposalScore: scoreText(entry, proposal),
-        landings: Object.fromEntries(
-          Object.entries(run.guards).map(([name, guard]) => [
-            name,
-            landUnder(
-              entry,
-              trial.reply as VoiceCorrectionProposal | undefined,
-              guard.limits,
-              noReply,
-              vocabularyOf(run.profile)
-            ),
-          ])
+        landing: land(
+          entry,
+          trial.reply as VoiceCorrectionProposal | undefined,
+          recorded?.disposition ?? "failed",
+          vocabulary
         ),
       };
     });
-  run.scoringVersion = VOICE_CLEANUP_SCORING_VERSION;
-  run.adversarial = landAdversarial(run.guards, corpus, vocabularyOf(run.profile));
+  const run: RunRecord = {
+    ...saved,
+    schemaVersion: VOICE_CLEANUP_SCHEMA_VERSION,
+    scoringVersion: VOICE_CLEANUP_SCORING_VERSION,
+    rescoreExclusions,
+    trials,
+    summaries: [],
+  };
   run.summaries = summarise(run, corpus);
   return { run, corpus };
 }
@@ -988,7 +905,7 @@ async function main(): Promise<number> {
   }
 
   if (options.rescore) {
-    const { run, corpus } = rescore(options.rescore, options.guards);
+    const { run, corpus } = rescore(options.rescore);
     for (const excluded of run.rescoreExclusions ?? []) {
       console.error(`[voice-cleanup] left out ${excluded.id}: ${excluded.reason}`);
     }
@@ -1034,7 +951,6 @@ async function main(): Promise<number> {
   const markdownPath = jsonPath.replace(/\.json$/, ".md");
 
   const profile = profileFor(options);
-  const guards = options.guards ?? ["v11", "production"];
   const run: RunRecord = {
     schemaVersion: VOICE_CLEANUP_SCHEMA_VERSION,
     scoringVersion: VOICE_CLEANUP_SCORING_VERSION,
@@ -1062,7 +978,6 @@ async function main(): Promise<number> {
         ];
       })
     ),
-    guards: Object.fromEntries(guards.map((name) => [name, GUARD_VARIANTS[name]!])),
     profile,
     corpusHash: contentHash(JSON.stringify(corpus)),
     corpus: corpus.map((entry) => ({
@@ -1075,13 +990,11 @@ async function main(): Promise<number> {
       ...(entry.session ? { session: entry.session } : {}),
     })),
     parityMisses: 0,
-    adversarial: [],
     prices: MODEL_PRICES,
     predictionProbes: [],
     trials: [],
     summaries: [],
   };
-  run.adversarial = landAdversarial(run.guards, corpus, vocabularyOf(profile));
   // Written whole and renamed into place after every request, so an
   // interrupted run keeps every reply it paid for.
   const save = () => {
@@ -1152,34 +1065,26 @@ async function main(): Promise<number> {
           onText
         );
         const totalMs = performance.now() - started;
-        run.trials.push(
-          toTrial(
-            entry,
-            variant,
-            repeat,
-            result,
-            guards,
-            vocabularyOf(profile),
-            totalMs,
-            firstTextAt
-          )
-        );
-        // The replay must land a reply exactly as the service just did: the
-        // same text, disposition and reason, through the path the guards use.
-        const replayed = landUnder(
+        const trial = toTrial(
           entry,
-          result.proposal,
-          CORRECTION_GUARD_LIMITS,
-          withoutReply(result),
-          vocabularyOf(profile)
+          variant,
+          repeat,
+          result,
+          vocabularyOf(profile),
+          totalMs,
+          firstTextAt
         );
+        run.trials.push(trial);
+        // The trial lands the reply as a rescore will, which must be exactly
+        // what the service just landed: the same text, disposition and reason.
+        const { landing } = trial;
         if (
-          replayed.landed !== result.confirmedText ||
-          replayed.disposition !== dispositionOf(result) ||
-          (replayed.rejectReason ?? null) !== (result.rejected?.reason ?? null)
+          landing.landed !== result.confirmedText ||
+          landing.disposition !== dispositionOf(result) ||
+          (landing.rejectReason ?? null) !== (result.rejected?.reason ?? null)
         ) {
           run.parityMisses++;
-          console.error(`[voice-cleanup] ${entry.id}: the guard replay landed it differently`);
+          console.error(`[voice-cleanup] ${entry.id}: the replay landed it differently`);
         }
         done++;
         save();

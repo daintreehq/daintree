@@ -126,8 +126,3 @@ export interface ProtectedRange {
 export function findProtectedRanges(text: string): ProtectedRange[] {
   return scanProtectedSpans(text).map(({ start, end }) => ({ start, end }));
 }
-
-/** Every protected span in `text`, in order, with surrounding prose punctuation trimmed. */
-export function extractProtectedSpans(text: string): string[] {
-  return scanProtectedSpans(text).map((span) => span.text);
-}

@@ -25,17 +25,21 @@ import {
   type VoiceStartResult,
   type VoiceTranscriptionEvent,
 } from "./TranscriptionProvider.js";
+import {
+  resolveGrokTranscriptionTuning,
+  type GrokTranscriptionTuning,
+} from "./grokTranscriptionTuning.js";
 
 const P = "[VoiceTranscription:grok]";
 
 const GROK_BASE_URL = process.env.DAINTREE_GROK_WS_URL ?? "wss://api.x.ai/v1/stt";
 const GROK_MODEL = "grok-voice-transcribe-2.0";
-// Words scored below this reach cleanup as unsure. xAI publishes no guidance
-// on what its scores mean, so this is Deepgram's cut-off.
+// Words scored below this would reach cleanup as unsure. The streaming API
+// sends no word confidence (only `text`, `start`, `end`; batch transcription
+// scores words, streaming doesn't), so no Grok word is ever flagged: this is
+// Deepgram's cut-off, kept for if xAI starts scoring streamed words, and to be
+// measured before it is trusted.
 const UNCERTAIN_BELOW = 0.65;
-// Deepgram's endpoint, so a spoken "send it" gets the same settle in the
-// handler. xAI's default is 400.
-const ENDPOINTING_MS = 300;
 // `format` (inverse text normalisation) needs an explicit language, and xAI
 // lists only these for it.
 const FORMAT_LANGUAGES = new Set([
@@ -185,19 +189,23 @@ function keytermsForAttempt(sanitized: readonly string[], attempt: KeytermAttemp
 }
 
 /** Build the streaming URL. PCM at 24kHz matches the renderer's capture rate. */
-function buildUrl(settings: VoiceInputSettings, keyterms: readonly string[]): string {
+function buildUrl(
+  settings: VoiceInputSettings,
+  keyterms: readonly string[],
+  tuning: Readonly<GrokTranscriptionTuning>
+): string {
   const params = new URLSearchParams({
     model: GROK_MODEL,
     encoding: "pcm",
     sample_rate: String(AUDIO_SAMPLE_RATE),
     interim_results: "true",
-    endpointing: String(ENDPOINTING_MS),
+    endpointing: String(tuning.endpointingMs),
   });
   // Left out, the server detects the language itself.
   const language = normalizeVoiceLanguage(settings.language);
   if (language !== VOICE_LANGUAGE_AUTO) {
     params.set("language", language);
-    if (FORMAT_LANGUAGES.has(language)) params.set("format", "true");
+    if (tuning.format && FORMAT_LANGUAGES.has(language)) params.set("format", "true");
   }
   for (const term of keyterms) {
     params.append("keyterm", term);
@@ -345,6 +353,11 @@ function chunksNotRestated(
 
 export class GrokTranscriptionProvider implements TranscriptionProvider {
   readonly hasServerVAD = true;
+  private readonly tuning: Readonly<GrokTranscriptionTuning>;
+
+  constructor(tuning: Partial<GrokTranscriptionTuning> = {}) {
+    this.tuning = resolveGrokTranscriptionTuning(tuning);
+  }
 
   private connection: WebSocket | null = null;
   private sessionId = 0;
@@ -556,7 +569,7 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
     this.transcribedSinceReady = false;
     const attempt = this.keytermAttempt;
     const urlKeyterms = keytermsForAttempt(sanitized, attempt);
-    const url = buildUrl(settings, urlKeyterms);
+    const url = buildUrl(settings, urlKeyterms, this.tuning);
     let connection: WebSocket;
     try {
       connection = new WebSocket(url, {

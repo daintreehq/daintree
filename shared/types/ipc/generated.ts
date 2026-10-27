@@ -4032,6 +4032,24 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../voice.js").VoiceLiveSessionUpdate;
   };
+  "voice-input:prefetch-corrections": {
+    args: [
+      payload: {
+        sessionId: string;
+        requests: {
+          rawText: string;
+          terminalId?: string | undefined;
+          sessionId?: string | undefined;
+          outsideView?: true | undefined;
+          recentContext?: string[] | undefined;
+          recentPrompts?: string[] | undefined;
+          startsPrompt?: boolean | undefined;
+          uncertain?: { from: number; to: number }[] | undefined;
+        }[];
+      },
+    ];
+    result: void;
+  };
   "voice-input:reveal-live": {
     args: [sessionId: string];
     result: boolean;

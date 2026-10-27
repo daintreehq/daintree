@@ -474,6 +474,15 @@ function pickTopNaturalLanguageMatches(
 }
 
 export class FileSearchService {
+  /** Every file under `cwd`, from the same cached listing searches use; empty on failure. */
+  async listFiles(cwd: string): Promise<readonly string[]> {
+    try {
+      return (await this.getFiles(path.resolve(cwd))).files;
+    } catch {
+      return [];
+    }
+  }
+
   async search(payload: { cwd: string; query: string; limit?: number }): Promise<string[]> {
     try {
       const resolvedCwd = path.resolve(payload.cwd);

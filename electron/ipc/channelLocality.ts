@@ -1174,6 +1174,7 @@ export const CHANNEL_LOCALITY = {
   "voice-input:live-session": "shell",
   "voice-input:open-mic-settings": "shell",
   "voice-input:paragraph-boundary": "shell",
+  "voice-input:prefetch-corrections": "shell",
   "voice-input:request-mic-permission": "shell",
   "voice-input:reveal-live": "shell",
   "voice-input:reveal-requested": "shell",

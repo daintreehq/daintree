@@ -5,7 +5,6 @@ import {
   buildVoiceCommandVocabulary,
   EMPTY_VOICE_COMMAND_VOCABULARY,
 } from "../../../shared/utils/voiceAgentCommands.js";
-import { CORRECTION_GUARD_LIMITS } from "../voiceCorrectionGuard.js";
 import { correctionOutcome, type VoiceCorrectionProposal } from "../voiceCorrectionOutcome.js";
 
 const checks = { vocabulary: EMPTY_VOICE_COMMAND_VOCABULARY, startsPrompt: true };
@@ -49,8 +48,20 @@ describe("correctionOutcome", () => {
     });
   });
 
-  it("refuses a low-confidence cleanup before the guards see it", () => {
-    // Over the edit budget too: confidence is the reason given.
+  it("lands a cleanup of rambling speech however much it takes out, a repeated negation included", () => {
+    // A dictation that once lost its whole cleanup to a word-count guard.
+    const raw =
+      "So this is a test of, like what the whole system is. Even kind of, you know. Capable of. So, yeah, you just. Yeah, I mean, I'm, I'm not quite Yeah, I'm not quite sure what I'm actually saying here, but I want you to just Yeah, just go ahead.";
+    const cleaned =
+      "This is a test of what the whole system is capable of. I'm not quite sure what I'm saying here, but go ahead.";
+    expect(correctionOutcome(raw, replace(cleaned), checks)).toEqual({
+      action: "replace",
+      confirmedText: cleaned,
+      verdict: "replaced",
+    });
+  });
+
+  it("refuses a cleanup the model itself marked low-confidence", () => {
     expect(
       correctionOutcome("the promise rejects when it times out", replace("Done.", "low"), checks)
     ).toMatchObject({
@@ -61,17 +72,7 @@ describe("correctionOutcome", () => {
     });
   });
 
-  it("refuses what the guard refuses, with its reason", () => {
-    expect(
-      correctionOutcome("don't delete the branch yet", replace("Delete the branch yet."), checks)
-    ).toMatchObject({
-      confirmedText: "don't delete the branch yet",
-      verdict: "rejected_negation",
-      rejected: { reason: "negation", candidate: "Delete the branch yet." },
-    });
-  });
-
-  it("checks a command the cleanup wrote before confidence and the guards", () => {
+  it("checks a command the cleanup wrote before its confidence", () => {
     expect(
       correctionOutcome(
         "can you review the auth module",
@@ -92,17 +93,5 @@ describe("correctionOutcome", () => {
         startsPrompt: true,
       })
     ).toMatchObject({ action: "replace", confirmedText: "/review on auth" });
-  });
-
-  it("lands under whatever edit budget it's given", () => {
-    const raw = "check the logs on the staging box and the traces and the metrics";
-    const shorter = "Check the logs on the staging box.";
-    expect(correctionOutcome(raw, replace(shorter), checks).rejected?.reason).toBe("edit_size");
-    expect(
-      correctionOutcome(raw, replace(shorter), {
-        ...checks,
-        limits: { ...CORRECTION_GUARD_LIMITS, removedRatio: 0.5 },
-      }).confirmedText
-    ).toBe(shorter);
   });
 });

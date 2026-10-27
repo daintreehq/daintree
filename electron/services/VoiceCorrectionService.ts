@@ -20,7 +20,7 @@ import type { VoiceCorrectionVerdict } from "../../shared/types/voiceSessionSumm
 import { voiceErrorLogFields } from "../../shared/utils/voiceLogFields.js";
 import { buildOpenAIHeaders } from "../../shared/utils/openaiHeaders.js";
 import { createTimeoutSignal, withTimeoutSignal } from "../../shared/utils/timeoutSignal.js";
-import { validateRewrite } from "./voiceCorrectionGuard.js";
+import { validateRewrite } from "./voiceRewriteGuard.js";
 import {
   correctionOutcome,
   type VoiceCorrectionProposal,
@@ -61,7 +61,7 @@ const REWRITE_CACHE_PREFIX = "voice-rewrite-v1";
 const MIN_REWRITE_TIMEOUT_MS = 10000;
 const FILE_LINK_CACHE_PREFIX = "voice-file-link-v2";
 const PROMPT_TAG_OPEN_RE =
-  /<(?=\/?(?:recent_prompts|terminal_output|target|job|confirmed_history|uncertain)\b)/gi;
+  /<(?=\/?(?:recent_prompts|terminal_output|code_names|target|job|confirmed_history|uncertain)\b)/gi;
 const OPENAI_ORIGIN = "https://api.openai.com/";
 const RESPONSES_URL = "https://api.openai.com/v1/responses";
 // OpenAI keeps an unused prefix cached for five to ten minutes. Checked once a
@@ -201,6 +201,8 @@ export interface VoiceCorrectionRequest {
   recentPrompts?: string[];
   /** What the dictated terminal recently printed, redacted and bounded; evidence for what was heard, never text to correct. */
   terminalOutput?: string;
+  /** Code names from the project the passage spells out word by word (`matchCodeNames`); evidence, never text to add. */
+  codeNames?: string[];
   reason?: string;
   segmentCount?: number;
   /** The words in `rawText` the recogniser was unsure of; transcript content, so never logged. */
@@ -614,6 +616,15 @@ export class VoiceCorrectionService {
     );
     parts.push(`<target>\n${targetText}\n</target>`);
 
+    if (request.codeNames && request.codeNames.length > 0) {
+      // Names come from the project's files, so each is one quoted line that
+      // can't close the block or open another.
+      const names = request.codeNames
+        .map((name) => JSON.stringify(name).replace(PROMPT_TAG_OPEN_RE, "‹"))
+        .join("\n");
+      parts.push(`<code_names>\n${names}\n</code_names>`);
+    }
+
     if (request.terminalOutput?.trim()) {
       // Output the terminal printed must not be able to close its own block or
       // open a <target> of its own.
@@ -879,7 +890,14 @@ export class VoiceCorrectionService {
     onText: ((text: string) => void) | undefined
   ): Promise<VoiceCorrectionProposal> {
     const systemPrompt = this.buildSystemPrompt(settings);
-    const userMessage = this.buildUserMessage(request, settings.model);
+    // Code names go only to rules that say what they are: Luna's, and the
+    // cleanup benchmark's frozen ones, never learned of them. Read from the
+    // rules alone, so custom instructions can't switch them on.
+    const rules = settings.instructions ?? correctionInstructionsFor(settings.model);
+    const userMessage = this.buildUserMessage(
+      rules.core.includes("<code_names>") ? request : { ...request, codeNames: undefined },
+      settings.model
+    );
     const recentPromptsLen = totalLength(request.recentPrompts);
     logDebug(`${P} Calling Responses API`, {
       model: settings.model,
@@ -887,6 +905,7 @@ export class VoiceCorrectionService {
       recentPromptCount: request.recentPrompts?.length ?? 0,
       recentPromptsLen,
       terminalOutputLen: request.terminalOutput?.length ?? 0,
+      codeNameCount: request.codeNames?.length ?? 0,
       uncertainCount: request.uncertain?.length ?? 0,
       reason: request.reason ?? "unspecified",
       segmentCount: request.segmentCount ?? 0,

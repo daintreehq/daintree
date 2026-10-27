@@ -448,6 +448,12 @@ export const REGISTRY: Record<string, Command> = {
     kind: "diagnostic",
     runner: tsxScript("voice-tuning.ts"),
   },
+  "voice-pipeline": {
+    summary:
+      "Replay clips in several voices through the real Grok provider and Terra cleanup: WER and exact prompts raw and cleaned, stop-to-settled wait, cost (needs GROK_API_KEY, OPENAI_API_KEY)",
+    kind: "diagnostic",
+    runner: tsxScript("voice-pipeline.ts"),
+  },
   analyze: {
     summary: "Bundle-size visualizer build (ANALYZE=true vite build)",
     kind: "diagnostic",

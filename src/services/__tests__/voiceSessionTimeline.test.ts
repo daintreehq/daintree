@@ -191,11 +191,11 @@ describe("VoiceSessionTimeline", () => {
     const t = timeline();
     t.beginCorrection();
     t.finish("user");
-    t.endCorrection("discarded", countPassageFates(["applied", "rejected_number", "unlanded"]));
+    t.endCorrection("discarded", countPassageFates(["applied", "rejected_command", "unlanded"]));
     expect(logged().correctionPassages).toMatchObject({
       sent: 3,
       applied: 1,
-      rejectedNumber: 1,
+      rejectedCommand: 1,
       unlanded: 1,
     });
   });

@@ -40,6 +40,10 @@ const shared = vi.hoisted(() => ({
   currentProject: null as null | { name: string; path: string },
   currentView: { sent: [] as Array<{ channel: string; payload: unknown }> },
   dictionary: [] as unknown[],
+  /** What the project's file listing returns, and every cleanup request that went out. */
+  listFiles: vi.fn<(cwd: string) => Promise<readonly string[]>>(),
+  correctionModel: undefined as string | undefined,
+  corrected: [] as Array<{ rawText: string; codeNames?: string[] }>,
   detect: vi.fn<(text: string, settings: unknown, signal?: AbortSignal) => Promise<Detected>>(),
   resolve:
     vi.fn<
@@ -80,7 +84,15 @@ vi.mock("../../../services/VoiceCorrectionService.js", () => ({
     this.warm = () => Promise.resolve();
     this.preconnect = () => {};
     this.detectFileLinkTokens = shared.detect;
+    this.correct = (request: { rawText: string; codeNames?: string[] }) => {
+      shared.corrected.push(request);
+      return Promise.resolve({ action: "no_change", confirmedText: request.rawText });
+    };
   },
+}));
+
+vi.mock("../../../services/FileSearchService.js", () => ({
+  fileSearchService: { listFiles: shared.listFiles },
 }));
 
 vi.mock("../../../services/VoiceFileLinkResolver.js", () => ({
@@ -117,6 +129,7 @@ vi.mock("../../../store.js", () => ({
             paragraphingStrategy: "spoken-command",
             language: "en",
             dictionary: shared.dictionary,
+            ...(shared.correctionModel ? { correctionModel: shared.correctionModel } : {}),
           }
         : undefined
     ),
@@ -226,6 +239,9 @@ describe("voiceInput — spoken file references", () => {
     shared.resolve.mockReset();
     shared.currentView.sent = [];
     shared.dictionary = [];
+    shared.corrected = [];
+    shared.correctionModel = undefined;
+    shared.listFiles.mockReset().mockResolvedValue([]);
     owner = makeSender();
     // The starting view's project, where references resolve without a terminal.
     shared.projects.set(owner.id, "project-a");
@@ -252,6 +268,69 @@ describe("voiceInput — spoken file references", () => {
   afterEach(() => {
     cleanup?.();
     vi.useRealTimers();
+  });
+
+  describe("code names", () => {
+    const TERMINAL = "term-1";
+    const correct = (rawText: string) =>
+      getHandler(CHANNELS.VOICE_INPUT_CORRECT)(
+        { sender: owner },
+        { rawText, sessionId: "a", terminalId: TERMINAL }
+      );
+    // A terminal main tracks, owned by `projectId`.
+    const ownedBy = (projectId: string) => {
+      ptyClient.hasTerminal.mockReturnValue(true);
+      ptyClient.getTerminalProjectId.mockReturnValue(projectId);
+    };
+
+    it("tells cleanup the code names a passage spells out, from its repository's files", async () => {
+      ownedBy("project-a");
+      shared.listFiles.mockResolvedValue([
+        "src/services/VoiceRecordingService.ts",
+        "src/styles/dark-mode.css",
+      ]);
+      await start(owner, "a", TERMINAL);
+      await stop(owner, "a");
+      await correct("test the voice recording service in dark mode");
+
+      expect(shared.listFiles).toHaveBeenCalledWith("/repo/a");
+      expect(shared.corrected.at(-1)?.codeNames).toEqual(["VoiceRecordingService"]);
+    });
+
+    it("reads nothing for a terminal another project owns", async () => {
+      ownedBy("project-b");
+      shared.projectPaths.set("project-b", "/repo/b");
+      shared.listFiles.mockResolvedValue(["src/services/VoiceRecordingService.ts"]);
+      await start(owner, "a", TERMINAL);
+      await stop(owner, "a");
+      await correct("test the voice recording service");
+
+      expect(shared.listFiles).not.toHaveBeenCalled();
+      expect(shared.corrected[0]).not.toHaveProperty("codeNames");
+    });
+
+    it("reads nothing for a model whose rules don't know code names", async () => {
+      ownedBy("project-a");
+      shared.correctionModel = "gpt-6-luna";
+      shared.listFiles.mockResolvedValue(["src/services/VoiceRecordingService.ts"]);
+      await start(owner, "a", TERMINAL);
+      await stop(owner, "a");
+      await correct("test the voice recording service");
+
+      expect(shared.listFiles).not.toHaveBeenCalled();
+      expect(shared.corrected[0]).not.toHaveProperty("codeNames");
+    });
+
+    it("cleans up without them when the listing isn't ready in time", async () => {
+      ownedBy("project-a");
+      shared.listFiles.mockReturnValue(new Promise(() => {}));
+      await start(owner, "a", TERMINAL);
+      await stop(owner, "a");
+      await correct("test the voice recording service");
+
+      expect(shared.corrected).toHaveLength(1);
+      expect(shared.corrected[0]).not.toHaveProperty("codeNames");
+    });
   });
 
   it("resolves a reference in the final utterance before its stop returns", async () => {

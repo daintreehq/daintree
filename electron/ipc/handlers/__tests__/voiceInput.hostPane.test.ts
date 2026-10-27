@@ -427,6 +427,43 @@ describe("voiceInput — dictating into a host's pane", () => {
     expectNoLocalReads();
   });
 
+  describe("a cleanup a pause prefetched", () => {
+    const passage = { rawText: "run the tests", terminalId: TERMINAL, sessionId: "paused" };
+    const prefetch = () =>
+      getHandler(CHANNELS.VOICE_INPUT_PREFETCH_CORRECTIONS)(
+        { sender: view },
+        { sessionId: "paused", requests: [passage] }
+      );
+    const askAtStop = () =>
+      getHandler(CHANNELS.VOICE_INPUT_CORRECT)({ sender: view }, { ...passage, streamId: "s1" });
+
+    it("is the stop's when the host shows what it showed at the pause", async () => {
+      await start(view, TERMINAL, "paused");
+      await prefetch();
+      await vi.waitFor(() => expect(shared.correctCalls).toHaveLength(1));
+      await stop(view, "paused");
+
+      await expect(askAtStop()).resolves.toMatchObject({ correctedText: "run the tests" });
+      expect(shared.correctCalls).toHaveLength(1);
+    });
+
+    it("gives way to the stop's own when the host printed more since", async () => {
+      reader.readCorrection
+        .mockResolvedValueOnce({ ...CORRECTION, terminalOutput: "while dictating" })
+        .mockResolvedValueOnce({ ...CORRECTION, terminalOutput: "as it stopped" });
+      await start(view, TERMINAL, "paused");
+      await prefetch();
+      await vi.waitFor(() => expect(shared.correctCalls).toHaveLength(1));
+      await stop(view, "paused");
+      await askAtStop();
+
+      expect(shared.correctCalls.map(({ request }) => request.terminalOutput)).toEqual([
+        "while dictating",
+        "as it stopped",
+      ]);
+    });
+  });
+
   it("drops a prepared dictation's commands once the host's agent has gone by the stop", async () => {
     reader.readCorrection.mockResolvedValueOnce({ ...CORRECTION, commandTarget: null });
     await start(view, TERMINAL, "agent-gone");
