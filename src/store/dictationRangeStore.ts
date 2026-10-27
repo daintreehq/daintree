@@ -43,6 +43,11 @@ export interface DictationUtterance {
   uncertain?: DictationTextSpan[];
   /** The same words in `heard`, relative to its start. */
   heardUncertain?: DictationTextSpan[];
+  /**
+   * The selection these words replaced. It left the draft with them, so a
+   * cancel has to put it back where they stood.
+   */
+  replaced?: string;
 }
 
 /**
@@ -116,6 +121,8 @@ interface DictationRangeState {
       uncertain?: DictationTextSpan[];
       /** Relative to the start of `heard`. */
       heardUncertain?: DictationTextSpan[];
+      /** The selection the words replaced. */
+      replaced?: string;
     }
   ) => void;
   /** Records a paragraph break the session just wrote into the draft. */
@@ -252,22 +259,40 @@ function mapRecord(record: DictationRecord, change: TextChange): DictationRecord
   };
 }
 
+/** A stretch of the draft the dictation wrote, as it comes back out. */
+export interface DictatedSpan extends DictationTextSpan {
+  /** The selection the span's words replaced, for the cancel to put in their place. */
+  restore?: string;
+}
+
 /**
  * Every span the dictation put in the draft, last first, for taking it back
  * out: each utterance with its separator, and each paragraph break. Text typed
  * between them stays where it is. Null once any of them has been edited,
  * because removing them would take the user's edits with them.
  *
+ * Words that replaced a selection carry it as `restore`: taking them out means
+ * putting that back, or the selection would be lost along with them.
+ *
  * The space an utterance was given ahead of the text after it goes too while
  * it is untouched and still right after something removed, as a scratch takes
  * it, so dictation at the caret leaves the text around it as it was. Edited, or
  * with text typed up against the words, it stays: it is no longer only ours.
  */
-export function dictatedSpans(record: DictationRecord, draft: string): DictationTextSpan[] | null {
+export function dictatedSpans(record: DictationRecord, draft: string): DictatedSpan[] | null {
   // An insertion holds its utterance's words, so an edit to them flags it too.
-  const pieces = [...record.utterances.map((u) => u.insertion), ...record.breaks];
-  if (pieces.some((piece) => piece.edited)) return null;
-  const spans = pieces.map(({ from, to }) => ({ from, to })).sort((a, b) => b.from - a.from);
+  const pieces = [
+    ...record.utterances.map(({ insertion, replaced }) => ({ insertion, replaced })),
+    ...record.breaks.map((insertion) => ({ insertion, replaced: undefined })),
+  ];
+  if (pieces.some(({ insertion }) => insertion.edited)) return null;
+  const spans: DictatedSpan[] = pieces
+    .map(({ insertion: { from, to }, replaced }) => ({
+      from,
+      to,
+      ...(replaced ? { restore: replaced } : {}),
+    }))
+    .sort((a, b) => b.from - a.from);
   for (let i = 0; i < spans.length; i++) {
     const span = spans[i]!;
     const later = spans[i - 1];
@@ -392,7 +417,7 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
 
   recordUtterance: (
     target,
-    { insertion, words, separatorAfter, transcriptId, heard, uncertain, heardUncertain }
+    { insertion, words, separatorAfter, transcriptId, heard, uncertain, heardUncertain, replaced }
   ) =>
     set((state) => ({
       drafts: withInsertion(state.drafts, target, insertion, {
@@ -406,6 +431,7 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
         ...(heard !== undefined && heardUncertain && heardUncertain.length > 0
           ? { heardUncertain }
           : {}),
+        ...(replaced ? { replaced } : {}),
       }),
     })),
 
@@ -504,6 +530,7 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
     // A stop has waited for its transcripts' file references, so this is only
     // for one still on its way, which can then land in the merged words.
     const transcriptId = run.find((u) => u.transcriptId)?.transcriptId;
+    const replaced = run.find((u) => u.replaced)?.replaced;
     const from = run[0]!.range.from;
     const to = run[run.length - 1]!.range.to;
     const inputStore = useTerminalInputStore.getState();
@@ -538,6 +565,7 @@ export const useDictationRangeStore = create<DictationRangeState>()((set, get) =
       ...(heard !== text && uncertain && uncertain.heard.length > 0
         ? { heardUncertain: uncertain.heard }
         : {}),
+      ...(replaced ? { replaced } : {}),
     };
     const delta = end - to;
     const rewritten: DictationRecord = {

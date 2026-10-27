@@ -19,6 +19,7 @@ import { useTerminalInputStore } from "@/store/terminalInputStore";
 import {
   dictatedSpans,
   useDictationRangeStore,
+  type DictatedSpan,
   type DictationDraftTarget,
   type DictationRecord,
   type DictationTextSpan,
@@ -241,7 +242,7 @@ function writeVoiceWords(
     projectId,
     sessionId,
     plan,
-    (target, { insertion, words, separatorAfter }) =>
+    (target, { insertion, words, separatorAfter, replaced }) =>
       useDictationRangeStore.getState().recordUtterance(target, {
         insertion,
         words,
@@ -250,6 +251,7 @@ function writeVoiceWords(
         heard,
         uncertain: uncertain?.text,
         heardUncertain: uncertain?.heard,
+        replaced,
       })
   );
   return plan;
@@ -366,13 +368,43 @@ function findDictation(
   );
 }
 
-/** Where `offset` ends up once each span is taken out; one inside a span goes to its start. */
-function offsetAfterRemoving(offset: number, spans: DictationTextSpan[]): number {
+/**
+ * Where `offset` ends up once each span is taken out, or swapped for the
+ * selection it replaced; one inside a span goes to its start.
+ */
+function offsetAfterRemoving(offset: number, spans: DictatedSpan[]): number {
   let removed = 0;
-  for (const { from, to } of spans) {
-    if (from < offset) removed += Math.min(offset, to) - from;
+  for (const { from, to, restore } of spans) {
+    if (from >= offset) continue;
+    removed += Math.min(offset, to) - from - (offset >= to ? (restore?.length ?? 0) : 0);
   }
   return offset - removed;
+}
+
+/**
+ * Where the selection the dictation replaced is after a cancel puts it back,
+ * unless the caret has left the dictation for somewhere of its own. A caret
+ * collapsed at the start of a span is the user's: dictation leaves it after
+ * its words, and typing ahead of them is what leaves it there. `applied` are
+ * the spans that changed the draft, which the offsets follow.
+ */
+function restoredSelection(
+  spans: DictatedSpan[],
+  applied: DictatedSpan[],
+  caret: { from: number; to: number } | null
+): { from: number; to: number } | null {
+  const replaced = spans.find((span) => span.restore);
+  if (!replaced) return null;
+  if (caret) {
+    const collapsed = caret.from === caret.to;
+    const onDictation = spans.some(
+      (span) =>
+        caret.from >= span.from && caret.to <= span.to && !(collapsed && caret.from === span.from)
+    );
+    if (!onDictation) return null;
+  }
+  const from = offsetAfterRemoving(replaced.from, applied);
+  return { from, to: from + replaced.restore!.length };
 }
 
 /** A stopped session's words, read once from its buffer for the recent-dictations history. */
@@ -1308,7 +1340,7 @@ class VoiceRecordingService {
   private async cancelDictation(
     target: VoiceRecordingTarget,
     record: DictationRecord | null,
-    spans: DictationTextSpan[]
+    spans: DictatedSpan[]
   ): Promise<void> {
     const sessionId = this.sessionId;
     if (sessionId && sessionId !== this.lastEndedSessionId) {
@@ -1337,27 +1369,35 @@ class VoiceRecordingService {
       // Each is written on its own and spelled out, so other sessions' ranges
       // and the text typed between ours follow what was actually removed, not
       // a diff's guess across the whole stretch.
+      // Words that were the selection leave the text as it is, so only the
+      // spans that change it are written.
+      const applied = spans.filter(
+        ({ from, to, restore = "" }) => draft.slice(from, to) !== restore
+      );
       let next = draft;
-      for (const { from, to } of spans) {
-        if (from === to) continue;
+      for (const { from, to, restore = "" } of applied) {
         const before = next;
-        next = before.slice(0, from) + before.slice(to);
+        next = before.slice(0, from) + restore + before.slice(to);
         useDictationRangeStore
           .getState()
-          .expectDraftChange(panelId, projectId, before, next, { from, to, insert: "" });
+          .expectDraftChange(panelId, projectId, before, next, { from, to, insert: restore });
         inputStore.setDraftInput(panelId, next, projectId);
       }
-      if (next !== draft) {
-        // The caret stays on the text it was in, wherever the removals left it.
-        if (caret) {
+      const reselect = restoredSelection(spans, applied, caret);
+      if (next !== draft || reselect) {
+        // The selection comes back where its words stood; any other caret
+        // stays on the text it was in, wherever the removals left it.
+        if (reselect) {
+          setPendingComposerSelection(draftKey, next, reselect);
+        } else if (caret) {
           setPendingComposerSelection(draftKey, next, {
-            from: offsetAfterRemoving(caret.from, spans),
-            to: offsetAfterRemoving(caret.to, spans),
+            from: offsetAfterRemoving(caret.from, applied),
+            to: offsetAfterRemoving(caret.to, applied),
           });
         }
         // Like a scratch, an edit rather than a send: the composer keeps its
         // undo history even when the cancel empties the draft.
-        recordScratchLanded(panelId, projectId, next);
+        if (next !== draft) recordScratchLanded(panelId, projectId, next);
         inputStore.bumpExternalDraftRevision({ keepsSelection: true });
       }
       useDictationRangeStore.getState().releaseDictation(record.id);

@@ -16,6 +16,8 @@ export interface VoiceInsertPlan {
   anchor: DictationTextSpan;
   /** The space put after the words so they don't run into the text after them, when one was. */
   separatorAfter?: DictationTextSpan;
+  /** The selection the write replaced, for the cancel that has to put it back. */
+  replaced?: string;
 }
 
 // Text that hugs the word before it, so dictation landing just ahead of it
@@ -51,6 +53,7 @@ export function planVoiceWords(
 ): VoiceInsertPlan {
   const { from, to } = insertionSpan(draft, anchor);
   const before = draft.slice(0, from);
+  const replaced = draft.slice(from, to);
   const after = draft.slice(to);
   const leading =
     before && !/\s$/.test(before) && !OPENS.test(before) && !HUGS_PREVIOUS.test(text) ? " " : "";
@@ -66,6 +69,7 @@ export function planVoiceWords(
     words: { from: wordsFrom, to: wordsTo },
     anchor: { from: wordsTo, to: wordsTo },
     ...(trailing ? { separatorAfter: { from: wordsTo, to: wordsTo + trailing.length } } : {}),
+    ...(replaced ? { replaced } : {}),
   };
 }
 

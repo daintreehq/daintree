@@ -27,6 +27,7 @@ import { useDictationRangeStore } from "@/store/dictationRangeStore";
 import { initBuiltInPanelKinds } from "@/panels/registry";
 import { recordCorrectionLanded, takeLandedCorrection } from "@/services/voiceCorrectionLanding";
 import { recordScratchLanded, takeScratchLanded } from "@/services/voiceScratchCommand";
+import { setPendingComposerSelection } from "@/lib/composerCaret";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
 import { HybridInputBar } from "../HybridInputBar";
 
@@ -272,5 +273,89 @@ describe("HybridInputBar after Escape cancels a dictation", () => {
 
     expect(view.state.doc.toString()).toBe("Hello there.");
     expect(draft()).toBe("Hello there.");
+  });
+});
+
+describe("HybridInputBar after Escape cancels a dictation over a selection (#14805)", () => {
+  /** A session whose first words replaced "old" in "Keep old text.", as the voice service records it. */
+  function recordWordsOverOld(words: string): void {
+    const voice = useVoiceRecordingStore.getState();
+    voice.beginSession({ panelId: "term-1" }, "session-1");
+    voice.setStatus("recording");
+    useDictationRangeStore.setState({ drafts: {} });
+    useDictationRangeStore.getState().recordUtterance(
+      { sessionId: "session-1", panelId: "term-1", projectId: undefined },
+      {
+        insertion: { from: 5, to: 5 + words.length },
+        words: { from: 5, to: 5 + words.length },
+        replaced: "old",
+      }
+    );
+  }
+  const selection = (view: EditorView) => {
+    const { from, to } = view.state.selection.main;
+    return { from, to };
+  };
+  const stubFocus = (view: EditorView, focused: boolean) =>
+    Object.defineProperty(view, "hasFocus", { configurable: true, get: () => focused });
+
+  it("selects the text it brings back in a composer that lost focus, and undo restores the dictation", async () => {
+    const { view } = await mount();
+    await writeDraft("Keep old text.");
+    // Selected while focused, then focus moved on: the tracker keeps publishing.
+    stubFocus(view, true);
+    await act(async () => {
+      view.dispatch({ selection: { anchor: 5, head: 8 } });
+    });
+    stubFocus(view, false);
+
+    // As the voice service writes the words over it: the caret follows them.
+    await act(async () => {
+      const inputs = useTerminalInputStore.getState();
+      setPendingComposerSelection("term-1", "Keep new text.", { from: 8, to: 8 });
+      inputs.setDraftInput("term-1", "Keep new text.");
+      inputs.bumpExternalDraftRevision({ keepsSelection: true });
+    });
+    recordWordsOverOld("new");
+    expect(view.hasFocus).toBe(false);
+    expect(selection(view)).toEqual({ from: 8, to: 8 });
+
+    await act(async () => {
+      expect(voiceRecordingService.handleEscape("term-1")).toBe(true);
+    });
+    expect(view.state.doc.toString()).toBe("Keep old text.");
+    expect(draft()).toBe("Keep old text.");
+    expect(selection(view)).toEqual({ from: 5, to: 8 });
+
+    await undo(view);
+
+    expect(view.state.doc.toString()).toBe("Keep new text.");
+    expect(draft()).toBe("Keep new text.");
+  });
+
+  it("selects the text it brings back in a composer nobody focused", async () => {
+    const { view } = await mount();
+    await writeDraft("Keep new text.");
+    recordWordsOverOld("new");
+
+    await act(async () => {
+      expect(voiceRecordingService.handleEscape("term-1")).toBe(true);
+    });
+
+    expect(view.state.doc.toString()).toBe("Keep old text.");
+    expect(selection(view)).toEqual({ from: 5, to: 8 });
+  });
+
+  it("selects the text again when the dictated word was the selected one", async () => {
+    const { view } = await mount();
+    await writeDraft("Keep old text.");
+    recordWordsOverOld("old");
+
+    await act(async () => {
+      expect(voiceRecordingService.handleEscape("term-1")).toBe(true);
+    });
+
+    expect(view.state.doc.toString()).toBe("Keep old text.");
+    expect(selection(view)).toEqual({ from: 5, to: 8 });
   });
 });
