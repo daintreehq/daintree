@@ -4368,7 +4368,7 @@ class VoiceRecordingService {
     if (voiceState.activeTarget?.panelId !== panelId) return;
     const stopping = voiceState.status === "finishing";
     if (stopping) {
-      if (!this.stopTakesSpokenSend || voiceState.pendingTarget) return;
+      if (!this.stopTakesSpokenSend || voiceState.pendingTarget || this.liveStartup()) return;
     } else if (voiceState.status !== "recording") {
       return;
     }

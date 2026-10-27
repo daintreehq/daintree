@@ -322,6 +322,22 @@ describe("VoiceRecordingService — spoken send (#14633)", () => {
       await finish();
     });
 
+    it("ignores the send once a retry has started the next dictation", async () => {
+      const { voiceRecordingService, stop, finish } = await stopping("key_release");
+      const handler = vi.fn();
+      voiceRecordingService.onSpokenSend(PANEL_ID, undefined, handler);
+      vi.spyOn(
+        voiceRecordingService as unknown as { liveStartup: () => unknown },
+        "liveStartup"
+      ).mockReturnValue({});
+
+      complete("fix the login bug", "item-a", true);
+
+      expect(handler).not.toHaveBeenCalled();
+      expect(stop).not.toHaveBeenCalled();
+      await finish();
+    });
+
     it("never stops a second time for a draft too short to send", async () => {
       const { voiceRecordingService, stop, finish } = await stopping("key_release");
       draftState.draft = "fix it";

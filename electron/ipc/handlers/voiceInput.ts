@@ -136,12 +136,12 @@ let servicePromise: Promise<VoiceTranscriptionService> | null = null;
 let correctionService: VoiceCorrectionService | null = null;
 
 // A completion ending in a spoken "send it", waiting to see whether the
-// speaker stays quiet. It goes out as a send, at once if dictation stops
-// first, as literal words when the speaker went on, or stripped with no send
-// when the provider failed first.
+// speaker stays quiet. It goes out as a send, as literal words when the
+// speaker went on, or stripped with no send when the provider failed first.
 type HeldSendOutcome = "send" | "literal" | "strip";
 interface HeldSend {
-  timer: ReturnType<typeof setTimeout>;
+  // Null while a stop drains: the drain's end, not a clock, confirms it.
+  timer: ReturnType<typeof setTimeout> | null;
   readonly release: (outcome: HeldSendOutcome) => void;
 }
 
@@ -336,7 +336,7 @@ function endSession(session: VoiceSession, reason: VoiceSessionEndReason): void 
   }
   // A stop or a dying provider has already let a held send's words through;
   // what is left belongs to a session nobody is dictating into any more.
-  if (session.heldSend) clearTimeout(session.heldSend.timer);
+  if (session.heldSend?.timer) clearTimeout(session.heldSend.timer);
   session.heldSend = null;
   session.utterance.clear();
   session.flushUtterance = null;
@@ -396,7 +396,7 @@ function releaseHeldSend(session: VoiceSession, outcome: HeldSendOutcome): void 
   const held = session.heldSend;
   if (!held) return;
   session.heldSend = null;
-  clearTimeout(held.timer);
+  if (held.timer) clearTimeout(held.timer);
   held.release(outcome);
 }
 
@@ -1019,21 +1019,29 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       // ended it chose the reason and owns the provider.
       if (session.ended) return { rawText: null };
       session.phase = "stopping";
-      // A stop is the end of speech a held send was waiting for (#14803). The
-      // renderer decides whether its stop takes the send.
-      releaseHeldSend(session, "send");
+      // A stop is the end of speech a held send waits for (#14803), but the
+      // drain can still turn up words the speaker went on with, which keep it
+      // literal. Whatever the drain leaves held is a send; the renderer decides
+      // whether its stop takes it.
+      const held = session.heldSend;
+      if (held?.timer) {
+        clearTimeout(held.timer);
+        held.timer = null;
+      }
       try {
         // Drain the transcription service first (waits for pending
         // transcriptions, fires remaining complete events) — the subscription
         // stays up until it has.
         await service?.stopGracefully();
       } catch (error) {
+        releaseHeldSend(session, "strip");
         session.flushUtterance?.("literal");
         endSession(session, "failed");
         throw error;
       }
       // Stopping ends what was said: whatever the drain left waiting on more
       // speech lands now, ahead of its file links.
+      releaseHeldSend(session, "send");
       session.flushUtterance?.("stop");
       // The drain can finish the final utterance, whose references only start
       // resolving then. Each job is bounded, and ending the session another
@@ -1552,7 +1560,10 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // interim results gave them.
     const holdSend = (release: UtteranceRelease) => {
       const held: HeldSend = {
-        timer: setTimeout(() => releaseHeldSend(session, "send"), sendSettleMs),
+        timer:
+          session.phase === "active"
+            ? setTimeout(() => releaseHeldSend(session, "send"), sendSettleMs)
+            : null,
         release: (outcome) => {
           if (outcome === "literal" && release.literal) emitRelease(release.literal, false);
           else emitRelease(release.emissions, outcome === "send");
@@ -1568,6 +1579,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       if (!held) return;
       switch (voiceEvent.type) {
         case "speech_started":
+          // A stop's drain decides by what it transcribes, not by the clock.
+          if (!held.timer) return;
           clearTimeout(held.timer);
           held.timer = setTimeout(
             () => releaseHeldSend(session, "send"),
@@ -1587,8 +1600,11 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           if (voiceEvent.error.severity === "fatal") releaseHeldSend(session, "strip");
           return;
         case "status":
-          // A provider that dies ends the dictation, but no stop asked for it.
-          if (voiceEvent.status === "error" || voiceEvent.status === "idle") {
+          // A stop's drain ending with the send still held confirms it; a
+          // provider that dies ends the dictation with no stop asking.
+          if (voiceEvent.status === "idle" && session.phase === "stopping") {
+            releaseHeldSend(session, "send");
+          } else if (voiceEvent.status === "error" || voiceEvent.status === "idle") {
             releaseHeldSend(session, "strip");
           } else if (voiceEvent.status === "reconnecting") {
             // Nothing is transcribed while the socket is down, so the window
@@ -1683,7 +1699,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         }
         // A trailing "send it" that ends the utterance is stripped and handed
         // to the renderer, which owns the send; one the speaker went on past
-        // stays literal.
+        // stays literal. A stop's drain may still turn up more words, so a send
+        // heard during one waits for its end.
         const release = session.utterance.push(
           { ...(voiceEvent.itemId ? { itemId: voiceEvent.itemId } : {}), text: rawText, uncertain },
           {
@@ -1693,7 +1710,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           commandOptions()
         );
         if (!release) return;
-        if (release.send && sendSettleMs > 0 && session.phase === "active") {
+        const settles = sendSettleMs > 0 && session.phase === "active";
+        if (release.send && (settles || session.phase === "stopping")) {
           holdSend(release);
         } else {
           emitRelease(release.emissions, release.send);
