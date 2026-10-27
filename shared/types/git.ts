@@ -26,7 +26,8 @@ export interface DiffChangeSetEntry {
    * Caller-owned key for the viewed-marker store (scoped per worktree).
    * Callers keep their existing conventions: `staged:{path}` /
    * `unstaged:{path}` (Review Hub), `{status}:{path}` (change list),
-   * `base:{path}` (base-branch review).
+   * `base:{path}` (base-branch review), `since-review:{path}` (Review Hub's
+   * Since review view).
    */
   viewedKey: string;
   /**

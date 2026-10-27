@@ -988,9 +988,10 @@ export interface FilePanelData extends BasePanelData {
  * Which set of changes a diff panel is reviewing. Selects both the change-set
  * derivation (which files appear in the workspace sidebar) and the fetch path:
  * the working-tree sources diff against the index via `git.getFileDiff`, while
- * "base-branch" compares the branch against its merge base.
+ * "base-branch" compares the branch against its merge base and "since-review"
+ * sets the reviewed version of a file against the current one (#14587).
  */
-export type DiffSource = "working-tree" | "staged" | "unstaged" | "base-branch";
+export type DiffSource = "working-tree" | "staged" | "unstaged" | "base-branch" | "since-review";
 
 /**
  * Diff panel — renders one file's diff, plus the multi-file review workspace

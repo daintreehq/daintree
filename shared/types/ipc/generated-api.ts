@@ -1589,6 +1589,9 @@ export interface GeneratedElectronAPI {
     compare(
       ...args: IpcInvokeMap["review-marks:compare"]["args"]
     ): Promise<IpcInvokeMap["review-marks:compare"]["result"]>;
+    fileSince(
+      ...args: IpcInvokeMap["review-marks:file-since"]["args"]
+    ): Promise<IpcInvokeMap["review-marks:file-since"]["result"]>;
     hydrate(
       ...args: IpcInvokeMap["review-marks:hydrate"]["args"]
     ): Promise<IpcInvokeMap["review-marks:hydrate"]["result"]>;

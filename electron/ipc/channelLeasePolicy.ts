@@ -651,6 +651,7 @@ export const CHANNEL_LEASE_POLICY = {
   "review-marks:changed": "free",
   "review-marks:clear": "driver",
   "review-marks:compare": "free",
+  "review-marks:file-since": "free",
   "review-marks:hydrate": "free",
   "review-marks:mark": "driver",
   "review-marks:mark-captured": "driver",

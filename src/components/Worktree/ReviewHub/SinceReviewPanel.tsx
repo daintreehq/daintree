@@ -25,6 +25,8 @@ interface SinceReviewPanelProps {
   /** The mark was made on another branch; the hub offers to drop it. */
   onClear: () => void;
   onRetry: () => void;
+  /** Open one file's diff since review; `trigger` gets focus back when it closes. */
+  onOpenFile: (path: string, trigger: HTMLElement) => void;
 }
 
 const STATUS_LETTER: Record<SinceReviewFile["status"], string> = {
@@ -36,11 +38,10 @@ const STATUS_LETTER: Record<SinceReviewFile["status"], string> = {
 
 /**
  * Review Hub's "Since review" body (#14586): what the comparison against the
- * worktree's review mark found. Rows only list. A file's diff since review is
- * a separate piece of work, and opening the ordinary diff from here would pass
- * for the change since review.
+ * worktree's review mark found. A row opens that file's diff since review (#14587),
+ * never the ordinary diff, which would pass for the change since review.
  */
-export function SinceReviewPanel({ view, onClear, onRetry }: SinceReviewPanelProps) {
+export function SinceReviewPanel({ view, onClear, onRetry, onOpenFile }: SinceReviewPanelProps) {
   switch (view.kind) {
     case "comparing":
       return (
@@ -124,8 +125,8 @@ export function SinceReviewPanel({ view, onClear, onRetry }: SinceReviewPanelPro
             />
           )}
           <CommitsSection commits={view.commits} />
-          <FilesSection group="branch" files={own} />
-          <FilesSection group="base-update" files={baseUpdate} />
+          <FilesSection group="branch" files={own} onOpenFile={onOpenFile} />
+          <FilesSection group="base-update" files={baseUpdate} onOpenFile={onOpenFile} />
         </div>
       );
     }
@@ -199,7 +200,15 @@ function CommitsSection({ commits }: { commits: SinceReviewCommitsView }) {
   );
 }
 
-function FilesSection({ group, files }: { group: SinceReviewFileGroup; files: SinceReviewFile[] }) {
+function FilesSection({
+  group,
+  files,
+  onOpenFile,
+}: {
+  group: SinceReviewFileGroup;
+  files: SinceReviewFile[];
+  onOpenFile: SinceReviewPanelProps["onOpenFile"];
+}) {
   if (files.length === 0) return null;
   const label = group === "branch" ? "Files changed since review" : "Changed only by a base update";
   return (
@@ -208,14 +217,22 @@ function FilesSection({ group, files }: { group: SinceReviewFileGroup; files: Si
       <p className="sr-only">{pluralize(files.length, "file")}</p>
       <div className="px-2 py-1 flex flex-col gap-0.5">
         {files.map((file) => (
-          <SinceReviewFileRow key={`${file.status}:${file.path}`} file={file} />
+          <SinceReviewFileRow key={`${file.status}:${file.path}`} file={file} onOpen={onOpenFile} />
         ))}
       </div>
     </section>
   );
 }
 
-function SinceReviewFileRow({ file }: { file: SinceReviewFile }) {
+function SinceReviewFileRow({
+  file,
+  onOpen,
+}: {
+  file: SinceReviewFile;
+  onOpen: SinceReviewPanelProps["onOpenFile"];
+}) {
+  // A panel names a file by a UTF-8 path; one git spells in other bytes can't be opened.
+  const openable = file.pathBytes === undefined;
   const config = getBaseBranchStatusConfig(STATUS_LETTER[file.status]);
   const normalized = file.path.replace(/\\/g, "/");
   const lastSlash = normalized.lastIndexOf("/");
@@ -223,8 +240,14 @@ function SinceReviewFileRow({ file }: { file: SinceReviewFile }) {
   const base = lastSlash === -1 ? normalized : normalized.slice(lastSlash + 1);
   return (
     <TruncatedTooltip content={file.path}>
-      <div
-        className="flex w-full items-baseline rounded-[var(--radius-md)] px-1.5 py-1.5 text-xs"
+      <button
+        type="button"
+        disabled={!openable}
+        onClick={(event) => onOpen(file.path, event.currentTarget)}
+        className={cn(
+          "flex w-full items-baseline rounded-[var(--radius-md)] px-1.5 py-1.5 text-left text-xs",
+          openable && "hover:bg-overlay-subtle focus-visible:bg-overlay-subtle"
+        )}
         data-testid="since-review-file-row"
       >
         <span
@@ -247,7 +270,7 @@ function SinceReviewFileRow({ file }: { file: SinceReviewFile }) {
         {file.alsoBaseUpdate && (
           <span className="ml-2 shrink-0 text-2xs text-text-secondary">also in base update</span>
         )}
-      </div>
+      </button>
     </TruncatedTooltip>
   );
 }

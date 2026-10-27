@@ -90,3 +90,68 @@ export type ReviewMarkCompareOutcome =
   | { status: "too-large"; markRevision: number }
   /** `markRevision` is the revision of the mark the result compares against. */
   | { status: "compared"; markRevision: number; result: ReviewComparisonResult };
+
+/** The two places a file's content can differ since the review: the index and the working tree. */
+export type ReviewFileSinceSide = "worktree" | "index";
+
+/** What a diff since review is set against, when it isn't the reviewed version. */
+export interface ReviewFileSinceStandIn {
+  /** The commit the review point was taken at; its version of the file is the old side. */
+  commit: string;
+  patch: string;
+}
+
+export type ReviewFileSinceUnavailableReason =
+  /** Git no longer has the reviewed content: it only ever lived in the working tree, or was collected. */
+  | "reviewed-content-missing"
+  /** The point didn't cover this path, or held no content for it to compare. */
+  | "reviewed-not-covered"
+  /** Only known as git compares it, and line-ending or filter settings apply to this file. */
+  | "reviewed-not-raw"
+  /** The current content couldn't be read as the comparison saw it. */
+  | "current-unreadable";
+
+export type ReviewFileSinceView =
+  /** The side holds what it held at review. */
+  | { kind: "unchanged" }
+  /** Exactly the reviewed content against the current one. */
+  | { kind: "exact"; patch: string }
+  | { kind: "mode-only"; from: string | null; to: string | null }
+  /** An empty file was added or deleted: there are no lines to show. */
+  | { kind: "empty-file"; change: "added" | "deleted" }
+  | { kind: "binary" }
+  | { kind: "too-large" }
+  /** A submodule, a conflicted or intent-to-add index entry: no file content to compare. */
+  | { kind: "unsupported" }
+  | {
+      kind: "unavailable";
+      reason: ReviewFileSinceUnavailableReason;
+      /** Whether the comparison found this side's content changed. */
+      changed: boolean;
+      /** Never the change since review; the panel labels it as what it is. */
+      standIn: ReviewFileSinceStandIn | null;
+    };
+
+export interface ReviewFileSinceRequest {
+  path: string;
+  /** Base64 of the path bytes when they aren't valid UTF-8, as a review point spells them. */
+  pathBytes?: string;
+  /** Absent: the working tree when it changed, else the index. */
+  side?: ReviewFileSinceSide;
+}
+
+export type ReviewMarkFileSinceOutcome =
+  /** The worktree has no mark. */
+  | { status: "none" }
+  /** The mark, the worktree or the comparison couldn't be read. */
+  | { status: "unavailable"; markRevision: number }
+  /** The comparison no longer lists the file, or lists it as unchanged on both sides. */
+  | { status: "not-changed"; markRevision: number }
+  | {
+      status: "read";
+      markRevision: number;
+      side: ReviewFileSinceSide;
+      /** What the comparison found for each side. */
+      changes: Record<ReviewFileSinceSide, "unchanged" | "changed" | "unknown">;
+      view: ReviewFileSinceView;
+    };

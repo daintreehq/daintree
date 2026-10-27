@@ -30,6 +30,7 @@ describe("channel lease policy", () => {
       "review-marks:hydrate",
       "review-marks:capture",
       "review-marks:compare",
+      "review-marks:file-since",
     ]) {
       expect(getChannelLeasePolicy(channel), channel).toBe("free");
     }

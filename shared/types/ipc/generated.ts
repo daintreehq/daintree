@@ -3429,6 +3429,10 @@ export interface GeneratedIpcInvokeMap {
     args: [worktreeId: string];
     result: import("./reviewMarks.js").ReviewMarkCompareOutcome;
   };
+  "review-marks:file-since": {
+    args: [worktreeId: string, request: import("./reviewMarks.js").ReviewFileSinceRequest];
+    result: import("./reviewMarks.js").ReviewMarkFileSinceOutcome;
+  };
   "review-marks:hydrate": {
     args: [];
     result: import("./reviewMarks.js").ReviewMarksSnapshot | null;

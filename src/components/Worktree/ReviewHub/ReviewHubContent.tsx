@@ -330,6 +330,8 @@ export function ReviewHubContent({
   const [diffPanelId, setDiffPanelId] = useState<string | null>(null);
   const hasWorkingTreeSelection = selectedFile !== null;
   const hasBaseBranchSelection = selectedBaseBranchFile !== null;
+  const [selectedSinceReviewPath, setSelectedSinceReviewPath] = useState<string | null>(null);
+  const hasSinceReviewSelection = selectedSinceReviewPath !== null;
   const dialogStack = usePanelDialogStore((state) => state.dialogStack);
 
   // Layer the diff above this hub when the hub is itself the presented dialog;
@@ -361,6 +363,7 @@ export function ReviewHubContent({
     setDiffPanelId(null);
     setSelectedFile(null);
     setSelectedBaseBranchFile(null);
+    setSelectedSinceReviewPath(null);
   }, [dialogStack, diffPanelId]);
 
   // Close the panel when the hub drops its selection for a reason of its own
@@ -368,9 +371,16 @@ export function ReviewHubContent({
   // of the stack from here would tear down whatever dialog currently sits
   // there, which may not be ours.
   useEffect(() => {
-    if (hasWorkingTreeSelection || hasBaseBranchSelection || !diffPanelId) return;
+    if (
+      hasWorkingTreeSelection ||
+      hasBaseBranchSelection ||
+      hasSinceReviewSelection ||
+      !diffPanelId
+    ) {
+      return;
+    }
     usePanelDialogStore.getState().closePanelDialogById(diffPanelId);
-  }, [hasWorkingTreeSelection, hasBaseBranchSelection, diffPanelId]);
+  }, [hasWorkingTreeSelection, hasBaseBranchSelection, hasSinceReviewSelection, diffPanelId]);
   const selection = useReviewHubRowSelection(status);
   const {
     selectedPaths,
@@ -468,7 +478,8 @@ export function ReviewHubContent({
       !fileListExpanded ||
       diffMode !== "working-tree" ||
       selectedFile !== null ||
-      selectedBaseBranchFile !== null,
+      selectedBaseBranchFile !== null ||
+      selectedSinceReviewPath !== null,
   });
   const {
     focusedIndex,
@@ -549,6 +560,28 @@ export function ReviewHubContent({
     }));
   }, [sortedBaseBranchFiles]);
 
+  const sinceReviewView = useMemo(
+    () => describeSinceReview(currentReviewMark, reviewMark.comparison),
+    [currentReviewMark, reviewMark.comparison]
+  );
+  // The files the Since review list shows, in its order, so the panel steps
+  // through what the user sees. A path git spells in bytes that aren't UTF-8
+  // can't be named by a panel, so it isn't offered.
+  const sinceReviewChangeSet = useMemo((): DiffChangeSetEntry[] | undefined => {
+    if (sinceReviewView.kind !== "listed") return undefined;
+    const ordered = [
+      ...sinceReviewView.files.filter((file) => file.group === "branch"),
+      ...sinceReviewView.files.filter((file) => file.group === "base-update"),
+    ];
+    return ordered
+      .filter((file) => file.pathBytes === undefined)
+      .map((file) => ({
+        path: file.path,
+        status: file.status === "unknown" ? "modified" : file.status,
+        viewedKey: `since-review:${file.path}`,
+      }));
+  }, [sinceReviewView]);
+
   const lastSelectedFileIndexRef = useRef(0);
   useEffect(() => {
     if (selectedFileIndex !== null) lastSelectedFileIndexRef.current = selectedFileIndex;
@@ -573,10 +606,15 @@ export function ReviewHubContent({
   const changeSetsRef = useRef({
     workingTree: workingTreeChangeSet,
     baseBranch: baseBranchChangeSet,
+    sinceReview: sinceReviewChangeSet,
   });
   useEffect(() => {
-    changeSetsRef.current = { workingTree: workingTreeChangeSet, baseBranch: baseBranchChangeSet };
-  }, [workingTreeChangeSet, baseBranchChangeSet]);
+    changeSetsRef.current = {
+      workingTree: workingTreeChangeSet,
+      baseBranch: baseBranchChangeSet,
+      sinceReview: sinceReviewChangeSet,
+    };
+  }, [workingTreeChangeSet, baseBranchChangeSet, sinceReviewChangeSet]);
 
   // Open (or retarget) the working-tree diff panel as the hub's selection moves.
   // Status follows the LIVE entry, not the open-time snapshot: a file that is
@@ -654,13 +692,48 @@ export function ReviewHubContent({
     );
   }, [selectedBaseBranchFile, diffPanelId, worktreeId, mainBranch, openDiffDialog]);
 
+  useEffect(() => {
+    if (!selectedSinceReviewPath) return;
+    const store = usePanelDialogStore.getState();
+    const viewedKey = `since-review:${selectedSinceReviewPath}`;
+    if (diffPanelId) {
+      usePanelStore
+        .getState()
+        .setDiffPanelFile(diffPanelId, selectedSinceReviewPath, "modified", viewedKey);
+      return;
+    }
+    void openDiffDialog(store, {
+      kind: "diff",
+      filePath: selectedSinceReviewPath,
+      fileStatus: "modified",
+      diffSource: "since-review",
+      changeSet: changeSetsRef.current.sinceReview,
+      title: basename(selectedSinceReviewPath),
+      viewedKey,
+      ...(worktreeId && { worktreeId }),
+    }).then((newPanelId) =>
+      newPanelId ? setDiffPanelId(newPanelId) : setSelectedSinceReviewPath(null)
+    );
+  }, [selectedSinceReviewPath, diffPanelId, worktreeId, openDiffDialog]);
+
   // Keep the open panel's change set in step with the live poll. The store
   // bails on a value-equal set, so a quiet poll costs nothing.
   useEffect(() => {
     if (!diffPanelId) return;
-    const changeSet = selectedBaseBranchFile ? baseBranchChangeSet : workingTreeChangeSet;
+    const changeSet = selectedSinceReviewPath
+      ? sinceReviewChangeSet
+      : selectedBaseBranchFile
+        ? baseBranchChangeSet
+        : workingTreeChangeSet;
     if (changeSet) usePanelStore.getState().setDiffPanelChangeSet(diffPanelId, changeSet);
-  }, [diffPanelId, selectedBaseBranchFile, baseBranchChangeSet, workingTreeChangeSet]);
+  }, [
+    diffPanelId,
+    selectedSinceReviewPath,
+    selectedBaseBranchFile,
+    sinceReviewChangeSet,
+    baseBranchChangeSet,
+    workingTreeChangeSet,
+  ]);
 
   const worktreePR = useWorktreeStore(
     useShallow((state) => {
@@ -849,6 +922,7 @@ export function ReviewHubContent({
       setCommitMessage("");
       setDiffMode("working-tree");
       setSelectedBaseBranchFile(null);
+      setSelectedSinceReviewPath(null);
       // Viewed markers deliberately survive close/reopen (diffViewedStore).
       setSelectedPaths(new Set());
       setSelectionSection(null);
@@ -1304,7 +1378,6 @@ export function ReviewHubContent({
   const hasStagedSelection = selectionSection === "staged" && selectedPaths.size > 0;
   const hasUnstagedSelection = selectionSection === "unstaged" && selectedPaths.size > 0;
   const stagedPaths = status?.staged.map((f) => f.path) ?? [];
-  const sinceReviewView = describeSinceReview(currentReviewMark, reviewMark.comparison);
   const sinceReviewUnavailable = sinceReviewUnavailableReason(currentReviewMark);
   const refreshBusy =
     diffMode === "base-branch"
@@ -1593,6 +1666,10 @@ export function ReviewHubContent({
             {diffMode === "since-review" ? (
               <SinceReviewPanel
                 view={sinceReviewView}
+                onOpenFile={(path, trigger) => {
+                  diffTriggerRef.current = trigger;
+                  setSelectedSinceReviewPath(path);
+                }}
                 onClear={() => void clearReviewMark()}
                 onRetry={reviewMark.retryCompare}
               />
