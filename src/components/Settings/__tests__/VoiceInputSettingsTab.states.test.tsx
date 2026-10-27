@@ -238,6 +238,21 @@ describe("VoiceInputSettingsTab correction prerequisites", () => {
     expect(cleanup.textContent).not.toMatch(/Deepgram/);
   });
 
+  it("asks Grok users for an xAI key and says what xAI keeps", async () => {
+    install({ transcriptionProvider: "grok", xaiApiKey: "", correctionEnabled: true });
+    const { container } = render(<VoiceInputSettingsTab />);
+
+    await screen.findByRole("switch", { name: "Resolve file references" });
+    const stt = container.querySelector("#voice-speech-to-text") as HTMLElement;
+    expect(stt.textContent).toContain("xAI API key");
+    expect(stt.textContent).not.toContain("Deepgram API key");
+    expect(stt.textContent).not.toContain("OpenAI API key");
+    const disclosure = screen.getByText(/xAI receives your audio/).textContent ?? "";
+    expect(disclosure).toMatch(/30 days/);
+    expect(disclosure).toMatch(/Zero Data Retention/);
+    expect(disclosure).toMatch(/go with the audio/);
+  });
+
   it("saves the cleanup key and turns cleanup's options on while another provider transcribes", async () => {
     const setSettings = vi.fn().mockResolvedValue(undefined);
     install(

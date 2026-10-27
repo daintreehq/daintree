@@ -196,6 +196,13 @@ const DEEPGRAM_SETTINGS: VoiceInputSettings = {
   transcriptionProvider: "deepgram",
 };
 
+const GROK_SETTINGS: VoiceInputSettings = {
+  ...OPENAI_SETTINGS,
+  openaiApiKey: "",
+  xaiApiKey: "xai-test",
+  transcriptionProvider: "grok",
+};
+
 function latestInstance(): MockWebSocket {
   const instance = instances.at(-1);
   if (!instance) throw new Error("No MockWebSocket instance created");
@@ -265,9 +272,20 @@ describe("VoiceTranscriptionService (coordinator)", () => {
     service.stop();
   });
 
-  it("makes only a Deepgram start wait for its keyterms before connecting", () => {
+  it("routes to the Grok provider for transcriptionProvider 'grok'", async () => {
+    const service = new VoiceTranscriptionService();
+    void service.start(GROK_SETTINGS, "session-1");
+    await Promise.resolve();
+    const socket = latestInstance();
+    expect(new URL(socket.url).host).toBe("api.x.ai");
+    expect(socket.options.headers.Authorization).toBe("Bearer xai-test");
+    service.stop();
+  });
+
+  it("makes the providers with keyterms on the URL wait for them before connecting", () => {
     const service = new VoiceTranscriptionService();
     expect(service.keytermsNeededToConnect(DEEPGRAM_SETTINGS)).toBe(true);
+    expect(service.keytermsNeededToConnect(GROK_SETTINGS)).toBe(true);
     expect(service.keytermsNeededToConnect(OPENAI_SETTINGS)).toBe(false);
   });
 

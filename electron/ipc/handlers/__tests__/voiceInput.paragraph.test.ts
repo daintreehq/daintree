@@ -862,7 +862,7 @@ describe("voiceInput — spoken-command paragraphing", () => {
   });
 });
 
-describe("voiceInput — spoken send on Deepgram's short endpoint", () => {
+describe.each(["deepgram", "grok"] as const)("voiceInput — spoken send on %s", (provider) => {
   let win: ReturnType<typeof buildMainWindow>;
   let cleanup: () => void;
 
@@ -877,13 +877,14 @@ describe("voiceInput — spoken send on Deepgram's short endpoint", () => {
     vi.mocked(store.get).mockReturnValue({
       enabled: true,
       openaiApiKey: "",
-      deepgramApiKey: "dg-test",
+      deepgramApiKey: provider === "deepgram" ? "dg-test" : "",
+      xaiApiKey: provider === "grok" ? "xai-test" : "",
       correctionEnabled: false,
       correctionModel: "gpt-6-luna",
       dictionary: [],
       correctionCustomInstructions: "",
       language: "en",
-      transcriptionProvider: "deepgram",
+      transcriptionProvider: provider,
       transcriptionModel: "gpt-live-transcribe",
       paragraphingStrategy: "spoken-command",
       resolveFileLinks: true,
@@ -2304,6 +2305,33 @@ describe("getVoiceSettings migration", () => {
       vi.mocked(store.set).mock.calls[0] as unknown as [string, Record<string, unknown>]
     )[1];
     expect(persisted).toHaveProperty("transcriptionProvider", "deepgram");
+  });
+
+  it("keeps a stored Grok choice and its key, and reads an XAI_API_KEY override without saving it", async () => {
+    const { store } = await import("../../../store.js");
+    vi.mocked(store.get)
+      .mockReturnValueOnce({
+        enabled: true,
+        xaiApiKey: "xai-stored",
+        transcriptionProvider: "grok",
+        transcriptionModel: "gpt-live-transcribe",
+      })
+      .mockReturnValueOnce({ enabled: true, xaiApiKey: "xai-stored", transcriptionProvider: "grok" });
+
+    const stored = getVoiceSettings();
+    expect(stored.transcriptionProvider).toBe("grok");
+    expect(stored.xaiApiKey).toBe("xai-stored");
+
+    process.env.XAI_API_KEY = " xai-env ";
+    try {
+      expect(getVoiceSettings().xaiApiKey).toBe("xai-env");
+      const setCalls = vi.mocked(store.set).mock.calls as unknown as Array<
+        [string, Record<string, unknown>?]
+      >;
+      expect(setCalls.some(([, value]) => value?.xaiApiKey === "xai-env")).toBe(false);
+    } finally {
+      delete process.env.XAI_API_KEY;
+    }
   });
 
   it("does not rewrite the store when the model is already current", async () => {
