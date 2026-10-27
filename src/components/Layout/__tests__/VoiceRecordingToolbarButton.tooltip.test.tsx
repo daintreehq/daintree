@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { Profiler } from "react";
 import fs from "fs/promises";
 import path from "path";
 import { render, fireEvent, act } from "@testing-library/react";
@@ -709,7 +710,8 @@ describe("VoiceRecordingToolbarButton — waveform (#14911)", () => {
   it("holds its shape under reduced motion while brightness follows the voice", () => {
     motion.reduced = true;
     const { container } = renderStatus("recording");
-    const bars = () => Array.from(container.querySelectorAll<HTMLElement>("[data-voice-wave] > span"));
+    const bars = () =>
+      Array.from(container.querySelectorAll<HTMLElement>("[data-voice-wave] > span"));
     runFrames(20);
     const quietShape = barScales(container);
     const quietOpacity = Number(bars()[0]!.style.opacity);
@@ -718,6 +720,34 @@ describe("VoiceRecordingToolbarButton — waveform (#14911)", () => {
     runFrames(20);
     expect(barScales(container)).toEqual(quietShape);
     expect(Number(bars()[0]!.style.opacity)).toBeGreaterThan(quietOpacity);
+  });
+
+  it("moves the bars without a React commit per level update", () => {
+    let commits = 0;
+    useVoiceRecordingStore.setState({
+      status: "recording",
+      micSignal: "live",
+      activeTarget: { panelId: "p-1" },
+    });
+    const { container } = render(
+      <Profiler id="voice" onRender={() => commits++}>
+        <VoiceRecordingToolbarButton />
+      </Profiler>
+    );
+    runFrames(2);
+    const before = commits;
+    act(() => {
+      useVoiceRecordingStore.setState({ audioLevel: 0.9 });
+    });
+    runFrames(30);
+    expect(commits).toBe(before);
+    expect(Math.max(...barScales(container))).toBeGreaterThan(0.5);
+  });
+
+  it("cancels the level loop on unmount", () => {
+    const { unmount } = renderStatus("recording");
+    unmount();
+    expect(window.cancelAnimationFrame).toHaveBeenCalled();
   });
 
   it("runs no level loop while waiting or paused", () => {

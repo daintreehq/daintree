@@ -48,8 +48,8 @@
  *        sidebar surface (they share a token across themes) so the gap reads
  *        as a clean cut-out.
  *      - No ring — .toolbar-problems-badge (size is the differentiator, see
- *        rule 3) and VoiceRecordingToolbarButton (inline live-audio dot, not
- *        a .toolbar-badge and out of scope here). .toolbar-overflow-badge
+ *        rule 3) and VoiceRecordingToolbarButton (an inline level waveform,
+ *        not a .toolbar-badge and out of scope here). .toolbar-overflow-badge
  *        is severity-dependent: no ring on `critical`, a 1px box-shadow ring
  *        on `warning` and `info` (see the severity blocks below).
  *

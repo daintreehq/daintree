@@ -23,7 +23,8 @@
   .animate-diagnostics-flash,
   .animate-upstream-badge-flash,
   .animate-border-flash,
-  .animate-figure-arrive {
+  .animate-figure-arrive,
+  .animate-voice-wave-wait {
     animation: none;
     opacity: 1;
     transform: none;

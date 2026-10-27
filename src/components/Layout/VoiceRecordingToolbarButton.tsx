@@ -49,8 +49,11 @@ const WAVE_BARS = [
   { weight: 0.85, rate: 8.2, phase: 3.1 },
   { weight: 0.55, rate: 10.4, phase: 4.6 },
 ] as const;
-// The still shape: paused, and listening under reduced motion.
+// Listening's shape under reduced motion. Paused stands level instead, so the
+// two stay apart where colour can't tell them apart (forced colours).
 const STILL_SHAPE = [0.45, 0.8, 0.65, 0.4] as const;
+const HELD_SCALE = 0.6;
+const WAITING_SCALE = 0.35;
 
 // One width for every state the slot shows — placeholder, locked, elsewhere,
 // and the mic with its waveform — so starting or ending a session never moves
@@ -82,7 +85,10 @@ function VoiceLockedButton({
               source: "user",
             });
           }}
-          className={cn("toolbar-icon-button relative mr-0.5 text-text-secondary", VOICE_SLOT_CLASS)}
+          className={cn(
+            "toolbar-icon-button relative mr-0.5 text-text-secondary",
+            VOICE_SLOT_CLASS
+          )}
           aria-label={`Dictation locked to ${label}. Click to unlock.`}
           data-testid="voice-locked-button"
         >
@@ -143,7 +149,10 @@ function VoiceElsewhereIndicator({
           onClick={() => {
             void voiceRecordingService.revealSessionElsewhere();
           }}
-          className={cn("toolbar-icon-button relative mr-0.5 text-text-secondary", VOICE_SLOT_CLASS)}
+          className={cn(
+            "toolbar-icon-button relative mr-0.5 text-text-secondary",
+            VOICE_SLOT_CLASS
+          )}
           aria-label={`${title}. Click to go there.`}
           data-testid="voice-elsewhere-button"
         >
@@ -255,7 +264,7 @@ function VoiceWave({ mode }: { mode: VoiceWaveMode }) {
           ? STILL_SHAPE[i]!
           : BAR_REST + (1 - BAR_REST) * Math.min(1, WAVE_GAIN * level * bar.weight * wobble);
         el.style.transform = `scaleY(${scale.toFixed(3)})`;
-        el.style.opacity = (0.55 + level * 0.45).toFixed(3);
+        el.style.opacity = (0.7 + level * 0.3).toFixed(3);
       });
 
       rafId = requestAnimationFrame(tick);
@@ -278,14 +287,13 @@ function VoiceWave({ mode }: { mode: VoiceWaveMode }) {
             barRefs.current[i] = el;
           }}
           className={cn(
-            // Forced colours paints backgrounds as Canvas; the bars take text ink.
-            "h-full w-0.5 rounded-full forced-colors:bg-[CanvasText]",
+            "h-full w-0.5 rounded-full",
             mode === "level" ? "bg-accent-primary" : "bg-text-secondary",
-            mode === "waiting" && "animate-voice-wave-wait motion-reduce:animate-none"
+            mode === "waiting" && "animate-voice-wave-wait"
           )}
           style={{
-            transform: `scaleY(${mode === "level" ? BAR_REST : mode === "held" ? STILL_SHAPE[i] : 0.35})`,
-            opacity: mode === "level" ? 0.55 : mode === "held" ? 0.7 : undefined,
+            transform: `scaleY(${mode === "level" ? BAR_REST : mode === "held" ? HELD_SCALE : WAITING_SCALE})`,
+            opacity: mode === "level" ? 0.7 : undefined,
             animationDelay: mode === "waiting" ? `${i * 150}ms` : undefined,
           }}
         />

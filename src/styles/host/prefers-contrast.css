@@ -11,6 +11,12 @@
     opacity: 1;
   }
 
+  /* The toolbar dictation waveform's waiting fade keeps a firmer floor, so the
+   * bars never dim to a ghost between beats. */
+  [data-voice-wave] > span {
+    --voice-wave-wait-floor: 0.7;
+  }
+
   /* Skeleton bones double their tint. At 10% a bone is deliberately quiet; a
    * user who asked for more contrast should not have to hunt for the shape of
    * what is loading. Still a tint of `--theme-tint`, so it keeps contrasting
