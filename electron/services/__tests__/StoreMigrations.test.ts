@@ -1187,7 +1187,8 @@ describe("MigrationRunner", () => {
 
     expect(store.data._schemaVersion).toBe(LATEST_SCHEMA_VERSION);
     const voiceInput = store.data.voiceInput as Record<string, unknown>;
-    expect(voiceInput.correctionModel).toBe("gpt-5.6-luna");
+    // 025 lands it on gpt-5.6-luna, then 040 moves it on to gpt-6.1-terra.
+    expect(voiceInput.correctionModel).toBe("gpt-6.1-terra");
     expect(voiceInput.enabled).toBe(true);
     expect(voiceInput.language).toBe("en");
   });
@@ -1905,9 +1906,9 @@ describe("MigrationRunner", () => {
       // Migration 035: the retired hibernation setting is gone.
       expect("hibernation" in store.data).toBe(false);
 
-      // Migration 025: the legacy gpt-5-nano correction model migrates to luna.
+      // Migrations 025 and 040: the legacy gpt-5-nano correction model ends on terra.
       const migratedVoice = store.data.voiceInput as Record<string, unknown>;
-      expect(migratedVoice.correctionModel).toBe("gpt-5.6-luna");
+      expect(migratedVoice.correctionModel).toBe("gpt-6.1-terra");
       expect(migratedVoice.enabled).toBe(true);
 
       // Migration 036: the flat word list becomes structured entries.

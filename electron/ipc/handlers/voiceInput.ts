@@ -40,7 +40,10 @@ import {
   type UtteranceEmission,
   type UtteranceRelease,
 } from "../../services/voiceUtteranceCommands.js";
-import { VOICE_CLEANUP_AI_MODEL } from "../../../shared/config/voiceCorrection.js";
+import {
+  isVoiceCleanupModel,
+  VOICE_CLEANUP_AI_MODEL,
+} from "../../../shared/config/voiceCorrection.js";
 import { normalizeVoiceLanguage } from "../../../shared/config/voiceLanguages.js";
 import {
   assembleTaggedKeyterms,
@@ -590,14 +593,11 @@ export function getVoiceSettings(): VoiceInputSettings {
   const staleTranscriptionModel = merged.transcriptionModel !== "gpt-live-transcribe";
   if (staleTranscriptionModel) merged.transcriptionModel = "gpt-live-transcribe";
 
-  // Same one-shot cleanup for the correction model: gpt-6.1-terra replaced
-  // gpt-6-luna, which replaced the retired gpt-5-mini/gpt-5-nano tiers, so this
-  // union is single-valued too.
-  // migration025 upgrades stores on older schema versions; this read-time net
-  // catches stores already on the current version (never revisited by the
-  // migration), plus post-downgrade or hand-edited values. Not a user-choice
-  // revert — there is no correction-model choice left to preserve.
-  const staleCorrectionModel = merged.correctionModel !== VOICE_CLEANUP_AI_MODEL;
+  // The cleanup model is the user's pick among VOICE_CLEANUP_MODELS, so a
+  // valid one stays. Anything else (a retired model, a downgrade, a hand edit)
+  // goes back to the default and is written through. migration040 moved every
+  // existing install to gpt-6.1-terra once, before there was a choice to keep.
+  const staleCorrectionModel = !isVoiceCleanupModel(merged.correctionModel);
   if (staleCorrectionModel) merged.correctionModel = VOICE_CLEANUP_AI_MODEL;
 
   // Normalize malformed recordingMode values in memory only (no write-back).

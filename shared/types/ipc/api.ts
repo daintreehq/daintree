@@ -2943,13 +2943,11 @@ export type VoiceTranscriptionModel = "gpt-live-transcribe";
 export type VoiceTranscriptionProvider = "openai" | "deepgram" | "grok";
 
 /**
- * The correction model is single-valued: gpt-6.1-terra runs cleanup and spoken
- * rewrite, and there is no user-facing model choice. Kept as a named type
- * (rather than inlining the literal) so the persisted setting, the runtime
- * constant in `shared/config/voiceCorrection.ts` (`VOICE_CLEANUP_AI_MODEL`),
- * and this union stay recognizably one concept.
+ * The model cleanup and spoken rewrite run on, the user's choice in settings.
+ * `shared/config/voiceCorrection.ts` lists the same models
+ * (`VOICE_CLEANUP_MODELS`) and names the default (`VOICE_CLEANUP_AI_MODEL`).
  */
-export type VoiceCorrectionModel = "gpt-6.1-terra";
+export type VoiceCorrectionModel = "gpt-6.1-terra" | "gpt-6-luna";
 
 /**
  * Paragraphing strategy for voice dictation.

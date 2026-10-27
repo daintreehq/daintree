@@ -7,7 +7,7 @@ import {
   maskApiKey,
   recordingModeDescription,
 } from "../VoiceInputSettingsTab";
-import { VOICE_CLEANUP_AI_MODEL } from "@shared/config/voiceCorrection";
+import { VOICE_CLEANUP_MODELS } from "@shared/config/voiceCorrection";
 import type { SuggestedDictionaryEntry, VoiceDictionaryEntry } from "@shared/types";
 
 vi.mock("@/lib/voiceInputSettingsEvents", () => ({
@@ -383,14 +383,33 @@ describe("VoiceInputSettingsTab copy", () => {
     }
   });
 
-  it("reads the correction model from the shared constant and describes the once-per-stop pass", async () => {
-    install({});
-    const { container } = render(<VoiceInputSettingsTab />);
-    await waitFor(() => expect(container.querySelector("#voice-ai-correction")).toBeTruthy());
-    const text = container.querySelector("#voice-ai-correction")?.textContent ?? "";
-    expect(text).toContain(VOICE_CLEANUP_AI_MODEL);
-    expect(text).toContain("whole passage is corrected once");
-    expect(text).not.toContain("GPT-5.6");
+  it("describes the once-per-stop pass and offers every cleanup model, the default picked", async () => {
+    install({ correctionEnabled: true, openaiApiKey: "sk-test" });
+    render(<VoiceInputSettingsTab />);
+    const models = await screen.findByRole("radiogroup", { name: "Cleanup model" });
+    const section = models.closest("#voice-ai-correction");
+    expect(section?.textContent).toContain("whole passage is corrected once");
+
+    const choices = within(models).getAllByRole("radio");
+    expect(choices).toHaveLength(VOICE_CLEANUP_MODELS.length);
+    // Each choice says what its model is better at.
+    for (const choice of choices) {
+      expect(choice.getAttribute("aria-describedby")).toBeTruthy();
+    }
+    const picked = choices.filter((choice) => choice.getAttribute("aria-checked") === "true");
+    expect(picked).toHaveLength(1);
+    expect(picked[0]!.textContent).toMatch(/Terra/);
+  });
+
+  it("shows a chosen Luna as picked and marks it changed from the default", async () => {
+    install({ correctionEnabled: true, openaiApiKey: "sk-test", correctionModel: "gpt-6-luna" });
+    render(<VoiceInputSettingsTab />);
+    const models = await screen.findByRole("radiogroup", { name: "Cleanup model" });
+    const picked = within(models)
+      .getAllByRole("radio")
+      .filter((choice) => choice.getAttribute("aria-checked") === "true");
+    expect(picked.map((choice) => choice.textContent)).toEqual([expect.stringMatching(/Luna/)]);
+    expect(screen.getByRole("button", { name: /reset.*cleanup model/i })).toBeTruthy();
   });
 
   it("lists the dictation shortcuts with a way to rebind them", async () => {

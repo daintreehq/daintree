@@ -2507,7 +2507,7 @@ describe("getVoiceSettings migration", () => {
     }
   });
 
-  it.each(["gpt-5-mini", "gpt-6-luna"])(
+  it.each(["gpt-5-mini", "gpt-5.6-luna", 42])(
     "normalizes a stale correctionModel (%s) to gpt-6.1-terra and persists the cleanup",
     async (stale) => {
       const { store } = await import("../../../store.js");
@@ -2534,19 +2534,22 @@ describe("getVoiceSettings migration", () => {
     }
   );
 
-  it("does not write back when correctionModel is already gpt-6.1-terra", async () => {
-    const { store } = await import("../../../store.js");
-    vi.mocked(store.get).mockReturnValueOnce({
-      enabled: true,
-      openaiApiKey: "sk-present",
-      correctionModel: "gpt-6.1-terra",
-    });
+  it.each(["gpt-6.1-terra", "gpt-6-luna"])(
+    "keeps a chosen cleanup model (%s) without writing back",
+    async (chosen) => {
+      const { store } = await import("../../../store.js");
+      vi.mocked(store.get).mockReturnValueOnce({
+        enabled: true,
+        openaiApiKey: "sk-present",
+        correctionModel: chosen,
+      });
 
-    const settings = getVoiceSettings();
+      const settings = getVoiceSettings();
 
-    expect(settings.correctionModel).toBe("gpt-6.1-terra");
-    expect(vi.mocked(store.set)).not.toHaveBeenCalled();
-  });
+      expect(settings.correctionModel).toBe(chosen);
+      expect(vi.mocked(store.set)).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe("validateOpenAIKey", () => {
@@ -2891,6 +2894,34 @@ describe("voiceInput — rewrite instructions", () => {
     } finally {
       shared.cleanupGate = null;
       vi.useRealTimers();
+    }
+  });
+
+  it("sends cleanup and spoken rewrite to the model the user chose", async () => {
+    const { store } = await import("../../../store.js");
+    const stored = vi.mocked(store.get).getMockImplementation()!;
+    vi.mocked(store.get).mockImplementation((key: string) =>
+      key === "voiceInput"
+        ? { ...(stored(key) as Record<string, unknown>), correctionModel: "gpt-6-luna" }
+        : stored(key)
+    );
+    try {
+      const handleCorrect = getHandler("voice-input:correct") as (
+        e: unknown,
+        request: unknown
+      ) => Promise<unknown>;
+      const handleRewrite = getHandler("voice-input:rewrite") as (
+        e: unknown,
+        request: unknown
+      ) => Promise<unknown>;
+
+      await handleCorrect(fakeEvent, { rawText: "helo world" });
+      await handleRewrite(fakeEvent, { selectedText: "a long sentence", instruction: "shorter" });
+
+      expect(shared.correctionCalls.at(-1)?.settings).toMatchObject({ model: "gpt-6-luna" });
+      expect(shared.rewriteCalls.at(-1)?.settings).toMatchObject({ model: "gpt-6-luna" });
+    } finally {
+      vi.mocked(store.get).mockImplementation(stored);
     }
   });
 

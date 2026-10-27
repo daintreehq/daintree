@@ -15,6 +15,7 @@ import { DeepgramIcon } from "@/components/icons/brands/DeepgramIcon";
 import { GrokIcon } from "@/components/icons/brands/GrokIcon";
 import { MicTestRow } from "./MicTestRow";
 import { SettingsPresetGroup } from "./SettingsPresetGroup";
+import { SettingsChoicebox } from "./SettingsChoicebox";
 import { SettingsTextarea } from "./SettingsTextarea";
 import { SettingsInput } from "./SettingsInput";
 import {
@@ -35,7 +36,11 @@ import { actionService } from "@/services/ActionService";
 import { KbdChord } from "@/components/ui/Kbd";
 import { voiceErrorLogFields } from "@shared/utils/voiceLogFields";
 import { VOICE_LANGUAGES } from "@shared/config/voiceLanguages";
-import { CORE_CORRECTION_PROMPT, VOICE_CLEANUP_AI_MODEL } from "@shared/config/voiceCorrection";
+import {
+  CORE_CORRECTION_PROMPT,
+  VOICE_CLEANUP_AI_MODEL,
+  VOICE_CLEANUP_MODELS,
+} from "@shared/config/voiceCorrection";
 import {
   VOICE_CLEANUP_KEY_FIELD,
   hasCleanupKey,
@@ -47,6 +52,7 @@ import {
 import type {
   VoiceInputSettings,
   VoiceInputSettingsPatch,
+  VoiceCorrectionModel,
   VoiceDictionaryEntry,
   VoiceDictionaryState,
   MicPermissionStatus,
@@ -69,6 +75,25 @@ const PROVIDER_PRIVACY: Record<VoiceTranscriptionProvider, string> = {
   deepgram: `Deepgram receives your audio over an encrypted connection and, by default, may keep audio and transcripts to improve its models. ${RECOGNITION_HINTS_PRIVACY}`,
   grok: `xAI receives your audio over an encrypted connection, keeps it for up to 30 days for abuse auditing unless your team turns on Zero Data Retention, and doesn't train on it without permission. ${RECOGNITION_HINTS_PRIVACY}`,
 };
+
+// What each model is better at, from the cleanup benchmark (#14793).
+const CLEANUP_MODEL_COPY: Record<VoiceCorrectionModel, { label: string; description: string }> = {
+  "gpt-6.1-terra": {
+    label: "GPT-6.1 Terra (default)",
+    description:
+      "Catches more misheard names and words that only make sense in context. A little slower on long passages, and about seven times the cost, still well under a tenth of a cent a cleanup.",
+  },
+  "gpt-6-luna": {
+    label: "GPT-6 Luna",
+    description:
+      "A little faster and cheaper, and better at writing out dictated paths and symbols. Misses more misheard names.",
+  },
+};
+
+const CLEANUP_MODEL_CHOICES = VOICE_CLEANUP_MODELS.map((value) => ({
+  value,
+  ...CLEANUP_MODEL_COPY[value],
+}));
 
 const DEFAULT_SETTINGS: VoiceInputSettings = {
   enabled: false,
@@ -108,6 +133,7 @@ const SAVE_GROUP_BY_KEY: Partial<Record<PatchKey, SaveGroup>> = {
   recordingMode: "behavior",
   learnFromCorrections: "dictionary",
   correctionEnabled: "correction",
+  correctionModel: "correction",
   correctionCustomInstructions: "correction",
   resolveFileLinks: "correction",
 };
@@ -163,6 +189,7 @@ const SETTING_LABEL: Partial<Record<PatchKey, string>> = {
   recordingMode: "Recording mode",
   learnFromCorrections: "Learn words from corrections",
   correctionEnabled: "Clean up transcriptions",
+  correctionModel: "Cleanup model",
   correctionCustomInstructions: "Custom instructions",
   resolveFileLinks: "Resolve file references",
 };
@@ -777,7 +804,7 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
       {settings.enabled && (
         <SettingsSection
           title="AI text correction"
-          description={`When you stop dictating, the whole passage is corrected once with ${VOICE_CLEANUP_AI_MODEL} to fix technical terms, punctuation and filler words, resolve self-corrections, and lay out spoken lists. The text and the terminal's recent output, with credential-like lines removed, are sent to OpenAI.`}
+          description="When you stop dictating, the whole passage is corrected once by the cleanup model to fix technical terms, punctuation and filler words, resolve self-corrections, and lay out spoken lists. The text and the terminal's recent output, with credential-like lines removed, are sent to OpenAI."
           id="voice-ai-correction"
         >
           {saveError("correction")}
@@ -814,6 +841,17 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
                     : "Cleanup runs on OpenAI. Add an OpenAI API key above to use it."
                 }
               >
+                <SettingsChoicebox
+                  id="voice-cleanup-model"
+                  label="Cleanup model"
+                  description="Spoken rewrites of a selection use it too"
+                  value={settings.correctionModel}
+                  onChange={(model) => void update({ correctionModel: model })}
+                  options={CLEANUP_MODEL_CHOICES}
+                  isModified={settings.correctionModel !== DEFAULT_SETTINGS.correctionModel}
+                  onReset={() => void update({ correctionModel: DEFAULT_SETTINGS.correctionModel })}
+                />
+
                 <SettingsSwitchCard
                   id="voice-resolve-file-links"
                   title="Resolve file references"

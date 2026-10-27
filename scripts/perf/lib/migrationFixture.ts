@@ -985,10 +985,11 @@ async function buildHarness(): Promise<MigrationHarness> {
         auditRingMisses += Math.abs(ringLength(auditLogs, key) - expected);
       }
 
-      // --- 004 / 005 / 007 / 014 / 015 / 019 / 021 / 024 / 025 / 026 / 027
+      // --- 004 / 005 / 007 / 014 / 015 / 019 / 021 / 024 / 025 / 026 / 027 / 040
       let scalarMigrationMisses = 0;
       const voice = asRecord(config.voiceInput);
-      if (voice?.correctionModel !== "gpt-5.6-luna") scalarMigrationMisses += 1;
+      // 025 lands the fixture's gpt-5-nano on gpt-5.6-luna, then 040 moves it on.
+      if (voice?.correctionModel !== "gpt-6.1-terra") scalarMigrationMisses += 1;
       if (voice?.transcriptionModel !== "gpt-live-transcribe") scalarMigrationMisses += 1;
       if (asRecord(config.terminalConfig)?.scrollbackLines !== 1000) scalarMigrationMisses += 1;
       const checklist = asRecord(asRecord(config.onboarding)?.checklist);

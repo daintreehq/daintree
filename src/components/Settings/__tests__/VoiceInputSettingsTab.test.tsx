@@ -329,9 +329,8 @@ describe("VoiceInputSettingsTab", () => {
     });
   });
 
-  it("does not render a correction-model selector when AI correction is enabled", async () => {
-    // Cleanup runs on one model, so there is no model choice to offer
-    // (issue #11365).
+  it("saves the cleanup model the user picks", async () => {
+    const setSettings = vi.fn().mockResolvedValue(undefined);
     window.electron = {
       voiceInput: createVoiceInputApi({
         getSettings: vi.fn().mockResolvedValue({
@@ -347,16 +346,21 @@ describe("VoiceInputSettingsTab", () => {
           resolveFileLinks: true,
           deviceId: "",
         }),
+        setSettings,
       }),
     } as unknown as typeof window.electron;
 
     render(<VoiceInputSettingsTab />);
 
-    // Anchor on the AI-correction subtree itself (gated on correctionEnabled &&
-    // openaiApiKey) so the negative assertion can't pass vacuously — not before
-    // the async load resolves, and not if that whole subtree stopped rendering.
-    await screen.findByText(/Prompt caching keeps costs minimal/i);
-    expect(screen.queryByTestId("settings-select-Correction Model")).toBeNull();
+    const group = await screen.findByRole("radiogroup", { name: "Cleanup model" });
+    const luna = Array.from(group.querySelectorAll<HTMLElement>('[role="radio"]')).find((el) =>
+      el.textContent?.includes("GPT-6 Luna")
+    );
+    luna?.click();
+
+    await waitFor(() => {
+      expect(setSettings).toHaveBeenCalledWith({ correctionModel: "gpt-6-luna" });
+    });
   });
 
   describe("microphone permission request on Windows", () => {
