@@ -972,11 +972,16 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
 
   const handleSetSettings = async (patch: VoiceInputSettingsPatch) => {
     if (!patch || typeof patch !== "object") return;
+    const updates: Record<string, unknown> = {};
     for (const [field, value] of Object.entries(patch)) {
       if (value === undefined) continue;
       if (!Object.hasOwn(WRITABLE_VOICE_FIELDS, field)) continue;
-      store.set(`voiceInput.${field}`, value);
+      updates[field] = value;
     }
+    if (Object.keys(updates).length === 0) return;
+    // One write, so fields saved together (a mic's id and its name) land
+    // together or not at all.
+    store.set("voiceInput", { ...store.get("voiceInput"), ...updates });
   };
 
   const reportAudioOverflow = (session: VoiceSession) => {

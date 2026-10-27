@@ -579,14 +579,22 @@ describe("VoiceInputSettingsTab input device (#14850)", () => {
   });
 
   it("drops the mark once the chosen mic is plugged back in", async () => {
-    withDevices(BUILT_IN, AIRPODS);
+    withDevices(BUILT_IN);
     install({ deviceId: "airpods", deviceLabel: "Greg's AirPods Pro" });
-    render(<VoiceInputSettingsTab />);
-
-    await waitFor(async () =>
-      expect((await inputDevice()).textContent).toContain("Greg's AirPods Pro")
+    const { rerender } = render(<VoiceInputSettingsTab />);
+    const trigger = await inputDevice();
+    await waitFor(() =>
+      expect(trigger.textContent).toContain("Greg's AirPods Pro (not connected)")
     );
-    expect((await inputDevice()).textContent).not.toContain("not connected");
+
+    withDevices(BUILT_IN, AIRPODS);
+    rerender(<VoiceInputSettingsTab />);
+
+    await waitFor(() => expect(trigger.textContent).not.toContain("not connected"));
+    expect(trigger.textContent).toContain("Greg's AirPods Pro");
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: "Enter" });
+    expect(await screen.findAllByRole("option", { name: /AirPods/ })).toHaveLength(1);
   });
 
   it.each([
@@ -670,6 +678,44 @@ describe("VoiceInputSettingsTab input device (#14850)", () => {
     await waitFor(() =>
       expect(api.setSettings).toHaveBeenCalledWith({ deviceId: "", deviceLabel: "" })
     );
+  });
+
+  it("keeps a newer pick's name when an older pick fails to save", async () => {
+    const LOOPBACK_A = { value: "loopback-a", label: "Loopback Audio" };
+    const LOOPBACK_B = { value: "loopback-b", label: "Loopback Audio" };
+    withDevices(LOOPBACK_A, LOOPBACK_B);
+    let failFirst: () => void = () => {};
+    const setSettings = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((_resolve, reject) => {
+            failFirst = () => reject(new Error("disk full"));
+          })
+      )
+      .mockResolvedValue(undefined);
+    install({ deviceId: "airpods", deviceLabel: "Greg's AirPods Pro" }, { setSettings });
+    const { rerender } = render(<VoiceInputSettingsTab />);
+    const trigger = await inputDevice();
+    await waitFor(() => expect(trigger.textContent).toContain("Greg's AirPods Pro"));
+    const pick = async (index: number) => {
+      trigger.focus();
+      fireEvent.keyDown(trigger, { key: "Enter" });
+      const options = await screen.findAllByRole("option", { name: "Loopback Audio" });
+      fireEvent.keyDown(options[index]!, { key: "Enter" });
+    };
+
+    await pick(0);
+    await waitFor(() => expect(setSettings).toHaveBeenCalledTimes(1));
+    await pick(1);
+    await waitFor(() => expect(setSettings).toHaveBeenCalledTimes(2));
+    failFirst();
+    await waitFor(() => expect(screen.getByText(/Input device is back/)).toBeTruthy());
+
+    // The second pick is what's saved: unplugged, it must still carry its own name.
+    withDevices(LOOPBACK_A);
+    rerender(<VoiceInputSettingsTab />);
+    await waitFor(() => expect(trigger.textContent).toContain("Loopback Audio (not connected)"));
   });
 
   it("puts the name back with the id when a pick fails to save", async () => {

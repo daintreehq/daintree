@@ -2142,12 +2142,38 @@ describe("voiceInput — context keyterms wiring", () => {
   it("does not persist runtime-only keyterms via setSettings", async () => {
     const { store } = await import("../../../store.js");
     vi.mocked(store.set).mockClear();
+    vi.mocked(store.get).mockReturnValueOnce({ language: "en", deviceId: "" });
 
     await setSettingsFn(fakeEvent, { keyterms: ["secret"], language: "fr" });
 
-    const setCalls = vi.mocked(store.set).mock.calls as unknown as Array<[string, unknown]>;
-    expect(setCalls.some(([key]) => key === "voiceInput.keyterms")).toBe(false);
-    expect(setCalls.some(([key]) => key === "voiceInput.language")).toBe(true);
+    expect(vi.mocked(store.set).mock.calls).toEqual([
+      ["voiceInput", { language: "fr", deviceId: "" }],
+    ]);
+  });
+
+  it("saves a mic's id and name in one write, keeping the rest", async () => {
+    const { store } = await import("../../../store.js");
+    vi.mocked(store.set).mockClear();
+    vi.mocked(store.get).mockReturnValueOnce({
+      language: "en",
+      deviceId: "airpods",
+      deviceLabel: "AirPods Pro",
+    });
+
+    await setSettingsFn(fakeEvent, { deviceId: "usb-mic", deviceLabel: "USB Mic" });
+
+    expect(vi.mocked(store.set).mock.calls).toEqual([
+      ["voiceInput", { language: "en", deviceId: "usb-mic", deviceLabel: "USB Mic" }],
+    ]);
+  });
+
+  it("writes nothing for a patch with nothing it may save", async () => {
+    const { store } = await import("../../../store.js");
+    vi.mocked(store.set).mockClear();
+
+    await setSettingsFn(fakeEvent, { keyterms: ["secret"] });
+
+    expect(store.set).not.toHaveBeenCalled();
   });
 
   it("bails a start superseded by a later start during assembly", async () => {

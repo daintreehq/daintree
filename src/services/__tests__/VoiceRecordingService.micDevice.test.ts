@@ -575,15 +575,27 @@ describe("VoiceRecordingService — chosen mic that won't open (#14850)", () => 
   const notAllowed = () => new DOMException("Permission denied", "NotAllowedError");
 
   it("records from the chosen mic whatever the system default is", async () => {
-    const harness = setupGlobals({
-      deviceId: "usb-mic",
-      tracks: [{ label: "USB Mic", deviceId: "usb-mic" }],
+    const harness = setupGlobals({ deviceId: "usb-mic", tracks: [] });
+    // AirPods hold the system input; only a request for the chosen mic opens it.
+    harness.getUserMedia.mockImplementation(async (...args: unknown[]) => {
+      const asked = (args[0] as MediaStreamConstraints).audio as
+        { deviceId?: { ideal?: string } } | boolean;
+      const track =
+        typeof asked === "object" && asked.deviceId?.ideal === "usb-mic"
+          ? createTrack("USB Mic", "usb-mic")
+          : createTrack("Default - Greg's AirPods Pro", "default");
+      harness.tracks.push(track);
+      return createStream(track);
     });
     const { store, service } = await load();
 
     await service.start(TARGET);
 
     expect(harness.getUserMedia).toHaveBeenCalledTimes(1);
+    expect(harness.getUserMedia).toHaveBeenCalledWith({
+      audio: { deviceId: { ideal: "usb-mic" } },
+      video: false,
+    });
     expect(store.getState().micDeviceLabel).toBe("USB Mic");
     expect(store.getState().micNotice).toBeNull();
   });
