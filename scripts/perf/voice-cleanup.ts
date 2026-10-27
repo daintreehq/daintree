@@ -46,6 +46,7 @@ import {
   codeNamesOf,
   corpusProblems,
   fixesOf,
+  locatePauses,
   locateUncertain,
   MODEL_PRICES,
   PROMPT_LENGTH_MIN_CHARS,
@@ -362,6 +363,7 @@ export function requestFor(entry: CleanupCase, now: number = Date.now()): VoiceC
     reason: "stop",
     startsPrompt: entry.startsPrompt ?? recentContext.length === 0,
     ...(entry.uncertain?.length ? { uncertain: locateUncertain(entry.raw, entry.uncertain) } : {}),
+    ...(entry.pauses?.length ? { pauses: locatePauses(entry.raw, entry.pauses) } : {}),
   };
 }
 
@@ -639,7 +641,7 @@ export function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): st
   lines.push(
     "## What landed",
     "",
-    "Each reply landed as production lands it, through the agent-command and low-confidence checks, per model:effort/prompt. Ready: the message the speaker would have typed (an accepted reference's words and lines, every misread and form fix and every drop landed, nothing kept lost, any run-on broken up). Repaired: reference words the raw transcript had wrong that came back right. Misreads: fixes for a word the raw transcript got wrong, one an agent would take for something else, landed exactly; a model or prompt choice rests on these. Forms: fixes that only write the speaker's own words the way they would have typed them, landed exactly; an agent reads those right either way. Drops: filler and retracted words taken out. Splits: run-ons broken into sentences under the passage's cap. Keeps: the case's own, plus every code span, reference, flag, path and number in the raw transcript. Broken: words the raw had right that were lost or changed. Novel: words in neither the raw nor the reference. Added: words inserted beyond any the raw already had extra. Risky trials: any broken, novel or added word, or a keep lost.",
+    "Each reply landed as production lands it, through the agent-command and low-confidence checks, per model:effort/prompt. Ready: the message the speaker would have typed (an accepted reference's words and lines, every misread and form fix and every drop landed, nothing kept lost, any run-on broken up, every sentence break and unbroken span the passage names where it says). Repaired: reference words the raw transcript had wrong that came back right. Misreads: fixes for a word the raw transcript got wrong, one an agent would take for something else, landed exactly; a model or prompt choice rests on these. Forms: fixes that only write the speaker's own words the way they would have typed them, landed exactly; an agent reads those right either way. Drops: filler and retracted words taken out. Splits: run-ons broken into sentences under the passage's cap. Keeps: the case's own, plus every code span, reference, flag, path and number in the raw transcript. Broken: words the raw had right that were lost or changed. Novel: words in neither the raw nor the reference. Added: words inserted beyond any the raw already had extra. Risky trials: any broken, novel or added word, or a keep lost.",
     "",
     ...QUALITY_HEADER,
     ...run.summaries.map((summary) => qualityRow(summary.variant, summary.landed)),
@@ -806,6 +808,8 @@ export function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): st
       }),
       score.missedDrops.length ? `left ${score.missedDrops.join(", ")}` : "",
       score.split === false ? `run-on (${score.longestSentence} words)` : "",
+      score.missedBreaks.length ? `no break after ${score.missedBreaks.join(", ")}` : "",
+      score.splitSpans.length ? `split ${score.splitSpans.join(", ")}` : "",
       score.lostKeeps.length ? `lost ${score.lostKeeps.join(", ")}` : "",
       score.broken ? `${score.broken} broken` : "",
       score.novelWords ? `${score.novelWords} novel` : "",
@@ -822,6 +826,9 @@ export function renderReport(run: RunRecord, corpus: readonly CleanupCase[]): st
       `### ${entry.id}`,
       "",
       `- raw: ${JSON.stringify(entry.raw)}`,
+      ...(entry.pauses?.length
+        ? [`- pauses after: ${entry.pauses.map((phrase) => JSON.stringify(phrase)).join(", ")}`]
+        : []),
       `- reference: ${JSON.stringify(entry.reference)}`
     );
     for (const variant of run.variants) {

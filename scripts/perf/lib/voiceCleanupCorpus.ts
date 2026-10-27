@@ -43,6 +43,7 @@ export type CaseSource =
   | "lookalike"
   | "codenames"
   | "commands"
+  | "pauses"
   | "clean"
   | "regression";
 
@@ -124,8 +125,14 @@ export interface CleanupCase {
   keep?: string[];
   /** A run-on the cleanup should break up: no sentence it writes may run longer than this many words. */
   maxSentenceWords?: number;
+  /** Words a sentence or line the cleanup writes must end straight after: a break the raw doesn't make. */
+  breaks?: string[];
+  /** Words the cleanup must keep inside one sentence: where a pause was only a breath. */
+  unbroken?: string[];
   /** Words the recogniser was unsure of, located in `raw` in order. Deepgram only: Grok scores no streamed word. */
   uncertain?: string[];
+  /** The words each pause the speaker made comes straight after, located in `raw` in order (#14898). */
+  pauses?: string[];
   recentContext?: string[];
   /** The prompts last sent to the terminal, oldest first, as production sends them (#14855). */
   recentPrompts?: string[];
@@ -1671,6 +1678,189 @@ const CODE_NAMES: readonly AuthoredCase[] = [
   })),
 ];
 
+// Where the speaker paused (#14898), as each provider reports one: Deepgram
+// and Grok where an utterance ends, OpenAI where a commit ends at speech.
+// Deepgram's run-ons carry no punctuation at the pause, and OpenAI and Grok
+// end a sentence at one that was only a breath. A pause settles where a
+// run-on breaks, where a list's items start and where a correction begins;
+// the lookalikes pause where the words go on, or before a "no" that negates,
+// and keep the sentence whole. Twins say the same words with the pause in
+// another place, so the words alone can land at most one of each pair.
+const PAUSES: readonly AuthoredCase[] = [
+  {
+    id: "pauses-cache-early:deepgram",
+    style: "deepgram",
+    source: "pauses",
+    raw: "Look at the cash when the branch changes it gets cleared but the badge still shows the old count.",
+    reference:
+      "Look at the cache. When the branch changes, it gets cleared, but the badge still shows the old count.",
+    fixes: { cache: "misread" },
+    uncertain: ["cash"],
+    pauses: ["Look at the cash"],
+    breaks: ["look at the cache"],
+    unbroken: ["when the branch changes it gets cleared"],
+  },
+  {
+    id: "pauses-cache-late:deepgram",
+    style: "deepgram",
+    source: "pauses",
+    raw: "Look at the cash when the branch changes it gets cleared but the badge still shows the old count.",
+    reference:
+      "Look at the cache when the branch changes. It gets cleared, but the badge still shows the old count.",
+    fixes: { cache: "misread" },
+    uncertain: ["cash"],
+    pauses: ["when the branch changes"],
+    breaks: ["when the branch changes"],
+    unbroken: ["look at the cache when the branch changes"],
+  },
+  {
+    id: "pauses-tests-early:deepgram",
+    style: "deepgram",
+    source: "pauses",
+    raw: "Leave the tests failing builds can wait until the release branch is cut.",
+    reference: "Leave the tests. Failing builds can wait until the release branch is cut.",
+    pauses: ["Leave the tests"],
+    breaks: ["leave the tests"],
+    unbroken: ["failing builds can wait"],
+  },
+  {
+    id: "pauses-tests-late:deepgram",
+    style: "deepgram",
+    source: "pauses",
+    raw: "Leave the tests failing builds can wait until the release branch is cut.",
+    reference: "Leave the tests failing. Builds can wait until the release branch is cut.",
+    pauses: ["Leave the tests failing"],
+    breaks: ["leave the tests failing"],
+    unbroken: ["the tests failing"],
+  },
+  {
+    id: "pauses-toast:deepgram",
+    style: "deepgram",
+    source: "pauses",
+    raw: "The toast never closes on its own it stays up until you click it can you give it a 5 second timeout.",
+    reference:
+      "The toast never closes on its own. It stays up until you click it. Can you give it a 5 second timeout?",
+    pauses: ["closes on its own", "until you click it"],
+    breaks: ["never closes on its own", "until you click it"],
+  },
+  {
+    id: "pauses-list-picker:deepgram",
+    style: "deepgram",
+    source: "pauses",
+    raw: "There are 3 things wrong with the picker the search box loses focus the arrow keys skip the first row and escape doesn't close it.",
+    reference:
+      "There are 3 things wrong with the picker:\n1. The search box loses focus.\n2. The arrow keys skip the first row.\n3. Escape doesn't close it.",
+    fixes: { "1. The search box": "form", "2. The arrow keys": "form", "3. Escape": "form" },
+    drops: ["and"],
+    pauses: ["wrong with the picker", "loses focus", "skip the first row"],
+  },
+  {
+    id: "pauses-list-merge:openai",
+    style: "openai",
+    source: "pauses",
+    raw: "Um, two things before you merge. Bump the timeout to 30 seconds. And log every retry.",
+    reference:
+      "Two things before you merge:\n1. Bump the timeout to 30 seconds.\n2. Log every retry.",
+    fixes: { "1. Bump": "form", "2. Log": "form" },
+    drops: ["um", "and"],
+    pauses: ["before you merge", "to 30 seconds"],
+  },
+  {
+    id: "pauses-series:deepgram",
+    style: "deepgram",
+    source: "pauses",
+    raw: "Can you add stories for the empty state the loading state and the error state.",
+    reference: "Can you add stories for the empty state, the loading state and the error state?",
+    pauses: ["for the empty state"],
+    unbroken: ["add stories for the empty state the loading state and the error state"],
+  },
+  {
+    id: "pauses-correction-hook:deepgram",
+    style: "deepgram",
+    source: "pauses",
+    raw: "Use the store no the hook for the selection state and leave the reducer alone.",
+    reference: "Use the hook for the selection state and leave the reducer alone.",
+    drops: ["no", "store"],
+    keep: ["leave the reducer alone"],
+    pauses: ["Use the store"],
+  },
+  {
+    id: "pauses-correction-queue:deepgram",
+    style: "deepgram",
+    source: "pauses",
+    raw: "Bump the limit in the worker pool I mean the request queue to match the docs.",
+    reference: "Bump the limit in the request queue to match the docs.",
+    drops: ["I mean", "worker pool"],
+    pauses: ["the worker pool"],
+  },
+  {
+    id: "pauses-correction-tab:grok",
+    style: "grok",
+    source: "pauses",
+    raw: "Put the toggle in the general tab. Sorry, the voice tab, under the microphone picker.",
+    reference: "Put the toggle in the voice tab, under the microphone picker.",
+    drops: ["sorry", "general"],
+    pauses: ["the general tab"],
+  },
+  {
+    id: "pauses-addition:deepgram",
+    style: "deepgram",
+    source: "pauses",
+    raw: "Make the header sticky the footer too.",
+    reference: "Make the header sticky, the footer too.",
+    alsoAccept: ["Make the header sticky. The footer too."],
+    keep: ["the header sticky"],
+    pauses: ["Make the header sticky"],
+  },
+  {
+    id: "pauses-negation-border:deepgram",
+    style: "deepgram",
+    source: "pauses",
+    raw: "Make the border red no thicker than 1 pixel.",
+    reference: "Make the border red, no thicker than 1 pixel.",
+    alsoAccept: ["Make the border red. No thicker than 1 pixel."],
+    keep: ["border red", "no thicker than 1 pixel"],
+    pauses: ["Make the border red"],
+  },
+  {
+    id: "pauses-negation-export:deepgram",
+    style: "deepgram",
+    source: "pauses",
+    raw: "Keep the old export no one imports the new one yet.",
+    reference: "Keep the old export. No one imports the new one yet.",
+    keep: ["the old export", "no one imports"],
+    pauses: ["Keep the old export"],
+    breaks: ["keep the old export"],
+  },
+  {
+    id: "pauses-breath-clause:deepgram",
+    style: "deepgram",
+    source: "pauses",
+    raw: "When the agent finishes play the sound only if the window is focused.",
+    reference: "When the agent finishes, play the sound only if the window is focused.",
+    pauses: ["When the agent finishes"],
+    unbroken: ["when the agent finishes play the sound"],
+  },
+  {
+    id: "pauses-breath-wrapper:openai",
+    style: "openai",
+    source: "pauses",
+    raw: "Can you move the retry logic into the. Fetch wrapper, so every call gets it?",
+    reference: "Can you move the retry logic into the fetch wrapper, so every call gets it?",
+    pauses: ["into the"],
+    unbroken: ["into the fetch wrapper"],
+  },
+  {
+    id: "pauses-breath-hook:grok",
+    style: "grok",
+    source: "pauses",
+    raw: "Rename the hook. That loads the user, so the name says what it does.",
+    reference: "Rename the hook that loads the user, so the name says what it does.",
+    pauses: ["Rename the hook"],
+    unbroken: ["rename the hook that loads the user"],
+  },
+];
+
 // Passages already right: cleanup should hand them back untouched.
 const CLEAN: readonly AuthoredCase[] = [
   {
@@ -1893,6 +2083,7 @@ export const CLEANUP_CORPUS: readonly CleanupCase[] = [
     ...LOOKALIKE,
     ...CODE_NAMES,
     ...COMMANDS,
+    ...PAUSES,
     ...CLEAN,
   ].map((entry) => ({
     ...entry,

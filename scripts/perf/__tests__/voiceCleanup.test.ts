@@ -26,6 +26,9 @@ import { PROMPT_VARIANTS, revise } from "../lib/voiceCleanupPrompts";
 import {
   codeNamesOf,
   corpusProblems,
+  endsSentenceAfter,
+  keepsInOneSentence,
+  locatePauses,
   locateUncertain,
   longestSentence,
   percentile,
@@ -100,7 +103,9 @@ describe("cleanup corpus", () => {
           score.addedWords === 0 &&
           (!fixesApply || score.missedFixes.length === 0) &&
           score.missedDrops.length === 0 &&
-          score.lostKeeps.length === 0;
+          score.lostKeeps.length === 0 &&
+          score.missedBreaks.length === 0 &&
+          score.splitSpans.length === 0;
         return perfect ? [] : [`${entry.id}: ${reference}`];
       })
     );
@@ -306,6 +311,14 @@ describe("inputHash", () => {
       terminalOutput: "Should I write a migration now, or add a shim?",
     });
     expect(inputHash(legacy)).toBe("1c51b64b79aa");
+  });
+
+  it("changes with where the speaker paused, and not for no pauses", () => {
+    const bare = inputHash(passage);
+    const early = inputHash({ ...passage, pauses: ["compare"] });
+    expect(inputHash({ ...passage, pauses: [] })).toBe(bare);
+    expect(early).not.toBe(bare);
+    expect(inputHash({ ...passage, pauses: ["GPT 6.1"] })).not.toBe(early);
   });
 
   it("changes with the recent prompts it carries, and not for none", () => {
@@ -935,6 +948,102 @@ describe("run-ons and agent-ready text", () => {
     }
   });
 
+  it("needs a break where the case puts one, by full stop, semicolon or line, and none inside an unbroken span", () => {
+    const entry = makeCase({
+      raw: "leave the tests failing builds can wait",
+      reference: "Leave the tests. Failing builds can wait.",
+      fixes: {},
+      drops: [],
+      breaks: ["leave the tests"],
+      unbroken: ["failing builds can wait"],
+    });
+    for (const text of [entry.reference, "Leave the tests; failing builds can wait."]) {
+      expect(scoreText(entry, text), text).toMatchObject({ missedBreaks: [], agentReady: true });
+    }
+    expect(scoreText(entry, "Leave the tests\nFailing builds can wait.").missedBreaks).toEqual([]);
+    expect(scoreText(entry, "Leave the tests, failing builds can wait.")).toMatchObject({
+      missedBreaks: ["leave the tests"],
+      splitSpans: [],
+      agentReady: false,
+    });
+    expect(scoreText(entry, "Leave the tests failing. Builds can wait.")).toMatchObject({
+      missedBreaks: ["leave the tests"],
+      splitSpans: ["failing builds can wait"],
+      agentReady: false,
+    });
+    // The reference's words and its break, with a span split that should stay whole.
+    expect(scoreText(entry, "Leave the tests. Failing builds. Can wait.")).toMatchObject({
+      matchesReference: true,
+      missedBreaks: [],
+      splitSpans: ["failing builds can wait"],
+      agentReady: false,
+    });
+  });
+
+  it("ends a sentence through a closing quote or bracket, never at an ellipsis, and finds no empty phrase", () => {
+    expect(endsSentenceAfter('"Ship it." Then wait.', "ship it")).toBe(true);
+    expect(endsSentenceAfter("Ship it (today.) Then wait.", "ship it today")).toBe(true);
+    expect(keepsInOneSentence('"Ship it." Then wait.', "ship it then wait")).toBe(false);
+    for (const text of ["Move the... fetch wrapper.", "Move the\u2026 fetch wrapper."]) {
+      expect(keepsInOneSentence(text, "the fetch wrapper"), text).toBe(true);
+    }
+    expect(endsSentenceAfter("Ship it.", "")).toBe(false);
+    expect(keepsInOneSentence("Ship it.", "")).toBe(false);
+  });
+
+  it("reads a laid-out list's lines as breaks, without its item numbers", () => {
+    const entry = makeCase({
+      raw: "two things before you merge bump the timeout and log every retry",
+      reference: "Two things before you merge:\n1. Bump the timeout.\n2. Log every retry.",
+      fixes: {},
+      drops: [],
+      breaks: ["two things before you merge", "bump the timeout"],
+      unbroken: ["log every retry"],
+    });
+    expect(scoreText(entry, entry.reference)).toMatchObject({ missedBreaks: [], splitSpans: [] });
+    expect(
+      scoreText(entry, "Two things before you merge: bump the timeout and log every retry.")
+        .missedBreaks
+    ).toEqual(["two things before you merge", "bump the timeout"]);
+    expect(endsSentenceAfter("Two things:\n1. Ship it.", "1")).toBe(false);
+    expect(keepsInOneSentence("Two things:\n10) Ship it.", "10 ship it")).toBe(false);
+  });
+
+  it("flags a break the raw already makes or a reference misses, an unbroken span a reference splits, and a pause it can't place or that marks nothing", () => {
+    const problems = corpusProblems([
+      makeCase({
+        id: "breaks",
+        raw: "leave the tests. failing builds can wait",
+        reference: "Leave the tests. Failing builds can wait.",
+        alsoAccept: ["Leave the tests failing. Builds can wait."],
+        fixes: {},
+        drops: [],
+        breaks: ["leave the tests"],
+        unbroken: ["failing builds"],
+        pauses: ["the tests", "no such words"],
+      }),
+      makeCase({ id: "last", pauses: ["changes"] }),
+      makeCase({
+        id: "twice",
+        raw: "ship it then wait ship it only after the build passes",
+        reference: "Ship it. Then wait. Ship it only after the build passes.",
+        fixes: {},
+        drops: [],
+        breaks: ["ship it"],
+        pauses: [""],
+      }),
+    ]);
+    expect(problems).toEqual([
+      'breaks: the raw already ends a sentence after "leave the tests"',
+      'breaks: "Leave the tests failing. Builds can wait." ends no sentence after "leave the tests"',
+      'breaks: "Leave the tests failing. Builds can wait." splits "failing builds"',
+      'breaks: pause after "no such words" is not in the raw transcript',
+      "last: a pause after the last word marks nothing",
+      'twice: "ship it" comes more than once in "Ship it. Then wait. Ship it only after the build passes."',
+      "twice: a pause comes after no words",
+    ]);
+  });
+
   it("flags a run-on cap the raw already meets, or a reference breaks", () => {
     const problems = corpusProblems([
       makeCase({ id: "short", maxSentenceWords: 20 }),
@@ -1018,9 +1127,20 @@ describe("prompt variants", () => {
     expect(PROMPT_VARIANTS.v13!.instructionsFor("gpt-6.1-terra")).toEqual(
       withRecentPrompts(PROMPT_VARIANTS.final!.instructionsFor("gpt-6.1-terra"))
     );
-    // Production now clarifies self-corrections; replaying agentreply must keep its measured rules.
-    expect(production.instructionsFor("gpt-6.1-terra")).not.toEqual(
-      PROMPT_VARIANTS.agentreply!.instructionsFor("gpt-6.1-terra")
+    // Production clarifies self-corrections past the rules pauses1 was measured
+    // with (#14898); replaying a measured variant must keep its measured rules.
+    const kept = "An instruction the speaker didn't take back is never dropped.";
+    const clarified = (instructions: CorrectionInstructions) =>
+      revise(instructions, {
+        core: [
+          [
+            kept,
+            `${kept} The retracted words are only the phrase the replacement takes the place of, not the whole sentence: a negation governing a verb that stays does not block replacing its object. "Don't edit the routes, I mean the handlers" becomes "Don't edit the handlers"; "Don't run it, no wait, run it" stays as spoken because the negation itself was retracted. Keep the replacement exactly in the speaker's words, including a pronoun such as "one": "Use the old script, no wait, the shared one" becomes "Use the shared one", never "Use the shared script".`,
+          ],
+        ],
+      });
+    expect(production.instructionsFor("gpt-6.1-terra")).toEqual(
+      clarified(PROMPT_VARIANTS.pauses1!.instructionsFor("gpt-6.1-terra"))
     );
   });
 
@@ -1030,6 +1150,29 @@ describe("prompt variants", () => {
       expect(core.length, name).toBeGreaterThan(4_800);
       expect(suffix, name).toContain("JSON object");
     }
+  });
+});
+
+describe("locatePauses", () => {
+  it("places each pause after its words and their punctuation, repeated words in order", () => {
+    expect(locatePauses("so, it works. so it works", ["so", "it works", "so"])).toEqual([
+      3, 13, 16,
+    ]);
+  });
+
+  it("finds only whole words, and refuses a phrase the transcript doesn't have", () => {
+    expect(locatePauses("with it then ship", ["it"])).toEqual([7]);
+    expect(locatePauses("it's ready ship it now", ["it"])).toEqual([18]);
+    expect(() => locatePauses("we can’t ship", ["can"])).toThrow(/pause after "can"/);
+    expect(() => locatePauses("ship it", ["merge"])).toThrow(/pause after "merge"/);
+    expect(() => locatePauses("shipping", ["ship"])).toThrow(/pause after "ship"/);
+  });
+
+  it("sends a passage's pauses as production carries them, and none for a passage without", () => {
+    expect(requestFor(makeCase({ raw: "fix it, then ship", pauses: ["fix it"] })).pauses).toEqual([
+      7,
+    ]);
+    expect(requestFor(makeCase({}))).not.toHaveProperty("pauses");
   });
 });
 
