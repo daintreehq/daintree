@@ -10,6 +10,12 @@ import { pluralize } from "../../../shared/utils/pluralize.js";
 import { logDebug, logInfo, logWarn, logError } from "../../utils/logger.js";
 import { voiceErrorLogFields, voicePayloadShape } from "../../../shared/utils/voiceLogFields.js";
 import {
+  flagUncertainWords,
+  shiftSpans,
+  type RecognisedWord,
+  type VoiceTextSpan,
+} from "../../../shared/utils/voiceUncertainWords.js";
+import {
   AUDIO_BUFFER_MAX_BYTES,
   AUDIO_BUFFER_MAX_CHUNKS,
   createAudioBufferOverflowError,
@@ -24,6 +30,9 @@ const P = "[VoiceTranscription:grok]";
 
 const GROK_BASE_URL = process.env.DAINTREE_GROK_WS_URL ?? "wss://api.x.ai/v1/stt";
 const GROK_MODEL = "grok-voice-transcribe-2.0";
+// Words scored below this reach cleanup as unsure. xAI publishes no guidance
+// on what its scores mean, so this is Deepgram's cut-off.
+const UNCERTAIN_BELOW = 0.65;
 // Deepgram's endpoint, so a spoken "send it" gets the same settle in the
 // handler. xAI's default is 400.
 const ENDPOINTING_MS = 300;
@@ -182,14 +191,64 @@ function finiteSeconds(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
 }
 
-function joinTranscript(parts: readonly string[]): string {
-  return parts.filter(Boolean).join(" ");
+/** Transcript text and the spans of the words in it the recogniser was unsure of. */
+interface ScoredText {
+  text: string;
+  uncertain: VoiceTextSpan[];
+}
+
+const NO_TEXT: ScoredText = { text: "", uncertain: [] };
+
+/** One word of a result, with where it starts in the connection's audio. */
+interface TimedWord extends RecognisedWord {
+  start: number | null;
+}
+
+function confidenceScore(value: unknown): number | null {
+  return typeof value === "number" && value >= 0 && value <= 1 ? value : null;
+}
+
+/**
+ * A result's words in transcript order, a malformed one kept in place as an
+ * empty word. xAI leaves a confidence of 0 out of the word, so a word without
+ * one scored 0. A result where no word has one is read as reporting no
+ * confidence instead, so a server that never scores can't flag every word.
+ */
+function timedWords(words: readonly unknown[]): TimedWord[] {
+  const entries = words.map(
+    (entry) => (entry ?? {}) as { text?: unknown; start?: unknown; confidence?: unknown }
+  );
+  const scored = entries.some((word) => confidenceScore(word.confidence) !== null);
+  return entries.map((word) => ({
+    text: typeof word.text === "string" ? word.text.trim() : "",
+    start: finiteSeconds(word.start),
+    confidence:
+      confidenceScore(word.confidence) ?? (scored && word.confidence === undefined ? 0 : NaN),
+  }));
+}
+
+/** `text` with the spans of the words in `words` scored below the cut-off. */
+function scoreText(text: string, words: unknown): ScoredText {
+  if (!text || !Array.isArray(words)) return { text, uncertain: [] };
+  return { text, uncertain: flagUncertainWords(text, timedWords(words), UNCERTAIN_BELOW) };
+}
+
+/** Joins the parts with a space, moving each part's spans to where it lands. */
+function joinTranscript(parts: readonly ScoredText[]): ScoredText {
+  let text = "";
+  const uncertain: VoiceTextSpan[] = [];
+  for (const part of parts) {
+    if (!part.text) continue;
+    if (text) text += " ";
+    uncertain.push(...shiftSpans(part.uncertain, text.length));
+    text += part.text;
+  }
+  return { text, uncertain };
 }
 
 /** A chunk final the current utterance has locked, timed on its connection. */
-interface LockedChunk {
+interface LockedChunk extends ScoredText {
   end: number;
-  text: string;
 }
 
 export class GrokTranscriptionProvider implements TranscriptionProvider {
@@ -261,11 +320,12 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
   // One utterance is one item: its interims and chunk finals replace one
   // preview, and its utterance final, which restates the whole utterance,
   // completes it. Chunk finals locked on an earlier connection are carried as
-  // text, since their audio was confirmed and isn't resent.
+  // text, since their audio was confirmed and isn't resent. Every piece keeps
+  // its own unsure words, placed in the completion wherever the piece lands.
   private utteranceItemId: string | null = null;
-  private carriedText: string[] = [];
+  private carriedText: ScoredText[] = [];
   private lockedChunks: LockedChunk[] = [];
-  private previewText = "";
+  private preview: ScoredText = NO_TEXT;
   // Where the last utterance completed on this connection ends, in its
   // seconds, so `transcript.done` can tell the tail no final covered.
   private connectionCompletedEnd = 0;
@@ -886,12 +946,13 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
         const trimmed = text.trim();
         logDebug(`${P} ← transcript.partial`, { length: trimmed.length, isFinal, speechFinal });
         if (trimmed) this.transcribedSinceReady = true;
+        const scored = scoreText(trimmed, payload.words);
         if (speechFinal) {
-          this.completeUtterance(trimmed, start, duration);
+          this.completeUtterance(scored, start, duration);
         } else if (isFinal) {
-          this.lockChunk(trimmed, start, duration);
+          this.lockChunk(scored, start, duration);
         } else {
-          this.showInterim(trimmed, start);
+          this.showInterim(scored, start);
         }
         return;
       }
@@ -922,18 +983,18 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
     );
   }
 
-  private showPreview(parts: readonly string[]): void {
+  private showPreview(parts: readonly ScoredText[]): void {
     const preview = joinTranscript(parts);
     // An empty revision retracts the preview; before any text it's noise.
-    if (!preview && !this.utteranceItemId) return;
+    if (!preview.text && !this.utteranceItemId) return;
     this.utteranceItemId ??= nextUtteranceItemId();
-    this.previewText = preview;
-    this.emit({ type: "delta", text: preview, itemId: this.utteranceItemId, replace: true });
+    this.preview = preview;
+    this.emit({ type: "delta", text: preview.text, itemId: this.utteranceItemId, replace: true });
   }
 
-  private showInterim(text: string, start: number | null): void {
+  private showInterim(interim: ScoredText, start: number | null): void {
     const before = this.chunksBefore(start, false);
-    this.showPreview([...this.carriedText, ...before.map((chunk) => chunk.text), text]);
+    this.showPreview([...this.carriedText, ...before, interim]);
   }
 
   /**
@@ -941,18 +1002,22 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
    * for the preview. It doesn't complete anything: the utterance final
    * restates it.
    */
-  private lockChunk(text: string, start: number | null, duration: number | null): void {
+  private lockChunk(chunk: ScoredText, start: number | null, duration: number | null): void {
     this.confirmAudio(start, duration);
     const before = this.chunksBefore(start, false);
     const end = start === null ? Number.NEGATIVE_INFINITY : start + (duration ?? 0);
-    this.lockedChunks = text ? [...before, { end, text }] : before;
-    this.showPreview([...this.carriedText, ...this.lockedChunks.map((chunk) => chunk.text)]);
+    this.lockedChunks = chunk.text ? [...before, { ...chunk, end }] : before;
+    this.showPreview([...this.carriedText, ...this.lockedChunks]);
   }
 
-  private completeUtterance(text: string, start: number | null, duration: number | null): void {
+  private completeUtterance(
+    final: ScoredText,
+    start: number | null,
+    duration: number | null
+  ): void {
     this.confirmAudio(start, duration);
     const before = this.chunksBefore(start, true);
-    const full = joinTranscript([...this.carriedText, ...before.map((chunk) => chunk.text), text]);
+    const { text: full, uncertain } = joinTranscript([...this.carriedText, ...before, final]);
     const itemId = this.utteranceItemId;
     if (start !== null && duration !== null) {
       this.connectionCompletedEnd = Math.max(this.connectionCompletedEnd, start + duration);
@@ -968,6 +1033,7 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
       this.emit({
         type: "complete",
         text: full,
+        ...(uncertain.length > 0 ? { uncertain } : {}),
         itemId: itemId ?? nextUtteranceItemId(),
         ...(forced ? {} : { endOfSpeech: true }),
       });
@@ -984,22 +1050,17 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
    * The words of `transcript.done` that no utterance final on this connection
    * covered, or null when it names none: then only the preview is left.
    */
-  private uncompletedWords(words: unknown): string | null {
+  private uncompletedWords(words: unknown): ScoredText | null {
     if (!Array.isArray(words)) return null;
-    const tail: string[] = [];
-    for (const entry of words as unknown[]) {
-      const word = (entry ?? {}) as { text?: unknown; start?: unknown };
-      const start = finiteSeconds(word.start);
-      const text = typeof word.text === "string" ? word.text.trim() : "";
-      if (
-        start !== null &&
-        start + WORD_BOUNDARY_EPSILON_SECONDS >= this.connectionCompletedEnd &&
-        text
-      ) {
-        tail.push(text);
-      }
-    }
-    return tail.length > 0 ? tail.join(" ") : null;
+    const tail = timedWords(words).filter(
+      (word) =>
+        word.start !== null &&
+        word.start + WORD_BOUNDARY_EPSILON_SECONDS >= this.connectionCompletedEnd &&
+        word.text
+    );
+    if (tail.length === 0) return null;
+    const text = tail.map((word) => word.text).join(" ");
+    return { text, uncertain: flagUncertainWords(text, tail, UNCERTAIN_BELOW) };
   }
 
   /**
@@ -1009,9 +1070,11 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
    * stream ended or failed before the utterance did, so its last words may
    * be missing and none of them can be read as a command.
    */
-  private settleOpenUtterance(reason: string, serverTail: string | null = null): void {
+  private settleOpenUtterance(reason: string, serverTail: ScoredText | null = null): void {
     const itemId = this.utteranceItemId;
-    const text = serverTail ? joinTranscript([...this.carriedText, serverTail]) : this.previewText;
+    const { text, uncertain } = serverTail
+      ? joinTranscript([...this.carriedText, serverTail])
+      : this.preview;
     this.resetUtterance();
     if (!itemId && !text) return;
     logInfo(`${P} Settling an utterance that never got its final`, {
@@ -1022,6 +1085,7 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
     this.emit({
       type: "complete",
       text,
+      ...(uncertain.length > 0 ? { uncertain } : {}),
       itemId: itemId ?? nextUtteranceItemId(),
       ...(serverTail ? { endOfSpeech: true } : { incomplete: true }),
     });
@@ -1031,7 +1095,7 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
     this.utteranceItemId = null;
     this.carriedText = [];
     this.lockedChunks = [];
-    this.previewText = "";
+    this.preview = NO_TEXT;
   }
 
   private sendAudioBinary(chunk: ArrayBuffer): void {
@@ -1185,7 +1249,7 @@ export class GrokTranscriptionProvider implements TranscriptionProvider {
    * isn't resent, so the new connection's results follow them.
    */
   private flushHeldAudio(): void {
-    this.carriedText = [...this.carriedText, ...this.lockedChunks.map((chunk) => chunk.text)];
+    this.carriedText = [...this.carriedText, ...this.lockedChunks];
     this.lockedChunks = [];
     this.connectionCompletedEnd = 0;
     this.finalizeAtSeconds = null;
