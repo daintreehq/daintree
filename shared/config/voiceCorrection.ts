@@ -1,23 +1,44 @@
 import { VOICE_LANGUAGE_AUTO, voiceLanguageName } from "./voiceLanguages.js";
 import type { HeardAsRule } from "../utils/voiceHeardAs.js";
+import type { VoiceCorrectionModel } from "../types/ipc/api.js";
 
 /**
- * The single OpenAI model backing every voice-dictation AI call: whole-passage
- * correction, file-command detection, and ambiguous-file reranking. It replaces
- * the retired gpt-5-mini/gpt-5-nano tiers, so all three roles share one ID.
- * Migrations hard-code their own target literal and must not import this — the
- * active model can move again, but a past migration's target is immutable.
+ * The OpenAI model behind file-command detection and ambiguous-file reranking,
+ * which run on a 4 s budget. Migrations hard-code their own target literal and
+ * must not import this or VOICE_CLEANUP_AI_MODEL — the active model can move
+ * again, but a past migration's target is immutable.
  */
 export const VOICE_DICTATION_AI_MODEL = "gpt-6-luna" as const;
 
 /**
+ * The default OpenAI model behind whole-passage cleanup and spoken rewrite.
+ * gpt-6.1-terra replaced gpt-6-luna here on the cleanup benchmark
+ * (`npm run perf voice-cleanup`, #14793): it repaired more misheard words at the
+ * same reasoning effort, with typical round trips still under 2 s.
+ */
+export const VOICE_CLEANUP_AI_MODEL = "gpt-6.1-terra" as const;
+
+/** The models cleanup and spoken rewrite may run on; settings let the user pick one. */
+export const VOICE_CLEANUP_MODELS = [
+  "gpt-6.1-terra",
+  "gpt-6-luna",
+] as const satisfies readonly VoiceCorrectionModel[];
+
+export function isVoiceCleanupModel(value: unknown): value is VoiceCorrectionModel {
+  return (VOICE_CLEANUP_MODELS as readonly unknown[]).includes(value);
+}
+
+/**
  * Reasoning effort sent explicitly on every voice-dictation Responses request.
- * gpt-6-luna defaults to "medium" when the field is omitted — a latency/cost
- * regression for these fast, strict-JSON tasks — so we pin the lowest tier at
- * each call site rather than inheriting the model default. There is no minimum
- * reasoning effort for strict json_schema output.
+ * Both dictation models default to "medium" when the field is omitted — a
+ * latency/cost regression for these fast, strict-JSON tasks — so we pin the
+ * lowest tier at each call site rather than inheriting the model default.
+ * There is no minimum reasoning effort for strict json_schema output.
  */
 export const VOICE_DICTATION_REASONING_EFFORT = "none" as const;
+
+/** The Responses API reasoning tiers a voice-dictation request may ask for. */
+export type VoiceReasoningEffort = "none" | "low" | "medium" | "high";
 
 /** The longest selection a spoken rewrite takes, matching cleanup's passage cap. */
 export const VOICE_REWRITE_MAX_SELECTION_CHARS = 12_000;

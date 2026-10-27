@@ -16,7 +16,7 @@ import { getBuiltinSlashCommands } from "../../../shared/types/slashCommands.js"
 import { buildVoiceCommandVocabulary } from "../../../shared/utils/voiceAgentCommands.js";
 
 const BASE_SETTINGS = {
-  model: "gpt-6-luna",
+  model: "gpt-6.1-terra",
   apiKey: "sk-test",
   customDictionary: [] as string[],
 };
@@ -505,7 +505,7 @@ describe("VoiceCorrectionService", () => {
     expect(userMessage).toContain("Array<string>");
   });
 
-  it("sends gpt-6-luna with explicit none reasoning effort and strict JSON output", async () => {
+  it("sends the settings' model with explicit none reasoning effort and strict JSON output", async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValue(makeFetchResponse({ corrected_text: "Corrected." }));
@@ -515,13 +515,34 @@ describe("VoiceCorrectionService", () => {
     await svc.correct({ rawText: "test" }, BASE_SETTINGS);
 
     const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
-    // gpt-6-luna defaults reasoning to "medium" when omitted, so the request
-    // must pin "none" explicitly — never leave the field off (issue #11365).
-    expect(body.model).toBe("gpt-6-luna");
+    // The dictation models default reasoning to "medium" when omitted, so the
+    // request must pin "none" explicitly — never leave the field off (issue #11365).
+    expect(body.model).toBe(BASE_SETTINGS.model);
     expect(body.reasoning).toEqual({ effort: "none" });
     expect(body.max_output_tokens).toBe(1024);
     expect(body.text.format.type).toBe("json_schema");
     expect(body.text.format.strict).toBe(true);
+  });
+
+  it("sends the reasoning effort the settings ask for, to the passage and its warm-up", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        ({
+          ...makeFetchResponse({ corrected_text: "Corrected." }),
+          arrayBuffer: async () => new ArrayBuffer(0),
+        }) as unknown as Response
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const settings = { ...BASE_SETTINGS, reasoningEffort: "low" as const };
+
+    const svc = new VoiceCorrectionService();
+    await svc.warm(settings);
+    await svc.correct({ rawText: "test" }, settings);
+
+    const efforts = fetchMock.mock.calls.map(
+      (call) => JSON.parse((call as unknown as [string, RequestInit])[1].body as string).reasoning
+    );
+    expect(efforts).toEqual([{ effort: "low" }, { effort: "low" }]);
   });
 
   it.each([
@@ -687,6 +708,31 @@ describe("VoiceCorrectionService", () => {
       });
       expect(result.action).toBe("no_change");
       expect(result.confirmedText).toBe("the promise rejects when it times out");
+    });
+
+    it("says which check turned a cleanup down and what it would have written", async () => {
+      const lowConfidence = await correctWith("the promise rejects when it times out", {
+        corrected_text: "The promise regex when it times out.",
+        confidence: "low",
+      });
+      expect(lowConfidence.rejected).toEqual({
+        reason: "low_confidence",
+        candidate: "The promise regex when it times out.",
+      });
+
+      // The candidate is the text the guard judged, after leading filler went.
+      const negation = await correctWith("um don't delete the branch yet", {
+        corrected_text: "Um, delete the branch yet.",
+      });
+      expect(negation.rejected).toEqual({
+        reason: "negation",
+        candidate: "delete the branch yet.",
+      });
+
+      const applied = await correctWith("um wire up the racked component", {
+        corrected_text: "Wire up the React component.",
+      });
+      expect(applied.rejected).toBeUndefined();
     });
 
     it("applies a medium-confidence cleanup", async () => {
@@ -1099,6 +1145,15 @@ describe("VoiceCorrectionService", () => {
       );
       expect(result.confirmedText).toBe(rawText);
       expect(result.action).toBe("no_change");
+    });
+
+    it("says a command check turned the cleanup down, and what it would have written", async () => {
+      stubReply("/deploy");
+      const result = await new VoiceCorrectionService().correct(
+        { rawText: "run the deploy skill", startsPrompt: true },
+        { ...BASE_SETTINGS, commandTarget: targetFor("claude") }
+      );
+      expect(result.rejected).toEqual({ reason: "unknown_command", candidate: "/deploy" });
     });
 
     it.each([
@@ -1599,6 +1654,21 @@ describe("VoiceCorrectionService.rewrite", () => {
     );
   });
 
+  it("asks for the settings' reasoning effort, and the lowest tier without one", async () => {
+    const fetchMock = vi.fn(async () => rewriteResponse("replace", "Is it fixed?"));
+    vi.stubGlobal("fetch", fetchMock);
+    const svc = new VoiceCorrectionService();
+    const request = { selectedText: "it is fixed", instruction: "rephrase as a question" };
+
+    await svc.rewrite(request, { ...BASE_SETTINGS, reasoningEffort: "low" });
+    await svc.rewrite(request, BASE_SETTINGS);
+
+    const efforts = fetchMock.mock.calls.map(
+      (call) => JSON.parse((call as unknown as [string, RequestInit])[1].body as string).reasoning
+    );
+    expect(efforts).toEqual([{ effort: "low" }, { effort: "none" }]);
+  });
+
   it("keeps the selection's own leading and trailing whitespace around the rewrite", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(rewriteResponse("replace", "  Shorter.\n")));
 
@@ -1773,6 +1843,80 @@ describe("VoiceCorrectionService timing and warm-up", () => {
     );
     expect(result.failed).toBe(true);
     expect(result.roundTrip).toEqual({ sentAt: 1_000, ms: 300 });
+  });
+
+  it("reports the tokens each reply was billed for, a discarded one included", async () => {
+    const usage = (
+      input: number,
+      cached: number,
+      writes: number,
+      output: number,
+      reasoning: number
+    ) => ({
+      input_tokens: input,
+      input_tokens_details: { cached_tokens: cached, cache_write_tokens: writes },
+      output_tokens: output,
+      output_tokens_details: { reasoning_tokens: reasoning },
+    });
+    const valid = JSON.stringify({
+      action: "replace",
+      corrected_text: "Fix the parser.",
+      confidence: "high",
+    });
+    const reply = (body: Record<string, unknown>) =>
+      ({ ok: true, status: 200, json: async () => body }) as unknown as Response;
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          reply({
+            status: "completed",
+            usage: usage(4_200, 3_968, 120, 130, 90),
+            output_text: valid,
+          })
+        )
+        .mockResolvedValueOnce(
+          reply({
+            status: "incomplete",
+            usage: usage(4_300, 0, 0, 1_024, 1_000),
+            output_text: valid,
+          })
+        )
+        .mockResolvedValueOnce(
+          reply({
+            status: "completed",
+            usage: usage(4_100, 4_096, 0, 7, 0),
+            output_text: "{not json",
+          })
+        )
+        .mockResolvedValueOnce(reply({ status: "completed", output_text: valid }))
+    );
+    const svc = new VoiceCorrectionService();
+    const request = { rawText: "fix the parsr" };
+
+    const landed = await svc.correct(request, BASE_SETTINGS);
+    expect(landed.roundTrip?.usage).toEqual({
+      inputTokens: 4_200,
+      cachedTokens: 3_968,
+      cacheWriteTokens: 120,
+      outputTokens: 130,
+      reasoningTokens: 90,
+    });
+
+    const cutOff = await svc.correct(request, BASE_SETTINGS);
+    expect(cutOff.failed).toBe(true);
+    expect(cutOff.roundTrip?.usage).toMatchObject({ inputTokens: 4_300, outputTokens: 1_024 });
+
+    const malformed = await svc.correct(request, BASE_SETTINGS);
+    expect(malformed.failed).toBe(true);
+    expect(malformed.roundTrip?.usage).toMatchObject({ inputTokens: 4_100, cachedTokens: 4_096 });
+
+    // No usage in the reply is an unknown bill, not a free one.
+    const unbilled = await svc.correct(request, BASE_SETTINGS);
+    expect(unbilled.action).toBe("replace");
+    expect(unbilled.roundTrip).toBeDefined();
+    expect(unbilled.roundTrip?.usage).toBeUndefined();
   });
 
   it("reports no round trip for a passage it never sent", async () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { VoiceCorrectionService } from "../VoiceCorrectionService.js";
-import { VOICE_DICTATION_AI_MODEL } from "../../../shared/config/voiceCorrection.js";
+import { VOICE_CLEANUP_AI_MODEL } from "../../../shared/config/voiceCorrection.js";
 import { DICTATED_PROMPTS } from "./fixtures/dictatedPrompts.js";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
@@ -34,7 +34,7 @@ describe.skipIf(!OPENAI_API_KEY)("dictated prompt cleanup eval", () => {
       const result = await service.correct(
         { rawText: raw, reason: "stop" },
         {
-          model: VOICE_DICTATION_AI_MODEL,
+          model: VOICE_CLEANUP_AI_MODEL,
           apiKey: OPENAI_API_KEY,
           customDictionary: [],
           language: "en",

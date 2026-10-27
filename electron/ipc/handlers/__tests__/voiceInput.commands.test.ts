@@ -170,7 +170,7 @@ vi.mock("../../../store.js", () => ({
           enabled: true,
           openaiApiKey: "sk-test",
           correctionEnabled: true,
-          correctionModel: "gpt-6-luna",
+          correctionModel: "gpt-6.1-terra",
           dictionary: shared.dictionary,
           correctionCustomInstructions: "",
           language: "en",

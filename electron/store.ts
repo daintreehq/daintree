@@ -1066,7 +1066,7 @@ const storeOptions = {
       transcriptionProvider: "openai",
       transcriptionModel: "gpt-live-transcribe",
       correctionEnabled: true,
-      correctionModel: "gpt-6-luna",
+      correctionModel: "gpt-6.1-terra",
       correctionCustomInstructions: "",
       paragraphingStrategy: "spoken-command",
       resolveFileLinks: true,

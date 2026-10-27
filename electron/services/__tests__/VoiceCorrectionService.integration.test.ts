@@ -24,7 +24,7 @@ describe("VoiceCorrectionService integration", () => {
       const result = await svc.correct(
         { rawText: "um so we need to like update the racked component" },
         {
-          model: "gpt-6-luna",
+          model: "gpt-6.1-terra",
           apiKey: OPENAI_API_KEY,
           customDictionary: ["React", "Daintree"],
         }
@@ -54,7 +54,7 @@ describe("VoiceCorrectionService integration", () => {
       const result = await svc.correct(
         { rawText: input },
         {
-          model: "gpt-6-luna",
+          model: "gpt-6.1-terra",
           apiKey: OPENAI_API_KEY,
           customDictionary: [],
         }
@@ -78,7 +78,7 @@ describe("VoiceCorrectionService integration", () => {
       const result = await svc.correct(
         { rawText: "we need to update the daintree work tree dashboard" },
         {
-          model: "gpt-6-luna",
+          model: "gpt-6.1-terra",
           apiKey: OPENAI_API_KEY,
           customDictionary: ["Daintree", "Worktree"],
         }
@@ -94,7 +94,7 @@ describe("VoiceCorrectionService integration", () => {
   );
 
   it.skipIf(!OPENAI_API_KEY)(
-    "gpt-6-luna: corrects technical terms and removes fillers",
+    "gpt-6.1-terra: corrects technical terms and removes fillers",
     async () => {
       svc = new VoiceCorrectionService();
 
@@ -102,13 +102,13 @@ describe("VoiceCorrectionService integration", () => {
       const result = await svc.correct(
         { rawText: input },
         {
-          model: "gpt-6-luna",
+          model: "gpt-6.1-terra",
           apiKey: OPENAI_API_KEY,
           customDictionary: ["React", "Daintree"],
         }
       );
 
-      console.log("Model:    ", "gpt-6-luna");
+      console.log("Model:    ", "gpt-6.1-terra");
       console.log("Raw:      ", input);
       console.log("Corrected:", result.confirmedText);
 
@@ -120,7 +120,7 @@ describe("VoiceCorrectionService integration", () => {
   );
 
   it.skipIf(!OPENAI_API_KEY)(
-    "gpt-6-luna: output contains no preamble, quotes, or explanatory text",
+    "gpt-6.1-terra: output contains no preamble, quotes, or explanatory text",
     async () => {
       svc = new VoiceCorrectionService();
 
@@ -128,13 +128,13 @@ describe("VoiceCorrectionService integration", () => {
       const result = await svc.correct(
         { rawText: input },
         {
-          model: "gpt-6-luna",
+          model: "gpt-6.1-terra",
           apiKey: OPENAI_API_KEY,
           customDictionary: [],
         }
       );
 
-      console.log("Model:    ", "gpt-6-luna");
+      console.log("Model:    ", "gpt-6.1-terra");
       console.log("Raw:      ", input);
       console.log("Corrected:", result.confirmedText);
 
@@ -149,7 +149,7 @@ describe("VoiceCorrectionService integration", () => {
   );
 
   it.skipIf(!OPENAI_API_KEY)(
-    "gpt-6-luna: returns already-correct input verbatim (idempotency)",
+    "gpt-6.1-terra: returns already-correct input verbatim (idempotency)",
     async () => {
       svc = new VoiceCorrectionService();
 
@@ -157,13 +157,13 @@ describe("VoiceCorrectionService integration", () => {
       const result = await svc.correct(
         { rawText: input },
         {
-          model: "gpt-6-luna",
+          model: "gpt-6.1-terra",
           apiKey: OPENAI_API_KEY,
           customDictionary: [],
         }
       );
 
-      console.log("Model:    ", "gpt-6-luna");
+      console.log("Model:    ", "gpt-6.1-terra");
       console.log("Raw:      ", input);
       console.log("Corrected:", result.confirmedText);
 
@@ -176,7 +176,7 @@ describe("VoiceCorrectionService integration", () => {
   );
 
   it.skipIf(!OPENAI_API_KEY)(
-    "gpt-6-luna: handles paragraph-length input (multi-clause)",
+    "gpt-6.1-terra: handles paragraph-length input (multi-clause)",
     async () => {
       svc = new VoiceCorrectionService();
 
@@ -185,13 +185,13 @@ describe("VoiceCorrectionService integration", () => {
       const result = await svc.correct(
         { rawText: input },
         {
-          model: "gpt-6-luna",
+          model: "gpt-6.1-terra",
           apiKey: OPENAI_API_KEY,
           customDictionary: [],
         }
       );
 
-      console.log("Model:    ", "gpt-6-luna");
+      console.log("Model:    ", "gpt-6.1-terra");
       console.log("Raw:      ", input);
       console.log("Corrected:", result.confirmedText);
 
@@ -220,7 +220,7 @@ describe("VoiceCorrectionService integration — target commands", () => {
     ),
   };
   const settings = {
-    model: "gpt-6-luna",
+    model: "gpt-6.1-terra",
     apiKey: OPENAI_API_KEY,
     customDictionary: [],
     commandTarget: claude,

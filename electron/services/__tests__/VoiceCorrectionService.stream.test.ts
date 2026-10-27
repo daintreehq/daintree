@@ -99,6 +99,39 @@ describe("VoiceCorrectionService streaming", () => {
     });
   });
 
+  it("reports the tokens a streamed reply was billed for, a cut-off one included", async () => {
+    const usage = {
+      input_tokens: 3_100,
+      input_tokens_details: { cached_tokens: 2_944, cache_write_tokens: 64 },
+      output_tokens: 140,
+      output_tokens_details: { reasoning_tokens: 70 },
+    };
+    const billed = (json: string, status: string): Frame => {
+      const frame = completed(json, status);
+      return { ...frame, response: { ...(frame.response as object), usage } };
+    };
+    const json = reply("Fix the parser.");
+    const svc = new VoiceCorrectionService();
+    const request = { rawText: "fix the parsr" };
+    const expected = {
+      inputTokens: 3_100,
+      cachedTokens: 2_944,
+      cacheWriteTokens: 64,
+      outputTokens: 140,
+      reasoningTokens: 70,
+    };
+
+    stubFetch(streamed(replyFrames(json, billed(json, "completed"))));
+    const landed = await svc.correct(request, SETTINGS, undefined, () => {});
+    expect(landed.action).toBe("replace");
+    expect(landed.roundTrip?.usage).toEqual(expected);
+
+    stubFetch(streamed(replyFrames(json, billed(json, "incomplete"))));
+    const cutOff = await svc.correct(request, SETTINGS, undefined, () => {});
+    expect(cutOff.failed).toBe(true);
+    expect(cutOff.roundTrip?.usage).toEqual(expected);
+  });
+
   it("reports at most once per interval however fast the reply arrives", async () => {
     let now = 0;
     vi.spyOn(performance, "now").mockImplementation(() => (now += 10));

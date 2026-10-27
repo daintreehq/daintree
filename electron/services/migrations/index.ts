@@ -36,6 +36,7 @@ import { migration036 } from "./036-structured-voice-dictionary.js";
 import { migration037 } from "./037-voice-cleanup-on-by-default.js";
 import { migration038 } from "./038-tap-or-hold-recording-mode.js";
 import { migration039 } from "./039-device-agent-toolbar-pins.js";
+import { migration040 } from "./040-voice-cleanup-on-terra.js";
 
 export const migrations: Migration[] = [
   migration002,
@@ -76,4 +77,5 @@ export const migrations: Migration[] = [
   migration037,
   migration038,
   migration039,
+  migration040,
 ];

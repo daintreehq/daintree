@@ -187,6 +187,13 @@ describe("filterSettings", () => {
     }
   });
 
+  it("finds the dictation cleanup model by either model's name", () => {
+    for (const query of ["cleanup model", "terra", "luna"]) {
+      const results = filterSettings(SETTINGS_SEARCH_INDEX, query);
+      expect(results.some((r) => r.id === "voice-cleanup-model")).toBe(true);
+    }
+  });
+
   it("matches the forge access-token entry for a github token query", () => {
     const results = filterSettings(SETTINGS_SEARCH_INDEX, "github token");
     expect(results.some((r) => r.id === "forge-access-token")).toBe(true);

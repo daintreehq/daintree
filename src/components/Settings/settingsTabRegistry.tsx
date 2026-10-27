@@ -1762,6 +1762,14 @@ export const SETTINGS_REGISTRY = [
         requiresEnabled: VOICE_AI_REQUIRES_ENABLED,
       },
       {
+        id: "voice-cleanup-model",
+        section: "AI text correction",
+        title: "Cleanup model",
+        description: "GPT-6.1 Terra or GPT-6 Luna for cleanup and spoken rewrites",
+        keywords: ["model", "terra", "luna", "gpt", "openai", "rewrite", "cleanup"],
+        requiresEnabled: VOICE_AI_REQUIRES_ENABLED,
+      },
+      {
         id: "voice-resolve-file-links",
         section: "AI text correction",
         title: "Resolve file references",
