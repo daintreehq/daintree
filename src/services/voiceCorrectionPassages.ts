@@ -16,6 +16,8 @@ export interface CorrectionPassage {
   text: string;
   /** The draft before the passage, bounded, without the passage's separator. */
   context: string;
+  /** Nothing but whitespace comes before the passage, so it may open with a command. */
+  startsPrompt: boolean;
 }
 
 function leftContext(draft: string, from: number): string {
@@ -77,6 +79,7 @@ export function collectCorrectionPassages(
       to,
       text: draft.slice(from, to),
       context: leftContext(draft, from),
+      startsPrompt: draft.slice(0, from).trim() === "",
     };
   });
 }

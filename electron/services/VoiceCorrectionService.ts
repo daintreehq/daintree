@@ -9,6 +9,7 @@ import {
   buildCorrectionSystemPrompt,
   buildRewriteSystemPrompt,
   type CorrectionPromptContext,
+  type CorrectionTargetContext,
 } from "../../shared/config/voiceCorrection.js";
 import type { VoiceRewriteOutcome } from "../../shared/types/voice.js";
 import { voiceErrorLogFields } from "../../shared/utils/voiceLogFields.js";
@@ -21,6 +22,15 @@ import {
 } from "./voiceCorrectionGuard.js";
 import { mayReferenceFile } from "../../shared/utils/voiceFileLinkCommands.js";
 import type { HeardAsRule } from "../../shared/utils/voiceHeardAs.js";
+import {
+  checkVoiceCommandEdit,
+  EMPTY_VOICE_COMMAND_VOCABULARY,
+  voiceCommandBaseline,
+  type VoiceCommandEditRejection,
+  type VoiceCommandEntry,
+} from "../../shared/utils/voiceAgentCommands.js";
+import type { VoiceCommandTarget } from "./voiceCommandTarget.js";
+import { holdsCredential, isSecretShaped } from "./voiceKeytermSecrets.js";
 
 export { CORE_CORRECTION_PROMPT, buildCorrectionSystemPrompt };
 
@@ -38,7 +48,7 @@ const MIN_OUTPUT_TOKENS = 1024;
 const OUTPUT_TOKENS_PER_CHAR = 1.5;
 const OUTPUT_TOKENS_OVERHEAD = 256;
 const FILE_LINK_MAX_OUTPUT_TOKENS = 256;
-const PROMPT_CACHE_PREFIX = "voice-correction-v9";
+const PROMPT_CACHE_PREFIX = "voice-correction-v10";
 // OpenAI rejects a prompt_cache_key longer than 64 characters.
 const PROMPT_CACHE_KEY_MAX_LENGTH = 64;
 const FILE_LINK_DETECTION_TIMEOUT_MS = 4000;
@@ -65,6 +75,24 @@ const FILE_LINK_DETECTION_SCHEMA = {
   },
   required: ["file_references"],
 } as const;
+
+// Names and descriptions come from the user's own command and skill files, so
+// they pass the same secret screen as every other on-disk context before they
+// leave the machine.
+function promptCommands(
+  entries: readonly VoiceCommandEntry[]
+): CorrectionTargetContext["commands"] {
+  return entries.flatMap((entry) =>
+    isSecretShaped(entry.token.slice(entry.prefix.length))
+      ? []
+      : [
+          {
+            token: entry.token,
+            description: holdsCredential(entry.description) ? "" : entry.description,
+          },
+        ]
+  );
+}
 
 const CORRECTION_RESULT_SCHEMA = {
   type: "object",
@@ -117,6 +145,8 @@ export interface VoiceCorrectionSettings {
   projectPath?: string;
   organizationId?: string;
   projectId?: string;
+  /** The agent the passage is written into and its commands; absent for no agent. */
+  commandTarget?: VoiceCommandTarget;
 }
 
 export interface VoiceCorrectionRequest {
@@ -128,6 +158,8 @@ export interface VoiceCorrectionRequest {
   uncertainWords?: string[];
   minConfidence?: number;
   wordCount?: number;
+  /** Nothing comes before the passage in the draft, so it may open with a command. */
+  startsPrompt?: boolean;
 }
 
 export interface VoiceCorrectionResult {
@@ -241,7 +273,19 @@ export class VoiceCorrectionService {
         confirmedText = request.rawText;
       } else {
         const candidate = result.correctedText.trim();
-        const rejection = this.findRejection(request.rawText, candidate, result.confidence);
+        // A command the cleanup wrote in place of its spoken request is measured
+        // as that command, so "can you please run the review skill on…" isn't
+        // over the edit budget for the words the command replaced.
+        const commandRejection = this.findCommandRejection(request, candidate, settings);
+        const baseline = commandRejection
+          ? request.rawText
+          : (voiceCommandBaseline(
+              request.rawText,
+              candidate,
+              settings.commandTarget?.vocabulary ?? EMPTY_VOICE_COMMAND_VOCABULARY
+            ) ?? request.rawText);
+        const rejection =
+          commandRejection ?? this.findRejection(baseline, candidate, result.confidence);
         if (rejection) {
           logDebug(`${P} Correction rejected, keeping raw text`, {
             reason: rejection,
@@ -310,12 +354,29 @@ export class VoiceCorrectionService {
     return verdict.ok ? null : verdict.reason;
   }
 
+  private findCommandRejection(
+    request: VoiceCorrectionRequest,
+    candidate: string,
+    settings: VoiceCorrectionSettings
+  ): VoiceCommandEditRejection | null {
+    return checkVoiceCommandEdit(
+      request.rawText,
+      candidate,
+      settings.commandTarget?.vocabulary ?? EMPTY_VOICE_COMMAND_VOCABULARY,
+      request.startsPrompt === true
+    );
+  }
+
   private buildPromptCacheKey(settings: VoiceCorrectionSettings): string {
     const projectKey = settings.projectName ?? settings.projectPath ?? "global";
-    const parts: unknown[] = [settings.model, projectKey, settings.customDictionary];
+    const target = settings.commandTarget;
+    const targetKey = target
+      ? `${target.agentId}:${target.isAssistant ? "assistant" : "agent"}`
+      : "none";
+    const parts: unknown[] = [settings.model, projectKey, targetKey, settings.customDictionary];
     // Each only when there are some, so a session without names or heard-as
-    // rules keeps the key (and the warm cache) its prompt had before either
-    // existed. Names are strings and rules are objects, so they never hash alike.
+    // rules keeps the key its prompt has without them. Names are strings and
+    // rules are objects, so they never hash alike.
     if (settings.knownNames && settings.knownNames.length > 0) parts.push(settings.knownNames);
     if (settings.heardAs && settings.heardAs.length > 0) parts.push(settings.heardAs);
     const fingerprint = createHash("sha256")
@@ -351,13 +412,16 @@ export class VoiceCorrectionService {
       );
     }
 
-    if (request.reason || request.segmentCount) {
+    if (request.reason || request.segmentCount || request.startsPrompt !== undefined) {
       const metadata: string[] = [];
       if (request.reason) {
         metadata.push(`reason=${request.reason}`);
       }
       if (request.segmentCount) {
         metadata.push(`segments=${request.segmentCount}`);
+      }
+      if (request.startsPrompt !== undefined) {
+        metadata.push(`prompt_start=${request.startsPrompt ? "yes" : "no"}`);
       }
       parts.push(`<job>\n${metadata.join("\n")}\n</job>`);
     }
@@ -629,7 +693,17 @@ export class VoiceCorrectionService {
       language,
     } = settings;
 
+    const target = settings.commandTarget;
     const context: CorrectionPromptContext = {
+      ...(target
+        ? {
+            target: {
+              agentName: target.agentName,
+              isAssistant: target.isAssistant,
+              commands: promptCommands(target.vocabulary.entries),
+            },
+          }
+        : {}),
       projectName,
       projectPath,
       customDictionary,

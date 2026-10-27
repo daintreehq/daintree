@@ -15,6 +15,7 @@ const SOURCES: ReadonlyArray<{ source: VoiceKeytermSource; label: string }> = [
   { source: "project", label: "Project name" },
   { source: "repository", label: "Repository names" },
   { source: "names", label: "Host, project and worktree names" },
+  { source: "commands", label: "Agent commands" },
   { source: "branch", label: "Branch name" },
   { source: "terminal", label: "Terminal output" },
 ];

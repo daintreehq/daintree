@@ -1295,7 +1295,16 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: { valid: boolean; error?: string };
   };
   "voice-input:correct": {
-    args: [request: { rawText: string; recentContext?: string[]; terminalId?: string }];
+    args: [
+      request: {
+        rawText: string;
+        recentContext?: string[];
+        /** The panel the passage was dictated into: it picks the project vocabulary and the agent's commands. */
+        terminalId?: string;
+        /** Nothing but whitespace comes before the passage in the draft. */
+        startsPrompt?: boolean;
+      },
+    ];
     // `failed`: the request failed or was cancelled, leaving the raw text.
     result: { action: "no_change" | "replace"; correctedText: string; failed?: true };
   };
@@ -2056,6 +2065,8 @@ export interface IpcEventMap {
     transcriptId?: string;
     /** The utterance ended with a spoken "send it", already stripped from `text`. */
     send?: boolean;
+    /** The text with its spoken opening command written as typed, to use when it starts the prompt. */
+    commandText?: string;
   };
   "voice-input:paragraph-boundary": { sessionId: string; rawText: string | null };
   "voice-input:file-token-resolved": {

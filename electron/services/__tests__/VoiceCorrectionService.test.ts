@@ -10,6 +10,10 @@ vi.mock("../../utils/logger.js", () => ({
 
 import { logWarn } from "../../utils/logger.js";
 import { VoiceCorrectionService } from "../VoiceCorrectionService.js";
+import type { VoiceCommandTarget } from "../voiceCommandTarget.js";
+import { getAgentConfig } from "../../../shared/config/agentRegistry.js";
+import { getBuiltinSlashCommands } from "../../../shared/types/slashCommands.js";
+import { buildVoiceCommandVocabulary } from "../../../shared/utils/voiceAgentCommands.js";
 
 const BASE_SETTINGS = {
   model: "gpt-6-luna",
@@ -400,7 +404,7 @@ describe("VoiceCorrectionService", () => {
     const without = await requestFor({});
     const [prefix] = without.prompt_cache_key.split(":");
     const namesFreeFingerprint = createHash("sha256")
-      .update(JSON.stringify([BASE_SETTINGS.model, "daintree", ["Daintree"]]))
+      .update(JSON.stringify([BASE_SETTINGS.model, "daintree", "none", ["Daintree"]]))
       .digest("hex")
       .slice(0, 32);
     expect(without.prompt_cache_key).toBe(`${prefix}:${namesFreeFingerprint}`);
@@ -685,6 +689,231 @@ describe("VoiceCorrectionService", () => {
       });
       expect(result.action).toBe("no_change");
       expect(result.confirmedText).toBe("react is great");
+    });
+  });
+
+  describe("target commands", () => {
+    function userSkill(agentId: "claude" | "codex", name: string, description: string) {
+      return {
+        id: `user:skill:${name}`,
+        label: name,
+        insertText: `$${name}`,
+        description,
+        scope: "user" as const,
+        agentId,
+        kind: "skill" as const,
+        trigger: "$" as const,
+      };
+    }
+
+    function targetFor(
+      agentId: "claude" | "codex",
+      isAssistant = false,
+      extra: ReturnType<typeof userSkill>[] = []
+    ): VoiceCommandTarget {
+      const config = getAgentConfig(agentId)!;
+      return {
+        agentId,
+        agentName: config.name,
+        isAssistant,
+        vocabulary: buildVoiceCommandVocabulary(
+          [
+            ...getBuiltinSlashCommands(agentId),
+            ...(agentId === "codex"
+              ? [
+                  {
+                    id: "user:plugin:github",
+                    label: "GitHub",
+                    insertText: "$github",
+                    description: "GitHub plugin",
+                    scope: "user" as const,
+                    agentId,
+                    kind: "plugin" as const,
+                    trigger: "$" as const,
+                  },
+                  {
+                    id: "user:skill:plugin-creator",
+                    label: "Plugin Creator",
+                    insertText: "$plugin-creator",
+                    description: "Scaffold a plugin",
+                    scope: "user" as const,
+                    agentId,
+                    kind: "skill" as const,
+                    trigger: "$" as const,
+                  },
+                ]
+              : []),
+            ...extra,
+          ],
+          config.completionSources!
+        ),
+      };
+    }
+
+    function stubReply(correctedText: string, action: "replace" | "no_change" = "replace") {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(makeFetchResponse({ action, corrected_text: correctedText }));
+      vi.stubGlobal("fetch", fetchMock);
+      return fetchMock;
+    }
+
+    function sentBody(fetchMock: ReturnType<typeof vi.fn>) {
+      return JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
+    }
+
+    it("tells correction the target and the commands it has", async () => {
+      const fetchMock = stubReply("Compact.");
+      await new VoiceCorrectionService().correct(
+        { rawText: "compact", startsPrompt: true },
+        { ...BASE_SETTINGS, commandTarget: targetFor("codex") }
+      );
+      const body = sentBody(fetchMock);
+      expect(body.input[0].content).toContain("Codex, an AI coding agent");
+      expect(body.input[0].content).toContain("$plugin-creator — Scaffold a plugin");
+      expect(body.input[0].content).toContain("/compact");
+      expect(body.input[1].content).toContain("prompt_start=yes");
+    });
+
+    it("screens credentials out of the commands it lists", async () => {
+      const fetchMock = stubReply("Hi.");
+      await new VoiceCorrectionService().correct(
+        { rawText: "hi", startsPrompt: true },
+        {
+          ...BASE_SETTINGS,
+          commandTarget: targetFor("codex", false, [
+            userSkill(
+              "codex",
+              "deploy",
+              "Ship it with OPENAI_API_KEY=sk-proj-Ab3dEf6hIj9kLm2nOp5q"
+            ),
+            userSkill("codex", "3f9a2c71d8e4b05a", "Pinned build"),
+          ]),
+        }
+      );
+      const prompt: string = sentBody(fetchMock).input[0].content;
+      expect(prompt).toMatch(/^\$deploy$/m);
+      expect(prompt).not.toContain("sk-proj-");
+      expect(prompt).not.toContain("3f9a2c71d8e4b05a");
+      expect(prompt).not.toContain("Pinned build");
+      expect(prompt).toContain("$plugin-creator — Scaffold a plugin");
+    });
+
+    it("names the Assistant as the target", async () => {
+      const fetchMock = stubReply("Hi.");
+      await new VoiceCorrectionService().correct(
+        { rawText: "hi", startsPrompt: false },
+        { ...BASE_SETTINGS, commandTarget: targetFor("claude", true) }
+      );
+      const body = sentBody(fetchMock);
+      expect(body.input[0].content).toContain("the Daintree Assistant");
+      expect(body.input[1].content).toContain("prompt_start=no");
+    });
+
+    it("writes an implied command at the start of the prompt", async () => {
+      stubReply("/compact");
+      const result = await new VoiceCorrectionService().correct(
+        { rawText: "compact the conversation", startsPrompt: true },
+        { ...BASE_SETTINGS, commandTarget: targetFor("claude") }
+      );
+      expect(result.confirmedText).toBe("/compact");
+      expect(result.action).toBe("replace");
+    });
+
+    it("writes a skill in the target's own syntax", async () => {
+      stubReply("$plugin-creator for the linter");
+      const result = await new VoiceCorrectionService().correct(
+        { rawText: "use the plugin creator skill for the linter", startsPrompt: true },
+        { ...BASE_SETTINGS, commandTarget: targetFor("codex") }
+      );
+      expect(result.confirmedText).toBe("$plugin-creator for the linter");
+    });
+
+    it("accepts a polite request the command replaced", async () => {
+      stubReply("/review on auth");
+      const result = await new VoiceCorrectionService().correct(
+        { rawText: "can you please run the review skill on auth", startsPrompt: true },
+        { ...BASE_SETTINGS, commandTarget: targetFor("claude") }
+      );
+      expect(result.confirmedText).toBe("/review on auth");
+    });
+
+    it("keeps dictionary casing out of a command token", async () => {
+      stubReply("$github");
+      const result = await new VoiceCorrectionService().correct(
+        { rawText: "use the github plugin", startsPrompt: true },
+        { ...BASE_SETTINGS, customDictionary: ["GitHub"], commandTarget: targetFor("codex") }
+      );
+      expect(result.confirmedText).toBe("$github");
+    });
+
+    it("keeps dictionary casing out of every part of a command token", async () => {
+      stubReply("$plugin-creator for the linter");
+      const result = await new VoiceCorrectionService().correct(
+        { rawText: "use the plugin creator skill for the linter", startsPrompt: true },
+        { ...BASE_SETTINGS, customDictionary: ["Creator"], commandTarget: targetFor("codex") }
+      );
+      expect(result.confirmedText).toBe("$plugin-creator for the linter");
+    });
+
+    it.each([
+      ["a command the target doesn't have", "run the deploy skill", "/deploy", true],
+      ["another agent's syntax", "use the plugin creator skill", "$plugin-creator", true],
+      ["a command away from the start", "compact the conversation", "/compact", false],
+      ["a mention turned into a command", "the review skill is broken", "/review is broken", true],
+    ])("keeps the raw text for %s", async (_label, rawText, reply, startsPrompt) => {
+      stubReply(reply);
+      const result = await new VoiceCorrectionService().correct(
+        { rawText, startsPrompt },
+        { ...BASE_SETTINGS, commandTarget: targetFor("claude") }
+      );
+      expect(result.confirmedText).toBe(rawText);
+      expect(result.action).toBe("no_change");
+    });
+
+    it("keeps a leading command's arguments as dictated", async () => {
+      stubReply("/review The last commit.");
+      const result = await new VoiceCorrectionService().correct(
+        { rawText: "/review the last commit", startsPrompt: true },
+        { ...BASE_SETTINGS, commandTarget: targetFor("claude") }
+      );
+      expect(result.confirmedText).toBe("/review the last commit");
+    });
+
+    it("keeps dictionary casing out of a command's arguments", async () => {
+      stubReply("", "no_change");
+      const result = await new VoiceCorrectionService().correct(
+        { rawText: "/review the daintree changes", startsPrompt: true },
+        {
+          ...BASE_SETTINGS,
+          customDictionary: ["Daintree"],
+          commandTarget: targetFor("claude"),
+        }
+      );
+      expect(result.confirmedText).toBe("/review the daintree changes");
+    });
+
+    it("rejects invented command syntax with no target at all", async () => {
+      stubReply("/compact");
+      const result = await new VoiceCorrectionService().correct(
+        { rawText: "compact the conversation", startsPrompt: true },
+        BASE_SETTINGS
+      );
+      expect(result.confirmedText).toBe("compact the conversation");
+    });
+
+    it("keys the prompt cache by target", async () => {
+      const fetchMock = stubReply("Hi.");
+      const svc = new VoiceCorrectionService();
+      await svc.correct(
+        { rawText: "hi" },
+        { ...BASE_SETTINGS, commandTarget: targetFor("claude") }
+      );
+      await svc.correct({ rawText: "hi" }, { ...BASE_SETTINGS, commandTarget: targetFor("codex") });
+      const key = (call: number) =>
+        JSON.parse((fetchMock.mock.calls[call] as [string, RequestInit])[1].body as string)
+          .prompt_cache_key;
+      expect(key(0)).not.toBe(key(1));
     });
   });
 

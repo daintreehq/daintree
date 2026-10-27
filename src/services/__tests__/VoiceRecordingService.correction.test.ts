@@ -52,7 +52,13 @@ vi.mock("@/services/KeybindingService", () => ({
 }));
 
 type DeltaPayload = { text: string; itemId?: string };
-type CompletePayload = { text: string; willCorrect: boolean; itemId?: string; heard?: string };
+type CompletePayload = {
+  text: string;
+  willCorrect: boolean;
+  itemId?: string;
+  heard?: string;
+  commandText?: string;
+};
 type CorrectResult = { action: "no_change" | "replace"; correctedText: string };
 
 const callbacks: {
@@ -202,12 +208,17 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     await service.stop();
     expect(correct).toHaveBeenLastCalledWith({
       rawText: "fix the bug in the parsr",
+      startsPrompt: true,
       terminalId: "panel-1",
     });
 
     dictate("panel-2", "second thought");
     await service.stop();
-    expect(correct).toHaveBeenLastCalledWith({ rawText: "second thought", terminalId: "panel-2" });
+    expect(correct).toHaveBeenLastCalledWith({
+      rawText: "second thought",
+      startsPrompt: true,
+      terminalId: "panel-2",
+    });
 
     first.resolve({ action: "replace", correctedText: "Fix the bug in the parser." });
     await flush();
@@ -240,6 +251,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     expect(correct).toHaveBeenLastCalledWith({
       rawText: "and the lexer",
       recentContext: ["So the parser is broken."],
+      startsPrompt: false,
       terminalId: "panel-1",
     });
     await flush();
@@ -260,6 +272,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     expect(correct).toHaveBeenLastCalledWith({
       rawText: "and the lexr too",
       recentContext: ["um so the parser is brken"],
+      startsPrompt: false,
       terminalId: "panel-1",
     });
 
@@ -333,6 +346,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     expect(correct).toHaveBeenLastCalledWith({
       rawText: "and the lexer",
       recentContext: ["The parser."],
+      startsPrompt: false,
       terminalId: "panel-1",
     });
   });
@@ -345,7 +359,11 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     dictate("panel-1", "the parsr");
     callbacks.boundary!({ rawText: null });
     await service.stop();
-    expect(correct).toHaveBeenLastCalledWith({ rawText: "the parsr", terminalId: "panel-1" });
+    expect(correct).toHaveBeenLastCalledWith({
+      rawText: "the parsr",
+      startsPrompt: true,
+      terminalId: "panel-1",
+    });
 
     voiceStore.getState().beginSession({ panelId: "panel-1" });
     callbacks.delta!({ text: "and the" });
@@ -359,6 +377,7 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
     expect(correct).toHaveBeenLastCalledWith({
       rawText: "and the lexer",
       recentContext: ["The parser.\n"],
+      startsPrompt: false,
       terminalId: "panel-1",
     });
   });
@@ -569,10 +588,34 @@ describe("VoiceRecordingService — post-stop correction ownership (#14611)", ()
       expect(correct).toHaveBeenLastCalledWith({
         rawText: "add Zustand to the store",
         terminalId: "panel-1",
+        startsPrompt: true,
       });
       result.resolve({ action: "replace", correctedText: "Add Zustand to the store." });
       await flush();
       expect(draft("panel-1")).toBe("Add Zustand to the store.");
+    });
+
+    // Main reads the command from the words as heard and writes its arguments
+    // as heard too, so the command is what the rules rerun over, never the
+    // spoken words it replaced.
+    it("rewrites a spoken command's arguments and keeps the command", async () => {
+      dictionary = [rule("Zustand", "zoo stand")];
+      const { service, voiceStore, draft } = await setup();
+      correct.mockResolvedValue({ action: "no_change", correctedText: "" });
+
+      voiceStore.getState().beginSession({ panelId: "panel-1" });
+      callbacks.delta!({ text: "slash review zoo stand", itemId: "item-cmd" });
+      callbacks.complete!({
+        text: "slash review Zustand",
+        heard: "slash review zoo stand",
+        commandText: "/review zoo stand",
+        willCorrect: false,
+        itemId: "item-cmd",
+      });
+      expect(draft("panel-1")).toBe("/review zoo stand");
+      await service.stop();
+
+      expect(draft("panel-1")).toBe("/review Zustand");
     });
 
     it("applies them with correction off and learns from the rewritten text", async () => {

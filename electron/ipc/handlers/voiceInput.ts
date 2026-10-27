@@ -46,6 +46,14 @@ import { readProjectVoiceDictionary } from "../../services/projectVoiceDictionar
 import { flattenDictationNames, gatherDictationNames } from "../../services/voiceContextNames.js";
 import { collectHeardAsRules, createHeardAsRewriter } from "../../../shared/utils/voiceHeardAs.js";
 import {
+  resolveVoiceCommandTarget,
+  type VoiceCommandTarget,
+} from "../../services/voiceCommandTarget.js";
+import {
+  rewriteSpokenCommand,
+  voiceCommandKeyterms,
+} from "../../../shared/utils/voiceAgentCommands.js";
+import {
   dictionaryTerms,
   sanitizeDictionary,
   sessionDictionary,
@@ -102,6 +110,13 @@ interface HeldSend {
   readonly release: (outcome: HeldSendOutcome) => void;
 }
 
+// Finding the target's agent and commands shares the keyterm reads' budget at
+// start, so leading speech isn't held up. Correction already waits on a model
+// call, so it can afford a cold discovery scan.
+const COMMAND_TARGET_START_BUDGET_MS = 500;
+const COMMAND_TARGET_CORRECTION_BUDGET_MS = 1500;
+const COMMAND_KEYTERM_LIMIT = 12;
+
 /**
  * One dictation session, named by the id its renderer minted. Everything a
  * session sets up hangs off its record, so ending one tears down only its own
@@ -120,6 +135,10 @@ interface VoiceSession {
   readonly terminalId: string | undefined;
   /** "rewrite" records an instruction for selected text, forwarded as spoken. */
   readonly intent: "dictation" | "rewrite";
+  // The agent the terminal runs and its commands, fixed as the keyterms are:
+  // before the provider transcribes anything. Null when the terminal runs no
+  // agent with commands.
+  commandTarget: VoiceCommandTarget | null;
   // starting: main is still preparing, and the provider isn't this session's.
   // active: its provider has been started (it may still be connecting).
   // stopping: a stop owns its graceful drain.
@@ -938,6 +957,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       projectInfo: getProjectInfo(ctx.projectId),
       terminalId: options?.terminalId,
       intent: options?.intent ?? "dictation",
+      commandTarget: null,
       phase: "starting",
       ended: false,
       stopPromise: null,
@@ -1013,6 +1033,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // the session, so its reconnect path reuses it unchanged. Assembly, the
     // names read included, is capped internally (~500ms) and failures are
     // non-fatal — we just start without keyterms.
+    const keytermTarget = resolveKeytermTarget(session.projectId, terminalId, deps.ptyClient);
     const projectDictionary = readVocabulary(
       resolveVocabularyProject(session.projectId, terminalId, deps.ptyClient)
     ).then(dictionaryTerms);
@@ -1030,12 +1051,26 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     void names.then((gathered) => {
       sessionNames.names = flattenDictationNames(screenDictationNames(gathered));
     });
+    // Bounded by the same budget as the other reads, and resolved alongside them.
+    // The keyterms wait on it, so it is in place before either provider can
+    // transcribe a word, without holding up the provider start.
+    const commandTargetPromise = resolveVoiceCommandTarget(
+      deps.ptyClient,
+      keytermTarget.terminalId,
+      COMMAND_TARGET_START_BUDGET_MS
+    ).then((target) => {
+      session.commandTarget = target;
+      return target;
+    });
     const keytermsPromise = assembleTaggedKeyterms({
       customDictionary: dictionaryTerms(settings.dictionary),
       projectDictionary,
-      ...resolveKeytermTarget(session.projectId, terminalId, deps.ptyClient),
+      ...keytermTarget,
       ptyClient: deps.ptyClient,
       names,
+      commandTerms: commandTargetPromise.then((target) =>
+        target ? voiceCommandKeyterms(target.vocabulary, COMMAND_KEYTERM_LIMIT) : []
+      ),
     }).catch((err: unknown): VoiceSentTerm[] => {
       logDebug("[VoiceInput] Keyterm assembly failed, starting without keyterms", {
         ...voiceErrorLogFields(err),
@@ -1074,9 +1109,19 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       // still get their boundary, so a break at the start or end of an
       // utterance ("fix the bug new line") survives for the next utterance.
       const pieces = processedText.split(/\s*\n\s*/).map((p) => p.trim());
+      // A spoken command ("slash review…") opening the utterance, written as
+      // the composer would. The renderer uses it only when the utterance
+      // starts the prompt; a later piece never opens one. A trailing "send it"
+      // is already off the text, so "slash compact send it" opens with the
+      // command and still sends.
+      const commandText =
+        session.commandTarget && pieces[0]
+          ? rewriteSpokenCommand(pieces[0], session.commandTarget.vocabulary)
+          : null;
       const parts = pieces.filter(Boolean);
-      // Heard-as rules run after the commands, so a rule never eats a break
-      // or a send and a term it writes is never taken for one, and over the
+      // Heard-as rules run after the commands, the opening one above
+      // included, so a rule never eats a break, a send or a command's name and
+      // a term it writes is never taken for one, and over the
       // whole text, so a code fence spanning lines still protects what's
       // inside. Rules never cross or write a line break, so the pieces line up.
       const writtenText = rewriteHeardAs(processedText);
@@ -1129,6 +1174,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
             ...(text !== pieces[i] ? { heard: pieces[i] } : {}),
             ...itemIdField,
             ...(transcriptId ? { transcriptId } : {}),
+            ...(i === 0 && commandText && commandText !== pieces[i] ? { commandText } : {}),
             ...(sendCommand.send && i === lastIndex ? { send: true } : {}),
           });
         }
@@ -1543,14 +1589,18 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     }
 
     const projectInfo = getProjectInfo(ctx.projectId);
-    const vocabulary = await readVocabulary(
-      resolveVocabularyProject(ctx.projectId, request.terminalId, deps.ptyClient)
-    );
+    const { terminalId } = resolveKeytermTarget(ctx.projectId, request.terminalId, deps.ptyClient);
+    // Both reads run at once, so finding the commands adds no wait to the vocabulary's.
+    const [vocabulary, commandTarget] = await Promise.all([
+      readVocabulary(resolveVocabularyProject(ctx.projectId, request.terminalId, deps.ptyClient)),
+      resolveVoiceCommandTarget(deps.ptyClient, terminalId, COMMAND_TARGET_CORRECTION_BUDGET_MS),
+    ]);
     const result = await correctionService.correct(
       {
         rawText: request.rawText,
         recentContext: request.recentContext,
         reason: "stop",
+        startsPrompt: request.startsPrompt === true,
       },
       {
         model: settings.correctionModel,
@@ -1567,6 +1617,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         projectPath: projectInfo.path,
         organizationId: settings.organizationId,
         projectId: settings.projectId,
+        ...(commandTarget ? { commandTarget } : {}),
       }
     );
 

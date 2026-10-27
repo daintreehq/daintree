@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { VoiceCorrectionService } from "../VoiceCorrectionService.js";
+import { getAgentConfig } from "../../../shared/config/agentRegistry.js";
+import { getBuiltinSlashCommands } from "../../../shared/types/slashCommands.js";
+import { buildVoiceCommandVocabulary } from "../../../shared/utils/voiceAgentCommands.js";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
 
@@ -200,5 +203,61 @@ describe("VoiceCorrectionService integration", () => {
       expect(result.confirmedText).not.toMatch(/^(here is|the corrected)/i);
     },
     20_000
+  );
+});
+
+// The model's half of command recognition: invocations at the start of a
+// prompt become the agent's own commands, and sentences that only mention
+// those words stay prose.
+describe("VoiceCorrectionService integration — target commands", () => {
+  const claude = {
+    agentId: "claude" as const,
+    agentName: "Claude",
+    isAssistant: false,
+    vocabulary: buildVoiceCommandVocabulary(
+      getBuiltinSlashCommands("claude"),
+      getAgentConfig("claude")!.completionSources!
+    ),
+  };
+  const settings = {
+    model: "gpt-6-luna",
+    apiKey: OPENAI_API_KEY,
+    customDictionary: [],
+    commandTarget: claude,
+  };
+
+  it.skipIf(!OPENAI_API_KEY).each([
+    ["compact the conversation", /^\/compact\b/],
+    ["run the review skill on the last commit", /^\/review\b.*last commit/i],
+  ])(
+    "writes %j as the agent's command",
+    async (rawText, expected) => {
+      const result = await new VoiceCorrectionService().correct(
+        { rawText, startsPrompt: true },
+        settings
+      );
+      expect(result.confirmedText).toMatch(expected);
+    },
+    15_000
+  );
+
+  it
+    .skipIf(!OPENAI_API_KEY)
+    .each([
+      "the review skill is broken",
+      "compact cars use less space",
+      "explain the compact command",
+      "we should review the last commit later",
+      "don't compact the conversation yet",
+    ])(
+    "leaves %j as prose",
+    async (rawText) => {
+      const result = await new VoiceCorrectionService().correct(
+        { rawText, startsPrompt: true },
+        settings
+      );
+      expect(result.confirmedText).not.toMatch(/^[/$]/);
+    },
+    15_000
   );
 });

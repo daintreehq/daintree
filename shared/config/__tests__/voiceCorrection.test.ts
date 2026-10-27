@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildCorrectionSystemPrompt, CORE_CORRECTION_PROMPT } from "../voiceCorrection.js";
+import {
+  buildCorrectionSystemPrompt,
+  buildRewriteSystemPrompt,
+  CORE_CORRECTION_PROMPT,
+} from "../voiceCorrection.js";
 
 describe("CORE_CORRECTION_PROMPT", () => {
   it("includes an explicit idempotency instruction", () => {
@@ -320,5 +324,80 @@ describe("buildCorrectionSystemPrompt", () => {
       projectPath: "C:\\Users/dev\\my-repo",
     });
     expect(prompt).toContain("my-repo");
+  });
+});
+
+describe("buildCorrectionSystemPrompt target", () => {
+  const target = {
+    agentName: "Codex",
+    isAssistant: false,
+    commands: [
+      { token: "$plugin-creator", description: "Scaffold a plugin\nfrom a template" },
+      { token: "/compact", description: "" },
+    ],
+  };
+
+  it("follows the fixed core prompt, so its cacheable prefix holds", () => {
+    const prompt = buildCorrectionSystemPrompt({ target, projectName: "Daintree" });
+    expect(prompt.startsWith(CORE_CORRECTION_PROMPT)).toBe(true);
+    expect(prompt.indexOf("TARGET:")).toBeLessThan(prompt.indexOf("CURRENT PROJECT:"));
+  });
+
+  it("lists each command as typed, with its description on one line", () => {
+    const prompt = buildCorrectionSystemPrompt({ target });
+    expect(prompt).toContain("Codex, an AI coding agent");
+    expect(prompt).toContain("$plugin-creator — Scaffold a plugin from a template\n/compact\n");
+  });
+
+  it("lists every command, bounding the descriptions instead", () => {
+    const many = Array.from({ length: 100 }, (_, i) => ({
+      token: `/command-${i}`,
+      description: "x".repeat(200),
+    }));
+    const prompt = buildCorrectionSystemPrompt({ target: { ...target, commands: many } });
+    expect(prompt).toContain("/command-0 — ");
+    expect(prompt).toContain("\n/command-99\n");
+    expect(prompt).not.toContain("x".repeat(100));
+    expect(prompt.split("x".repeat(50)).length - 1).toBeLessThan(many.length);
+  });
+
+  it("tells a target with no commands never to write one", () => {
+    const prompt = buildCorrectionSystemPrompt({ target: { ...target, commands: [] } });
+    expect(prompt).toContain("It has no commands");
+    expect(prompt).not.toContain("COMMAND RULES:");
+  });
+
+  it("names the Assistant and the agent it runs on", () => {
+    const prompt = buildCorrectionSystemPrompt({
+      target: { ...target, agentName: "Claude", isAssistant: true },
+    });
+    expect(prompt).toContain("the Daintree Assistant");
+    expect(prompt).toContain("runs on Claude");
+  });
+
+  it("carries the workspace names beside the target's commands", () => {
+    const prompt = buildCorrectionSystemPrompt({
+      target,
+      customDictionary: ["Daintree"],
+      knownNames: ["Studio 1", "billing"],
+    });
+    const commands = prompt.indexOf("COMMANDS:");
+    const names = prompt.indexOf("NAMES IN THIS WORKSPACE");
+    expect(commands).toBeGreaterThan(prompt.indexOf("TARGET:"));
+    expect(names).toBeGreaterThan(commands);
+    expect(prompt.slice(names)).toContain('"Studio 1" | "billing"');
+    expect(prompt).toContain("/compact\n");
+  });
+
+  it("adds no target section without one", () => {
+    expect(buildCorrectionSystemPrompt({})).not.toContain("TARGET:");
+  });
+
+  // A spoken rewrite instruction is never a command.
+  it("stays out of the rewrite prompt, which keeps the shared context", () => {
+    const prompt = buildRewriteSystemPrompt({ target, projectName: "Daintree" });
+    expect(prompt).not.toContain("TARGET:");
+    expect(prompt).not.toContain("COMMAND RULES:");
+    expect(prompt).toContain("CURRENT PROJECT:");
   });
 });

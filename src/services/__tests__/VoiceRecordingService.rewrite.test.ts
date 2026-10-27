@@ -67,6 +67,7 @@ type CompletePayload = {
   willCorrect: boolean;
   itemId?: string;
   send?: boolean;
+  commandText?: string;
 };
 type RewriteOutcome =
   | { status: "replace"; text: string }
@@ -425,6 +426,30 @@ describe("VoiceRecordingService — rewrite selection by voice (#14635)", () => 
       instruction: "make it shorter and send it",
     });
     expect(selection.apply).toHaveBeenCalledWith("Shorter.");
+  });
+
+  it("keeps a spoken command in the instruction as said", async () => {
+    const { service, draft, inputStore, recordInstruction, flush } = await setup();
+    inputStore.getState().setDraftInput("panel-1", "make me shorter");
+    const selection = fakeSelection("make me shorter");
+    rewrite.mockResolvedValueOnce({ status: "replace", text: "/compact" });
+
+    recordInstruction(selection);
+    callbacks.complete!({
+      text: "slash compact it",
+      willCorrect: false,
+      itemId: "item-1",
+      commandText: "/compact it",
+    });
+    await service.stop();
+    await flush();
+
+    expect(draft()).toBe("make me shorter");
+    expect(correct).not.toHaveBeenCalled();
+    expect(rewrite).toHaveBeenCalledWith({
+      selectedText: "make me shorter",
+      instruction: "slash compact it",
+    });
   });
 
   it("drops the rewrite when an edit reaches the selection first, so a waiting send goes at once", async () => {

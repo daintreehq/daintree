@@ -4,6 +4,7 @@ import { isScratchWorkspaceId } from "@shared/utils/workspaceIds";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
+import { introducesVoiceCommand } from "@shared/utils/voiceAgentCommands";
 import { shouldShowHybridInputBar } from "@/components/Terminal/terminalFocus";
 import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
 import { isAssistantFocused } from "@/store/macroFocusStore";
@@ -22,7 +23,12 @@ import {
   setPendingComposerSelection,
 } from "@/lib/composerCaret";
 import { makeDraftKey } from "@/lib/draftKey";
-import { planVoiceBreak, planVoiceWords, type VoiceInsertPlan } from "./voiceInsertion";
+import {
+  planVoiceBreak,
+  planVoiceWords,
+  voiceWordsOpenDraft,
+  type VoiceInsertPlan,
+} from "./voiceInsertion";
 import {
   isVoiceMicPending,
   useVoiceRecordingStore,
@@ -190,6 +196,16 @@ function releaseActiveVoiceAnchors(): void {
   const { activeTarget, panelBuffers } = useVoiceRecordingStore.getState();
   const sessionId = activeTarget ? panelBuffers[activeTarget.panelId]?.dictationSessionId : null;
   if (sessionId) useDictationRangeStore.getState().releaseAnchors(sessionId);
+}
+
+/** Whether words dictated now would open the prompt, wherever the caret put them. */
+function voiceWordsOpenPrompt(
+  panelId: string,
+  projectId: string | undefined,
+  sessionId: string | null | undefined
+): boolean {
+  const draft = useTerminalInputStore.getState().getDraftInput(panelId, projectId);
+  return voiceWordsOpenDraft(draft, resolveVoiceAnchor(panelId, projectId, sessionId, draft));
 }
 
 /** Writes dictated words at the session's anchor; returns where they landed. */
@@ -548,7 +564,7 @@ class VoiceRecordingService {
 
     this.unsubscribers.push(
       voiceInput.onTranscriptionComplete(
-        ({ sessionId, text, itemId, transcriptId, heard, send }) => {
+        ({ sessionId, text, itemId, transcriptId, heard, send, commandText }) => {
           if (this.discardedSessionIds.has(sessionId)) return;
           logDebug(`${LOG_PREFIX} Received transcription complete`, {
             itemId,
@@ -564,16 +580,31 @@ class VoiceRecordingService {
           }
           const panelId = voiceState.activeTarget?.panelId;
           const projectId = voiceState.activeTarget?.projectId;
+          let completedText = text;
+          let completedHeard = heard?.trim();
           if (panelId) {
             const buffer = voiceState.panelBuffers[panelId];
-            const finalText = text.trim();
+            const spoken = text.trim();
             // "Scratch that, send it" only scratches: the draft it leaves is one
             // the user hasn't seen, and a spoken send fires with no key press.
-            if (finalText && isScratchCommand(finalText)) {
+            if (spoken && isScratchCommand(spoken)) {
               this.scratchLastUtterance(panelId, projectId, buffer?.dictationSessionId);
               useVoiceRecordingStore.getState().completeSegment("", itemId, { discard: true });
               return;
             }
+            // A spoken command is written as one only when it opens the prompt:
+            // the words land at the caret, so text typed ahead of it keeps the
+            // command as words. Main writes it from the words as heard, before
+            // any heard-as rule, so it has no heard text of its own: the rules
+            // reach its arguments at stop, never the spoken words it replaced.
+            if (
+              commandText &&
+              voiceWordsOpenPrompt(panelId, projectId, buffer?.dictationSessionId)
+            ) {
+              completedText = commandText;
+              completedHeard = undefined;
+            }
+            const finalText = completedText.trim();
             if (finalText) {
               const { words } = writeVoiceWords(
                 panelId,
@@ -581,7 +612,7 @@ class VoiceRecordingService {
                 buffer?.dictationSessionId,
                 finalText,
                 transcriptId,
-                heard?.trim()
+                completedHeard
               );
               // A Deepgram span can finalise without any interim, so the session's
               // first text may arrive here rather than in a delta.
@@ -594,7 +625,7 @@ class VoiceRecordingService {
               timeline?.markNextFrame("firstText");
             }
           }
-          useVoiceRecordingStore.getState().completeSegment(text, itemId);
+          useVoiceRecordingStore.getState().completeSegment(completedText, itemId);
           // After completeSegment, so the command's own preview is already retired
           // and a stop that preserves live text can't put it back.
           if (send && panelId) this.handleSpokenSend(panelId, projectId);
@@ -2631,13 +2662,20 @@ class VoiceRecordingService {
 
     const inputStore = useTerminalInputStore.getState();
     const voiceStore = useVoiceRecordingStore.getState();
+    const draftNow = inputStore.getDraftInput(panelId, projectId);
     const edits: Array<{ from: number; to: number; text: string }> = [];
     let skipped = 0;
     const settled = correction.passages.map((passage, index) => {
       const corrected = results[index]?.text;
       if (!corrected || corrected === passage.text) return passage.text;
       const span = spans.get(passage);
-      if (!span) {
+      // A command correction wrote for the start of the prompt is no longer at
+      // the start once text was typed in front of the passage.
+      const commandMoved =
+        span !== undefined &&
+        introducesVoiceCommand(passage.text, corrected) &&
+        draftNow.slice(0, span.from).trim() !== "";
+      if (!span || commandMoved) {
         skipped++;
         return passage.text;
       }
@@ -2717,6 +2755,7 @@ class VoiceRecordingService {
         rawText: passage.text,
         terminalId: panelId,
         ...(passage.context ? { recentContext: [passage.context] } : {}),
+        startsPrompt: passage.startsPrompt,
       });
       // The passage runs from its first word to its last; its separators and
       // paragraph breaks either side stay the session's, not the model's.

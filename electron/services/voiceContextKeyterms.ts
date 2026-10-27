@@ -24,6 +24,10 @@ const PROJECT_TIER_CAP = 4;
 // the branch and terminal tiers.
 const REPO_TIER_CAP = 6;
 const NAME_CATEGORY_CAP = 5;
+const COMMAND_TIER_CAP = 12;
+// Slots commands leave for the branch, so a long command list can't crowd out
+// the worktree's own words. The branch's share of RESERVED_CONTEXT_KEYTERMS.
+const BRANCH_RESERVED_SLOTS = 4;
 // Deepgram nova-3 rejects any keyterm longer than 100 chars with an HTTP 400
 // that fails the WebSocket upgrade, so cap every term at the source.
 const MAX_KEYTERM_LENGTH = 100;
@@ -240,6 +244,11 @@ export interface KeytermAssemblyOpts {
    * so slow names fall back to none rather than delaying the start.
    */
   names?: DictationNames | Promise<DictationNames>;
+  /**
+   * The target's command names, most likely first. The read bounds itself;
+   * a rejection just leaves the tier empty.
+   */
+  commandTerms?: Promise<readonly string[]>;
 }
 
 function isValidTerm(term: string): boolean {
@@ -428,7 +437,7 @@ export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<strin
 
 /** The same list as `assembleKeyterms`, each term tagged with the tier that won it. */
 export async function assembleTaggedKeyterms(opts: KeytermAssemblyOpts): Promise<VoiceSentTerm[]> {
-  const { customDictionary, projectName, projectPath, terminalId, ptyClient } = opts;
+  const { customDictionary, projectName, projectPath, terminalId, ptyClient, commandTerms } = opts;
   const seen = new Set<string>();
   const result: VoiceSentTerm[] = [];
   let source: VoiceKeytermSource = "projectDictionary";
@@ -446,31 +455,43 @@ export async function assembleTaggedKeyterms(opts: KeytermAssemblyOpts): Promise
   // Gather dynamic context concurrently, each read guarded by its own timeout.
   // The reads fire at once so leading speech isn't delayed; results are merged
   // in priority order afterward.
-  const [projectDictionary, repoNames, gatheredNames, branchName, lines] = await Promise.all([
-    withinBudget(Promise.resolve(opts.projectDictionary ?? []), [], "Project vocabulary read"),
-    projectPath && isAbsolute(projectPath)
-      ? withinBudget(
-          deriveRepoNames(projectPath, performance.now() + ASSEMBLY_TIMEOUT_MS).then(
-            (repo) => repo.names
-          ),
-          [] as string[],
-          "Repository name derivation"
-        )
-      : [],
-    withinBudget(Promise.resolve(opts.names ?? null), null, "Names read"),
-    ptyClient && terminalId
-      ? withinBudget(getTerminalBranch(ptyClient, terminalId), null, "Branch name lookup")
-      : null,
-    ptyClient && terminalId
-      ? withinBudget(getTerminalLines(ptyClient, terminalId), [], "Terminal identifier extraction")
-      : [],
-  ]);
+  const [projectDictionary, repoNames, gatheredNames, branchName, lines, commands] =
+    await Promise.all([
+      withinBudget(Promise.resolve(opts.projectDictionary ?? []), [], "Project vocabulary read"),
+      projectPath && isAbsolute(projectPath)
+        ? withinBudget(
+            deriveRepoNames(projectPath, performance.now() + ASSEMBLY_TIMEOUT_MS).then(
+              (repo) => repo.names
+            ),
+            [] as string[],
+            "Repository name derivation"
+          )
+        : [],
+      withinBudget(Promise.resolve(opts.names ?? null), null, "Names read"),
+      ptyClient && terminalId
+        ? withinBudget(getTerminalBranch(ptyClient, terminalId), null, "Branch name lookup")
+        : null,
+      ptyClient && terminalId
+        ? withinBudget(
+            getTerminalLines(ptyClient, terminalId),
+            [],
+            "Terminal identifier extraction"
+          )
+        : [],
+      commandTerms
+        ? commandTerms.catch((): readonly string[] => {
+            logDebug(`${P} Command lookup failed`);
+            return [];
+          })
+        : [],
+    ]);
 
   // Priority 1: The project's vocabulary, then the user's own dictionary, each
   // newest first, because a term is usually added right after recognition
   // failed on it. Both share one budget, capped below MAX_KEYTERMS so project,
-  // repository, workspace-name and branch terms keep their reserved slots. These
-  // are hand-entered, so they skip the secret filter the derived tiers go through.
+  // repository, workspace-name, command and branch terms keep their reserved
+  // slots. These are hand-entered, so they skip the secret filter the derived
+  // tiers go through.
   let dictionaryAdded = 0;
   for (const [list, listSource] of [
     [projectDictionary, "projectDictionary"],
@@ -527,16 +548,29 @@ export async function assembleTaggedKeyterms(opts: KeytermAssemblyOpts): Promise
     for (const name of [...hosts, ...projects, ...worktrees]) add(name);
   }
 
+  source = "commands";
+  // Priority 5: The target's commands, ahead of the branch but leaving it room.
+  // The dictionaries, project, repository and workspace names were added
+  // first, so these never displace them.
+  const branchTokens = branchName ? tokenizeBranchName(branchName) : [];
+  const commandRoom =
+    MAX_KEYTERMS - result.length - Math.min(BRANCH_RESERVED_SLOTS, branchTokens.length);
+  let commandsAdded = 0;
+  for (const term of commands) {
+    if (commandsAdded >= Math.min(COMMAND_TIER_CAP, commandRoom)) break;
+    if (typeof term !== "string" || isSecretShaped(term)) continue;
+    const trimmed = term.trim();
+    if (trimmed.length >= 3 && add(trimmed)) commandsAdded++;
+  }
+
   source = "branch";
-  // Priority 5: Branch name tokens
-  if (branchName) {
-    for (const token of tokenizeBranchName(branchName)) {
-      add(token);
-    }
+  // Priority 6: Branch name tokens
+  for (const token of branchTokens) {
+    add(token);
   }
 
   source = "terminal";
-  // Priority 6: Terminal identifiers. Lines were fetched in parallel above.
+  // Priority 7: Terminal identifiers. Lines were fetched in parallel above.
   // Terminal terms are ranked best-first; bound the tier independently so
   // dictionary/project/branch terms always keep headroom under MAX_KEYTERMS.
   let terminalAdded = 0;
@@ -548,6 +582,7 @@ export async function assembleTaggedKeyterms(opts: KeytermAssemblyOpts): Promise
   logDebug(`${P} Assembled ${result.length} keyterms`, {
     custom: customDictionary.length,
     project: projectDictionary.length,
+    commands: commandsAdded,
     total: result.length,
   });
 

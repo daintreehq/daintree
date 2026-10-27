@@ -50,7 +50,14 @@ export type VoiceSessionEndReason = "stopped" | "cancelled" | "superseded" | "fa
 
 /** Where a recognition hint came from. */
 export type VoiceKeytermSource =
-  "dictionary" | "projectDictionary" | "project" | "repository" | "names" | "branch" | "terminal";
+  | "dictionary"
+  | "projectDictionary"
+  | "project"
+  | "repository"
+  | "names"
+  | "commands"
+  | "branch"
+  | "terminal";
 
 export interface VoiceSentTerm {
   term: string;
