@@ -4632,10 +4632,7 @@ class VoiceRecordingService {
     try {
       return await window.electron.voiceInput.setPausedLive({ sessionId, paused });
     } catch (error) {
-      logWarn(
-        `${LOG_PREFIX} Couldn't pause dictation in another view`,
-        voiceErrorLogFields(error)
-      );
+      logWarn(`${LOG_PREFIX} Couldn't pause dictation in another view`, voiceErrorLogFields(error));
       return false;
     }
   }
