@@ -155,6 +155,9 @@ export const VoiceSessionSummarySchema = z
     // Chunks of a long dictation sent for cleanup while it ran. The correction
     // fields above are the stop-time pass, over what came after the last one.
     correctionChunks: count,
+    // What became of the chunks' passages, and of the passes after the stop
+    // that cleaned again what a chunk couldn't land: every attempt counted.
+    correctionChunkPassages: VoiceCorrectionPassagesSchema,
     // Audio the renderer held before the start request, past its cap.
     droppedQueued: count,
     charsCommitted: count,

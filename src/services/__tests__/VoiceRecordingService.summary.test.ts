@@ -1065,6 +1065,109 @@ describe("VoiceRecordingService — session summary (#14617)", () => {
     expect(summaries()[0]).toMatchObject({ correctionChunks: 1, correction: "unchanged" });
   });
 
+  it("waits for a chunk turned down after the stop, and counts it and its retry apart from the stop-time pass (#14932)", async () => {
+    const harness = setupGlobals({ correctionEnabled: true });
+    let answerChunk!: (result: unknown) => void;
+    let answerRetry!: (result: unknown) => void;
+    harness.voiceInput.correct
+      .mockReturnValueOnce(new Promise((resolve) => (answerChunk = resolve)))
+      .mockImplementationOnce(async ({ rawText }: { rawText: string }) => ({
+        action: "no_change",
+        correctedText: rawText,
+        verdict: "unchanged",
+      }))
+      .mockReturnValueOnce(new Promise((resolve) => (answerRetry = resolve)));
+    const { service, summaries } = await load();
+    const sessionId = await startLive(harness, service);
+    let clock = performance.now();
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+    const sentence =
+      "The integration tests keep timing out whenever the staging database is busy with the import.";
+    for (let i = 0; i < 7; i++) {
+      harness.emit("complete", { sessionId, text: sentence, itemId: `item-${i}` });
+    }
+    clock += 2_000;
+    harness.emit("delta", { sessionId, text: "The login", itemId: "item-next" });
+    harness.emit("complete", {
+      sessionId,
+      text: "The login page is next.",
+      itemId: "item-next",
+    });
+    expect(harness.voiceInput.correct).toHaveBeenCalledTimes(1);
+    harness.paintFrames();
+
+    await service.stop("Dictation stopped.", { reason: "user" });
+    await flushPromises();
+    harness.paintFrames();
+    expect(harness.voiceInput.correct).toHaveBeenCalledTimes(2);
+    expect(summaries()).toHaveLength(0);
+
+    const chunkText = Array.from({ length: 7 }, () => sentence).join(" ");
+    answerChunk({ action: "no_change", correctedText: chunkText, verdict: "rejected_command" });
+    await flushPromises();
+    expect(harness.voiceInput.correct).toHaveBeenCalledTimes(3);
+    expect(harness.voiceInput.correct).toHaveBeenLastCalledWith(
+      expect.objectContaining({ rawText: chunkText })
+    );
+    expect(summaries()).toHaveLength(0);
+
+    answerRetry({
+      action: "replace",
+      correctedText: chunkText.replaceAll("keep timing out", "time out"),
+      verdict: "replaced",
+    });
+    await flushPromises();
+    expect(summaries()).toHaveLength(1);
+    expect(summaries()[0]).toMatchObject({
+      correctionChunks: 1,
+      correction: "unchanged",
+      correctionPassages: { ...NO_PASSAGES, sent: 1, unchanged: 1 },
+      correctionChunkPassages: { ...NO_PASSAGES, sent: 2, rejectedCommand: 1, applied: 1 },
+    });
+  });
+
+  it("logs at once when a chunk still on its way is dropped, and never counts its late reply (#14932)", async () => {
+    const harness = setupGlobals({ correctionEnabled: true });
+    let answerChunk!: (result: unknown) => void;
+    harness.voiceInput.correct
+      .mockReturnValueOnce(new Promise((resolve) => (answerChunk = resolve)))
+      .mockImplementation(async ({ rawText }: { rawText: string }) => ({
+        action: "no_change",
+        correctedText: rawText,
+        verdict: "unchanged",
+      }));
+    const { service, summaries } = await load();
+    const sessionId = await startLive(harness, service);
+    let clock = performance.now();
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+    const sentence =
+      "The integration tests keep timing out whenever the staging database is busy with the import.";
+    for (let i = 0; i < 7; i++) {
+      harness.emit("complete", { sessionId, text: sentence, itemId: `item-${i}` });
+    }
+    clock += 2_000;
+    harness.emit("delta", { sessionId, text: "The login", itemId: "item-next" });
+    harness.emit("complete", { sessionId, text: "The login page is next.", itemId: "item-next" });
+    harness.paintFrames();
+    await service.stop("Dictation stopped.", { reason: "user" });
+    await flushPromises();
+    harness.paintFrames();
+    expect(summaries()).toHaveLength(0);
+
+    service.discardPendingCorrections(TARGET.panelId);
+    expect(summaries()).toHaveLength(1);
+    expect(summaries()[0]!.correctionChunkPassages).toEqual({
+      ...NO_PASSAGES,
+      sent: 1,
+      dropped: 1,
+    });
+
+    answerChunk({ action: "no_change", correctedText: "", verdict: "rejected_command" });
+    await flushPromises();
+    expect(summaries()).toHaveLength(1);
+    expect(harness.voiceInput.correct).toHaveBeenCalledTimes(2);
+  });
+
   it("records a correction request that failed as failed", async () => {
     const harness = setupGlobals({ correctionEnabled: true });
     const { service, summaries } = await load();

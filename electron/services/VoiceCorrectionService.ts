@@ -569,7 +569,7 @@ export class VoiceCorrectionService {
         startsPrompt: request.startsPrompt === true,
       });
       if (outcome.rejected) {
-        logDebug(`${P} Correction rejected, keeping raw text`, {
+        logInfo(`${P} Correction rejected, keeping raw text`, {
           reason: outcome.rejected.reason,
           rawLen: request.rawText.length,
           correctedLen: outcome.rejected.candidate.length,

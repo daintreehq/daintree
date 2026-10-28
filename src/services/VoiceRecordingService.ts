@@ -169,6 +169,15 @@ import { VoiceSessionTimeline, type VoiceCorrectionOutcome } from "@/services/vo
 import { estimateCorrectionMs, recordCorrectionPace } from "@/services/voiceCorrectionPace";
 
 const LOG_PREFIX = "[VoiceRecording]";
+
+/** A chunk passage's fates that leave its words for a later pass to clean (#14932). */
+const CLEANED_AGAIN: ReadonlySet<PassageFate> = new Set<PassageFate>([
+  "rejected_command",
+  "rejected_low_confidence",
+  "failed",
+  "timed_out",
+  "unlanded",
+]);
 // How long a cached view the indicator asked for waits to come on screen
 // before it gives up on putting the keyboard in its pane.
 const REVEAL_FOCUS_WAIT_MS = 15_000;
@@ -393,11 +402,11 @@ interface WarmAudio {
 
 /**
  * One pass of a dictation's AI cleanup, still on its way: a chunk sent while
- * the session ran (#14772), or the pass at stop over whatever came after the
- * last one.
+ * the session ran (#14772), the pass at stop over whatever came after the
+ * last one, or a pass after the stop over what a chunk couldn't land (#14932).
  */
 interface PendingCorrection {
-  kind: "chunk" | "stop";
+  kind: "chunk" | "stop" | "retry";
   /** The dictation's cleanup as a whole, which this pass is part of. */
   cleanup: DictationCleanup;
   panelId: string;
@@ -419,8 +428,15 @@ interface PendingCorrection {
   /** Resolves when the correction is done. */
   settled: Promise<void>;
   settle: () => void;
-  /** The summary of the session that dictated the passages; the stop-time pass only. */
+  /**
+   * The summary of the session that dictated the passages: the stop-time
+   * pass's timing and fates, or a share of the chunks' passage counts.
+   */
   timeline: VoiceSessionTimeline | null;
+  /** Its replies are in, so it says itself how each passage ended. */
+  replied: boolean;
+  /** A chunk or retry whose passages the summary has counted. */
+  counted: boolean;
   /** `performance.now()` when the request went out. */
   startedAt: number;
   /** How long this machine's corrections of passages this long have taken. */
@@ -451,6 +467,11 @@ interface DictationCleanup {
   /** The heard-as rerun's rewrites of chunks, in draft order, for the transcript. */
   rewrites: PassageRewrite[];
   stopped: boolean;
+  /**
+   * A graceful stop sent its pass without the chunks' words, so a chunk
+   * passage that can't land after it is cleaned in a pass of its own.
+   */
+  retriesAfterStop: boolean;
   /** The recent-dictations entry and every passage that covers its words, set at stop. */
   history: { id: string; passages: CorrectionPassage[] } | null;
   /**
@@ -3326,6 +3347,7 @@ class VoiceRecordingService {
     const cleanup =
       this.cleanups.get(record.sessionId) ?? this.openCleanup(target, record.sessionId);
     cleanup.stopped = true;
+    cleanup.retriesAfterStop = correctionEnabled;
     const draft = useTerminalInputStore.getState().getDraftInput(panelId, projectId);
     // Every word the draft still holds as dictated, chunks already cleaned included.
     const dictated = collectCorrectionPassages(record, draft);
@@ -3385,7 +3407,15 @@ class VoiceRecordingService {
         chunks: cleanup.passes.length,
         rawLength: tail.reduce((sum, p) => sum + p.text.length, 0),
       });
-      this.registerCorrection("stop", cleanup, target, record.id, tail, timeline);
+      this.registerCorrection(
+        "stop",
+        cleanup,
+        target,
+        voiceContext(target),
+        record.id,
+        tail,
+        timeline
+      );
     }
     this.keepCleanedHistory(cleanup);
   }
@@ -3402,6 +3432,7 @@ class VoiceRecordingService {
       failed: new Set(),
       rewrites: [],
       stopped: false,
+      retriesAfterStop: false,
       history: null,
       baseline: null,
     };
@@ -3413,7 +3444,8 @@ class VoiceRecordingService {
   private registerCorrection(
     kind: PendingCorrection["kind"],
     cleanup: DictationCleanup,
-    target: VoiceRecordingTarget,
+    target: { panelId: string; projectId?: string },
+    context: VoiceContext,
     dictationId: string,
     passages: CorrectionPassage[],
     timeline: VoiceSessionTimeline | null
@@ -3425,7 +3457,7 @@ class VoiceRecordingService {
       cleanup,
       panelId,
       projectId,
-      context: voiceContext(target),
+      context,
       dictationId,
       sessionId: cleanup.sessionId,
       passages,
@@ -3437,11 +3469,14 @@ class VoiceRecordingService {
       }),
       settle: () => settle(),
       timeline,
+      replied: false,
+      counted: false,
       startedAt: performance.now(),
       expectedMs: estimateCorrectionMs(longestPassage(passages)),
     };
     cleanup.passes.push(correction);
-    timeline?.beginCorrection();
+    if (kind === "stop") timeline?.beginCorrection();
+    else timeline?.beginChunkPass();
     this.pendingCorrections.add(correction);
     this.watchCorrectionDrafts();
 
@@ -3616,13 +3651,22 @@ class VoiceRecordingService {
     for (const passage of chunk) {
       for (const id of passage.utteranceIds) owner.claimed.add(id);
     }
-    this.timelines.get(at.sessionId)?.noteCorrectionChunk();
+    const timeline = this.timelines.get(at.sessionId) ?? null;
+    timeline?.noteCorrectionChunk();
     logDebug(`${LOG_PREFIX} Cleaning up a chunk`, {
       panelId,
       passages: chunk.length,
       rawLength: chunk.reduce((sum, p) => sum + p.text.length, 0),
     });
-    this.registerCorrection("chunk", owner, target, current.id, chunk, null);
+    this.registerCorrection(
+      "chunk",
+      owner,
+      target,
+      voiceContext(target),
+      current.id,
+      chunk,
+      timeline
+    );
     return "cut";
   }
 
@@ -3635,6 +3679,64 @@ class VoiceRecordingService {
     if (correction.kind !== "chunk" || cleanup.stopped || cleanup.released.has(passage)) return;
     cleanup.released.add(passage);
     for (const id of passage.utteranceIds) cleanup.claimed.delete(id);
+  }
+
+  /**
+   * Cleans again, in a pass of its own, the chunk passages that couldn't land
+   * once the stop-time pass had gone out without their words (#14932). Called
+   * before the chunk's pass is through, so a send waiting on it waits on this
+   * too, and the history and baseline wait for its text in their place.
+   */
+  private cleanChunkAgain(correction: PendingCorrection, passages: CorrectionPassage[]): void {
+    const { cleanup } = correction;
+    const record = useDictationRangeStore.getState().getDictation(correction.dictationId);
+    if (!record) return;
+    const draft = useTerminalInputStore
+      .getState()
+      .getDraftInput(correction.panelId, correction.projectId);
+    const again: CorrectionPassage[] = [];
+    for (const passage of passages) {
+      if (cleanup.released.has(passage)) continue;
+      cleanup.released.add(passage);
+      const ids = new Set(passage.utteranceIds);
+      const fresh = collectCorrectionPassages(record, draft, (u) => ids.has(u.id));
+      again.push(...fresh);
+      const same = fresh.length === 1 && fresh[0]!.text === passage.text ? fresh[0]! : null;
+      const history = cleanup.history?.passages;
+      const at = history?.indexOf(passage) ?? -1;
+      if (history && at >= 0) {
+        // The history keeps cleaned text only from passes over every word.
+        if (same) history.splice(at, 1, same);
+        else cleanup.history = null;
+      }
+      const span = cleanup.baseline?.spans.get(passage);
+      if (cleanup.baseline && span) {
+        cleanup.baseline.spans.delete(passage);
+        if (same) cleanup.baseline.spans.set(same, span);
+      }
+    }
+    if (again.length === 0) return;
+    logDebug(`${LOG_PREFIX} Cleaning up a chunk again after the stop`, {
+      panelId: correction.panelId,
+      passages: again.length,
+      rawLength: again.reduce((sum, p) => sum + p.text.length, 0),
+    });
+    this.registerCorrection(
+      "retry",
+      cleanup,
+      correction,
+      correction.context,
+      correction.dictationId,
+      again,
+      correction.timeline
+    );
+  }
+
+  /** Counts a chunk or retry's passages into the session's summary, once. */
+  private countChunkPass(correction: PendingCorrection, fates: PassageFate[]): void {
+    if (correction.kind === "stop" || correction.counted) return;
+    correction.counted = true;
+    correction.timeline?.endChunkPass(countPassageFates(fates));
   }
 
   /**
@@ -3735,7 +3837,8 @@ class VoiceRecordingService {
     const { results, lastTiming } = await settlePassageReplies(
       correction.passages.map((passage) => this.requestPassageCorrection(passage, correction))
     );
-    correction.timeline?.noteCorrectionReplies(lastTiming);
+    correction.replied = true;
+    if (correction.kind === "stop") correction.timeline?.noteCorrectionReplies(lastTiming);
     // Timed whether or not its draft is still there to take it: the call cost
     // the same either way.
     if (results.every((result) => !result.failed)) {
@@ -3746,24 +3849,22 @@ class VoiceRecordingService {
     }
     correction.passages.forEach((passage, i) => {
       cleanup.results.set(passage, results[i]?.text ?? null);
-      if (!results[i]?.failed) return;
-      cleanup.failed.add(passage);
-      // A chunk the model couldn't clean gives its words to the next pass.
-      this.releaseChunkPassage(correction, passage);
+      if (results[i]?.failed) cleanup.failed.add(passage);
     });
-
-    // The history keeps the cleaned text even when the draft it was meant for
-    // was sent or edited first: that is when it's worth recovering.
-    this.keepCleanedHistory(cleanup);
 
     const { panelId, projectId } = correction;
     if (correction.done) {
+      // The history keeps the cleaned text even when the draft it was meant
+      // for was sent or edited first: that is when it's worth recovering.
+      this.keepCleanedHistory(cleanup);
       logDebug(`${LOG_PREFIX} Correction result stale (draft sent or edited), discarding`);
       this.releaseBaseline(cleanup);
-      correction.timeline?.endCorrection(
-        "discarded",
-        countPassageFates(correction.passages.map(() => "dropped"))
-      );
+      const dropped = correction.passages.map((): PassageFate => "dropped");
+      if (correction.kind === "stop") {
+        correction.timeline?.endCorrection("discarded", countPassageFates(dropped));
+      } else {
+        this.countChunkPass(correction, dropped);
+      }
       return;
     }
     // Every passage is checked against the same draft and written in one
@@ -3852,10 +3953,27 @@ class VoiceRecordingService {
         };
       } else {
         skipped += edits.length;
+        for (const { passage } of edits) fates[correction.passages.indexOf(passage)] = "unlanded";
         edits.length = 0;
       }
     }
     logDebug(`${LOG_PREFIX} Correction settled`, { panelId, applied: edits.length, skipped });
+
+    // A chunk passage still in place that a check turned down, the model
+    // couldn't clean, or the draft couldn't take gives its words to a later
+    // pass. One an edit reached keeps only the words it left, already given.
+    if (correction.kind === "chunk") {
+      const again = correction.passages.filter(
+        (passage, i) => spans.has(passage) && CLEANED_AGAIN.has(fates[i]!)
+      );
+      if (!cleanup.stopped) {
+        for (const passage of again) this.releaseChunkPassage(correction, passage);
+      } else if (cleanup.retriesAfterStop && again.length > 0) {
+        this.cleanChunkAgain(correction, again);
+      }
+    }
+    // After any pass over what this one couldn't land, which it then waits for.
+    this.keepCleanedHistory(cleanup);
 
     // The settled dictated text goes into the learning baseline. Manual edits
     // the user makes before sending are diffed against it to detect words
@@ -3881,7 +3999,11 @@ class VoiceRecordingService {
     if (skipped > 0) outcome = "discarded";
     else if (edits.length > 0) outcome = "applied";
     else if (results.some((result) => result.failed)) outcome = "failed";
-    correction.timeline?.endCorrection(outcome, countPassageFates(fates));
+    if (correction.kind === "stop") {
+      correction.timeline?.endCorrection(outcome, countPassageFates(fates));
+    } else {
+      this.countChunkPass(correction, fates);
+    }
   }
 
   /**
@@ -4317,6 +4439,13 @@ class VoiceRecordingService {
     if (correction.done) return;
     correction.done = true;
     this.pendingCorrections.delete(correction);
+    // Dropped before its replies: the summary needn't wait for them.
+    if (!correction.replied) {
+      this.countChunkPass(
+        correction,
+        correction.passages.map(() => "dropped")
+      );
+    }
     correction.settle();
     if (this.pendingCorrections.size === 0) {
       this.unwatchCorrectionDrafts?.();
