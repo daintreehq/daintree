@@ -1683,33 +1683,63 @@ describe("buildInputBarTheme", () => {
     expect(invalidRule).toContain(`color: ${colors.errorColor}`);
   });
 
-  it("draws the dictation caret dotted until the mic hears, then solid and level-driven", () => {
+  it("flags the dictation caret, and draws each phase as its own stem", () => {
     const css = readGeneratedCss([buildInputBarTheme(theme)]);
     const colors = resolveInputBarColors(theme);
+    // Every base rule whose selector list names the selector, merged in order;
+    // media blocks aside.
+    const base = withoutMediaBlocks(css);
     const rule = (selector: string) => {
-      const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const body = css.match(new RegExp(`\\.ͼ\\w+ ${escaped}\\s*\\{([^}]*)\\}`))?.[1];
-      if (body === undefined) throw new Error(`selector ${selector} not found in CSS`);
-      return parseDeclarations(body);
+      const bodies = [...base.matchAll(/([^{}]+)\{([^}]*)\}/g)].filter((m) =>
+        (m[1] ?? "").split(",").some((s) => s.trim().replace(/^\.ͼ\w+ /, "") === selector)
+      );
+      if (bodies.length === 0) throw new Error(`selector ${selector} not found in CSS`);
+      return Object.assign({}, ...bodies.map((m) => parseDeclarations(m[2] ?? "")));
     };
-    // The caret takes no width of its own: its line is drawn out of flow.
+    // The caret takes no width of its own: flag and stem are drawn out of flow.
     expect(rule(".cm-voice-caret").display).toBeUndefined();
-    const line = rule(".cm-voice-caret::after");
-    expect(line.position).toBe("absolute");
-    expect(line["border-left"]).toContain(`dotted ${colors.voiceSignal.toLowerCase()}`);
-    const live = rule('.cm-voice-caret[data-phase="live"]::after');
-    expect(live["border-left-style"]).toBe("solid");
+    const flag = rule(".cm-voice-caret::before");
+    expect(flag.position).toBe("absolute");
+    expect([flag.width, flag.height]).toEqual(["6px", "2px"]);
+    const stem = rule(".cm-voice-caret::after");
+    expect(stem.position).toBe("absolute");
+    expect(stem["background-image"]).toContain("repeating-linear-gradient");
+    expect(rule(".cm-voice-caret")["--cm-voice-caret-ink"]).toBe(colors.voiceSignal.toLowerCase());
+
+    const live = rule('.cm-voice-caret[data-phase="live"]');
     expect(live.opacity).toContain(`var(${VOICE_CARET_LEVEL_PROPERTY}, 1)`);
-    expect(rule('.cm-voice-caret[data-phase="held"]::after')["border-left-color"]).toBe(
+    expect(live.opacity).toContain(`${colors.voiceCaretFloor} +`);
+    expect(rule('.cm-voice-caret[data-phase="live"]::after')["background-image"]).toBe("none");
+
+    expect(rule('.cm-voice-caret[data-phase="held"]')["--cm-voice-caret-ink"]).toBe(
       colors.voiceHeld.toLowerCase()
     );
+    const corner = rule('.cm-voice-caret[data-phase="held"]::after');
+    expect(corner.bottom).toBe("auto");
+    expect(corner["background-image"]).toBe("none");
+
     // Reduced motion holds the live caret at full, over the live rule.
     expect(css).toMatch(
-      /@media \(prefers-reduced-motion: reduce\)\s*\{[^@]*\.cm-content \.cm-voice-caret\[data-phase="live"\]::after\s*\{\s*opacity:\s*1/
+      /@media \(prefers-reduced-motion: reduce\)\s*\{[^@]*\.cm-content \.cm-voice-caret\[data-phase="live"\]\s*\{\s*opacity:\s*1/
     );
     expect(css).toMatch(
-      /@media \(forced-colors: active\)\s*\{[^@]*\.cm-voice-caret\[data-phase="live"\]::after\s*\{[^}]*border-left-color:\s*Highlight/
+      /@media \(forced-colors: active\)\s*\{[^@]*\.cm-voice-caret\[data-phase="live"\]::after\s*\{[^}]*border-color:\s*Highlight/
     );
+    expect(css).toMatch(
+      /@media \(forced-colors: active\)\s*\{[^@]*\.cm-voice-caret\[data-phase="held"\]::after\s*\{[^}]*border-color:\s*GrayText/
+    );
+  });
+
+  it("fits the live caret's quietest opacity to read at 3:1", () => {
+    // A cursor that reads at 55% keeps the floor; a dim one raises it.
+    expect(resolveInputBarColors(theme).voiceCaretFloor).toBe(0.55);
+    const dim = resolveInputBarColors({
+      background: "#110f0e",
+      foreground: "#c5beb2",
+      cursor: "#918a7f",
+    });
+    expect(dim.voiceCaretFloor).toBeGreaterThan(0.55);
+    expect(dim.voiceCaretFloor).toBeLessThanOrEqual(1);
   });
 
   it("keeps file paths and chip labels fully visible instead of cropping them", () => {
@@ -1836,6 +1866,24 @@ function extractRuleBody(css: string, selector: string): string {
     throw new Error(`selector ${selector} not found in CSS`);
   }
   return match[1];
+}
+
+function withoutMediaBlocks(css: string): string {
+  let out = "";
+  let i = 0;
+  while (i < css.length) {
+    const at = css.indexOf("@media", i);
+    if (at === -1) return out + css.slice(i);
+    out += css.slice(i, at);
+    let depth = 0;
+    let j = css.indexOf("{", at);
+    for (; j < css.length; j++) {
+      if (css[j] === "{") depth++;
+      else if (css[j] === "}" && --depth === 0) break;
+    }
+    i = j + 1;
+  }
+  return out;
 }
 
 function parseDeclarations(body: string): Record<string, string> {

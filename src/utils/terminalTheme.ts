@@ -73,6 +73,11 @@ export interface InputBarColors {
    * signal, fitted to 3:1 against the mic's disc at rest and hovered.
    */
   voiceHeld: string;
+  /**
+   * The live insertion caret's quietest opacity, 0.55 to 1: the level's floor,
+   * raised where 0.55 would leave the caret under 3:1 against the listening fill.
+   */
+  voiceCaretFloor: number;
   isDark: boolean;
 }
 
@@ -84,6 +89,9 @@ const VOICE_DISC_MIXES = [12, 18] as const;
 
 /** The orbit's dot at the quietest a listening voice leaves it (`VoiceInputButton`). */
 export const VOICE_ORBIT_MIN_OPACITY = 0.82;
+
+/** The live insertion caret at the quietest a voice leaves it, before contrast fitting. */
+const VOICE_CARET_MIN_OPACITY = 0.55;
 
 type Rgb = readonly [number, number, number];
 
@@ -236,6 +244,7 @@ export function resolveInputBarColors(theme: ITheme): InputBarColors {
   let waitCaptionPct = 72;
   let voiceSignal = acInk?.css ?? accent;
   let voiceHeldPct = 60;
+  let voiceCaretFloor = VOICE_CARET_MIN_OPACITY;
   if (fg && bg) {
     const rest = mixOklab(bg, BLACK, restDim);
     const hover = mixOklab(bg, BLACK, hoverDim);
@@ -286,7 +295,18 @@ export function resolveInputBarColors(theme: ITheme): InputBarColors {
       }
       // Emitted as a resolved colour: the orbit derives its alpha steps from it
       // with relative colour syntax, once per frame.
-      if (lean > 0) voiceSignal = toHex(mixOklab(fg, acInk.rgb, lean / 100));
+      const signal = mixOklab(fg, acInk.rgb, lean / 100);
+      if (lean > 0) voiceSignal = toHex(signal);
+      // The insertion caret dims further with a quiet voice than the orbit
+      // does. Raise its floor only where the quietest step would drop under
+      // 3:1 against the listening fill, keeping the hue it shares with the orbit.
+      voiceCaretFloor = 1;
+      for (let p = Math.round(VOICE_CARET_MIN_OPACITY * 100); p <= 100; p++) {
+        if (contrast(over(signal, listening, p / 100), listening) >= 3.1) {
+          voiceCaretFloor = p / 100;
+          break;
+        }
+      }
     }
   }
 
@@ -316,6 +336,7 @@ export function resolveInputBarColors(theme: ITheme): InputBarColors {
     waitCaption: mix(fgCss, waitCaptionPct, background),
     voiceSignal,
     voiceHeld: mix(fgCss, voiceHeldPct, background),
+    voiceCaretFloor,
     isDark,
   };
 }
