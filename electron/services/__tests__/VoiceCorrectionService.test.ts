@@ -1625,19 +1625,21 @@ describe("VoiceCorrectionService", () => {
         "fetch",
         vi.fn().mockResolvedValue(makeFetchResponse({ corrected_text: "/compact" }))
       );
-      vi.mocked(logInfo).mockClear();
+      for (const log of [logDebug, logInfo, logWarn]) vi.mocked(log).mockClear();
       await new VoiceCorrectionService().correct(
         { rawText: "run the compact command", startsPrompt: true },
         BASE_SETTINGS
       );
       const rejected = vi
         .mocked(logInfo)
-        .mock.calls.find(([message]) => String(message).includes("Correction rejected"));
-      expect(rejected?.[1]).toEqual({
-        reason: expect.any(String),
-        rawLen: "run the compact command".length,
-        correctedLen: "/compact".length,
-      });
+        .mock.calls.filter(([message]) => String(message).includes("Correction rejected"));
+      expect(rejected.map(([, fields]) => fields)).toEqual([
+        { reason: "unknown_command", rawLen: "run the compact command".length, correctedLen: 8 },
+      ]);
+      const logged = JSON.stringify(
+        [logDebug, logInfo, logWarn].flatMap((log) => vi.mocked(log).mock.calls)
+      );
+      expect(logged).not.toContain("compact");
     });
 
     it("names a passage it never sent skipped", async () => {

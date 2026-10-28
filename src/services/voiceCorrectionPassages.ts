@@ -233,8 +233,8 @@ export function addPassageCounts(
   a: VoiceCorrectionPassages,
   b: VoiceCorrectionPassages
 ): VoiceCorrectionPassages {
-  const sum = { ...a };
-  for (const key of Object.keys(sum) as Array<keyof VoiceCorrectionPassages>) sum[key] += b[key];
+  const sum = { ...a, sent: a.sent + b.sent };
+  for (const field of Object.values(PASSAGE_FATE_FIELDS)) sum[field] += b[field];
   return sum;
 }
 

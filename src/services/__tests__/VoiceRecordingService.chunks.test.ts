@@ -55,7 +55,7 @@ type CorrectResult = {
   action: "no_change" | "replace";
   correctedText: string;
   failed?: true;
-  verdict?: "rejected_command" | "rejected_low_confidence";
+  verdict?: "unchanged" | "rejected_command" | "rejected_low_confidence" | "failed" | "timed_out";
 };
 type CorrectRequest = { rawText: string; recentContext?: string[]; sessionId?: string };
 type Listener = (payload: never) => void;
@@ -696,6 +696,73 @@ describe("VoiceRecordingService — cleaning up a long dictation in chunks (#147
       id: expect.any(String),
       correctedText: `${CLEANED_OPENING} ${cleanedNext}`,
     });
+  });
+
+  it.each([
+    ["turned down", { verdict: "rejected_low_confidence" }, 3],
+    ["failed", { failed: true, verdict: "failed" }, 3],
+    ["timed out", { failed: true, verdict: "timed_out" }, 3],
+    ["left as it was", { verdict: "unchanged" }, 2],
+  ] as const)(
+    "cleans a chunk %s after the stop began again only when it didn't land",
+    async (_name, reply, calls) => {
+      const { service, say, pause, flush } = await setup();
+      const chunk = deferred<CorrectResult>();
+      correct.mockReturnValueOnce(chunk.promise).mockImplementation(async ({ rawText }) => ({
+        action: "no_change",
+        correctedText: rawText,
+      }));
+      for (const sentence of OPENING) say(sentence);
+      pause();
+      say(NEXT);
+      await service.stop();
+      chunk.resolve({ action: "no_change", correctedText: OPENING_TEXT, ...reply });
+      await flush();
+
+      expect(correct.mock.calls.map(([request]) => request.rawText)).toEqual(
+        [OPENING_TEXT, NEXT, OPENING_TEXT].slice(0, calls)
+      );
+    }
+  );
+
+  it("gives a chunk the draft couldn't take back to the stop-time pass", async () => {
+    const { service, say, pause, draft, flush } = await setup();
+    const { useDictationRangeStore } = await import("@/store/dictationRangeStore");
+    const rewriteUtterances = useDictationRangeStore.getState().rewriteUtterances;
+    useDictationRangeStore.setState({ rewriteUtterances: () => null });
+    correct.mockResolvedValueOnce({ action: "replace", correctedText: CLEANED_OPENING });
+    for (const sentence of OPENING) say(sentence);
+    pause();
+    say(NEXT);
+    await flush();
+    useDictationRangeStore.setState({ rewriteUtterances });
+    expect(draft()).toBe(`${OPENING_TEXT} ${NEXT}`);
+
+    correct.mockResolvedValueOnce({ action: "no_change", correctedText: "" });
+    await service.stop();
+    expect(correct).toHaveBeenLastCalledWith(
+      expect.objectContaining({ rawText: `${OPENING_TEXT} ${NEXT}` })
+    );
+  });
+
+  it("doesn't clean a chunk again after a stop with cleanup turned off", async () => {
+    const { service, voiceStore, say, pause, flush } = await setup();
+    const chunk = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(chunk.promise);
+    for (const sentence of OPENING) say(sentence);
+    pause();
+    say(NEXT);
+    voiceStore.getState().setCorrectionEnabled(false);
+    await service.stop();
+    chunk.resolve({
+      action: "no_change",
+      correctedText: OPENING_TEXT,
+      verdict: "rejected_command",
+    });
+    await flush();
+
+    expect(correct).toHaveBeenCalledTimes(1);
+    expect(service.hasPendingCorrection(PANEL)).toBe(false);
   });
 
   it("cleans a turned-down chunk once more after the stop, and no more than that", async () => {
