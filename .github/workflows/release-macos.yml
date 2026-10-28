@@ -84,10 +84,31 @@ jobs:
           node_version: ${{ env.NODE_VERSION }}
 
       - name: Test
-        run: npm run test
+        run: npm run test -- --exclude scripts/perf/__tests__/scenarioLiveness.test.ts
+
+  # Spawns a child per perf scenario and takes 6-8 minutes on its own, so it
+  # runs beside the unit suite instead of setting its tail (ci.yml does the same).
+  perf-liveness:
+    name: Perf scenario liveness (macOS)
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          clean: true
+          fetch-depth: 1
+
+      - name: Set up Node.js and install dependencies
+        uses: ./.github/actions/setup-node-install
+        with:
+          node_version: ${{ env.NODE_VERSION }}
+
+      - name: Test (perf scenario liveness)
+        run: npx vitest run scripts/perf/__tests__/scenarioLiveness.test.ts
 
   e2e-core-gate:
-    needs: [checks, unit-tests]
+    needs: [checks, unit-tests, perf-liveness]
     uses: ./.github/workflows/e2e.yml
     with:
       suite: core
@@ -97,7 +118,7 @@ jobs:
   # (#8053), so a single hung Windows-style spec — here, a hung macOS spec —
   # takes out 1/4 of one bucket instead of the whole macOS release.
   e2e-full-gate:
-    needs: [checks, unit-tests]
+    needs: [checks, unit-tests, perf-liveness]
     strategy:
       fail-fast: false
       matrix:
@@ -115,7 +136,7 @@ jobs:
       platform: macos
 
   build-daintree:
-    needs: [checks, unit-tests, e2e-core-gate, e2e-full-gate]
+    needs: [checks, unit-tests, perf-liveness, e2e-core-gate, e2e-full-gate]
     name: Build Daintree (macOS)
     runs-on: macos-15
     timeout-minutes: 90
