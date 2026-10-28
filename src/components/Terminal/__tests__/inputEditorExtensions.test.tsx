@@ -1686,13 +1686,15 @@ describe("buildInputBarTheme", () => {
   it("flags the dictation caret, and draws each phase as its own stem", () => {
     const css = readGeneratedCss([buildInputBarTheme(theme)]);
     const colors = resolveInputBarColors(theme);
-    // Every base rule naming the selector, merged in order; media blocks aside.
+    // Every base rule whose selector list names the selector, merged in order;
+    // media blocks aside.
     const base = withoutMediaBlocks(css);
     const rule = (selector: string) => {
-      const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const bodies = [...base.matchAll(new RegExp(`\\.ͼ\\w+ ${escaped}\\s*\\{([^}]*)\\}`, "g"))];
+      const bodies = [...base.matchAll(/([^{}]+)\{([^}]*)\}/g)].filter((m) =>
+        (m[1] ?? "").split(",").some((s) => s.trim().replace(/^\.ͼ\w+ /, "") === selector)
+      );
       if (bodies.length === 0) throw new Error(`selector ${selector} not found in CSS`);
-      return Object.assign({}, ...bodies.map((m) => parseDeclarations(m[1] ?? "")));
+      return Object.assign({}, ...bodies.map((m) => parseDeclarations(m[2] ?? "")));
     };
     // The caret takes no width of its own: flag and stem are drawn out of flow.
     expect(rule(".cm-voice-caret").display).toBeUndefined();
