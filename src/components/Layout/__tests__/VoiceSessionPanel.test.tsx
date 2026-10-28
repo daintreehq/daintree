@@ -112,22 +112,19 @@ describe("VoiceSessionPanel (#14920)", () => {
     { phase: "connecting" as const, pause: "Pause", canPause: false, canStop: true },
     { phase: "reconnecting" as const, pause: "Pause", canPause: false, canStop: true },
     { phase: "finishing" as const, pause: "Pause", canPause: false, canStop: false },
-  ])(
-    "offers pause and stop where they apply ($phase)",
-    ({ phase, pause, canPause, canStop }) => {
-      const { button, handlers } = renderPanel({ phase });
-      const pauseButton = button("voice-session-pause");
-      const stopButton = button("voice-session-stop");
-      expect(pauseButton.textContent).toContain(pause);
-      expect(pauseButton.disabled).toBe(!canPause);
-      expect(stopButton.disabled).toBe(!canStop);
+  ])("offers pause and stop where they apply ($phase)", ({ phase, pause, canPause, canStop }) => {
+    const { button, handlers } = renderPanel({ phase });
+    const pauseButton = button("voice-session-pause");
+    const stopButton = button("voice-session-stop");
+    expect(pauseButton.textContent).toContain(pause);
+    expect(pauseButton.disabled).toBe(!canPause);
+    expect(stopButton.disabled).toBe(!canStop);
 
-      fireEvent.click(pauseButton);
-      fireEvent.click(stopButton);
-      expect(handlers.onTogglePause).toHaveBeenCalledTimes(canPause ? 1 : 0);
-      expect(handlers.onStop).toHaveBeenCalledTimes(canStop ? 1 : 0);
-    }
-  );
+    fireEvent.click(pauseButton);
+    fireEvent.click(stopButton);
+    expect(handlers.onTogglePause).toHaveBeenCalledTimes(canPause ? 1 : 0);
+    expect(handlers.onStop).toHaveBeenCalledTimes(canStop ? 1 : 0);
+  });
 
   it("puts each control's shortcut beside it", () => {
     const { button } = renderPanel();

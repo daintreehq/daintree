@@ -462,10 +462,14 @@ export function VoiceRecordingToolbarButton({
                 <span className="text-text-secondary">{contextLabel}</span>
               )}
               <span className="text-text-secondary">
-                {isCanopyReplyTarget(labelTarget) ? "Click to go to reply" : "Click to jump to panel"}
+                {isCanopyReplyTarget(labelTarget)
+                  ? "Click to go to reply"
+                  : "Click to jump to panel"}
               </span>
               {shortcut && (
-                <span className="text-text-secondary">{createTooltipContent("Stop", shortcut)}</span>
+                <span className="text-text-secondary">
+                  {createTooltipContent("Stop", shortcut)}
+                </span>
               )}
             </div>
           </TooltipContent>

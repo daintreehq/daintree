@@ -12,12 +12,7 @@ import type { VoiceMicSignal } from "@/store/voiceRecordingStore";
 
 /** The states a session shows its panel in. */
 export type VoiceSessionPhase =
-  | "arming"
-  | "connecting"
-  | "recording"
-  | "paused"
-  | "reconnecting"
-  | "finishing";
+  "arming" | "connecting" | "recording" | "paused" | "reconnecting" | "finishing";
 
 /** What the session is recording: words for the draft, a rewrite instruction, or a Canopy reply. */
 export type VoiceSessionKind = "dictation" | "rewrite" | "canopy-reply";

@@ -144,9 +144,9 @@ describe("VoiceRecordingToolbarButton — the session panel (#14920)", () => {
     expect(service.togglePause).toHaveBeenCalledTimes(1);
     act(() => useVoiceRecordingStore.setState({ status: "paused" }));
     expect(panel()?.getAttribute("data-phase")).toBe("paused");
-    expect(
-      document.querySelector('[data-testid="voice-session-pause"]')!.textContent
-    ).toContain("Resume");
+    expect(document.querySelector('[data-testid="voice-session-pause"]')!.textContent).toContain(
+      "Resume"
+    );
   });
 
   it("stops from the panel and closes it", () => {
