@@ -8,7 +8,7 @@ vi.mock("../../utils/logger.js", () => ({
   logError: vi.fn(),
 }));
 
-import { logDebug, logWarn } from "../../utils/logger.js";
+import { logDebug, logInfo, logWarn } from "../../utils/logger.js";
 import {
   VoiceCorrectionService,
   type VoiceCorrectionRequest,
@@ -1618,6 +1618,26 @@ describe("VoiceCorrectionService", () => {
         BASE_SETTINGS
       );
       expect(result.verdict).toBe("rejected_command");
+    });
+
+    it("logs a check's refusal where a production log keeps it: its reason and lengths, never the text", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(makeFetchResponse({ corrected_text: "/compact" }))
+      );
+      vi.mocked(logInfo).mockClear();
+      await new VoiceCorrectionService().correct(
+        { rawText: "run the compact command", startsPrompt: true },
+        BASE_SETTINGS
+      );
+      const rejected = vi
+        .mocked(logInfo)
+        .mock.calls.find(([message]) => String(message).includes("Correction rejected"));
+      expect(rejected?.[1]).toEqual({
+        reason: expect.any(String),
+        rawLen: "run the compact command".length,
+        correctedLen: "/compact".length,
+      });
     });
 
     it("names a passage it never sent skipped", async () => {
