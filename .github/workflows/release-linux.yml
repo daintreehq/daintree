@@ -58,9 +58,14 @@ jobs:
         run: npm run check
 
   unit-tests:
-    name: Unit Tests (Linux)
+    name: Unit Tests (Linux ${{ matrix.shard }}/2)
     runs-on: ubuntu-22.04
     timeout-minutes: 40
+    # The suite outgrew one runner at v0.47.0 (4,191 files, 38 min on Linux).
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -79,7 +84,7 @@ jobs:
           node_version: ${{ env.NODE_VERSION }}
 
       - name: Test
-        run: npm run test -- --exclude scripts/perf/__tests__/scenarioLiveness.test.ts
+        run: npm run test -- --shard=${{ matrix.shard }}/2 --exclude scripts/perf/__tests__/scenarioLiveness.test.ts
 
   # Spawns a child per perf scenario and takes 6-8 minutes on its own, so it
   # runs beside the unit suite instead of setting its tail (ci.yml does the same).
