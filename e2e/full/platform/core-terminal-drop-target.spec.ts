@@ -120,6 +120,7 @@ async function setFocusFirstInputBar(enabled: boolean): Promise<void> {
 
 test.describe.serial("Core: where a file dropped on an agent pane lands", () => {
   let shellPanel: Locator;
+  let shellPanelId: string;
 
   test.beforeAll(async () => {
     prepareFixture();
@@ -136,9 +137,8 @@ test.describe.serial("Core: where a file dropped on an agent pane lands", () => 
     await dismissBlockingPalette(ctx.window);
     const beforeShell = new Set(await getGridPanelIds(ctx.window));
     await openTerminal(ctx.window);
-    shellPanel = ctx.window.locator(
-      `[data-panel-id="${await newestPanelId(ctx.window, beforeShell)}"]`
-    );
+    shellPanelId = await newestPanelId(ctx.window, beforeShell);
+    shellPanel = ctx.window.locator(`[data-panel-id="${shellPanelId}"]`);
 
     const beforeAgent = new Set(await getGridPanelIds(ctx.window));
     await ctx.window.locator(SEL.agent.trayButton).click();
@@ -210,6 +210,11 @@ test.describe.serial("Core: where a file dropped on an agent pane lands", () => 
   });
 
   test("a drag out of the file browser lands where a click on the drop point would", async () => {
+    // A third pane wraps below the fold on a 1024x768 screen (macos-15), and
+    // dragTo then scrolls the grid mid-drag; two panes keep both ends in view.
+    await dispatchOk("terminal.close", { terminalId: shellPanelId });
+    await expect(shellPanel).toHaveCount(0, { timeout: T_MEDIUM });
+
     const { worktrees } = await dispatchOk<{ worktrees: Array<{ id: string; isMain: boolean }> }>(
       "worktree.list"
     );
@@ -221,7 +226,8 @@ test.describe.serial("Core: where a file dropped on an agent pane lands", () => 
     const browser = ctx.window.locator(`[data-panel-id="${panelId}"]${SEL.panel.gridPanel}`);
     await expect(browser).toBeVisible({ timeout: T_MEDIUM });
     const row = (name: string) => browser.locator('[role="treeitem"]', { hasText: name }).first();
-    await expect(row("g.md")).toBeVisible({ timeout: T_MEDIUM });
+    await expect(row("g.md")).toBeInViewport({ timeout: T_MEDIUM });
+    await expect(xtermOf(agentPanel)).toBeInViewport();
 
     // With the browser selected, the agent's terminal is another pane's, so
     // Focus first decides where a click on it, and the drop, lands.
