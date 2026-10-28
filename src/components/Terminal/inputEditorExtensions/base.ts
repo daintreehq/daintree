@@ -42,6 +42,9 @@ const CHIP_SVG_SIZE = {
   flexShrink: "0",
 } as const;
 
+/** The live dictation caret's opacity follows the mic level through this property, 0 to 1. */
+export const VOICE_CARET_LEVEL_PROPERTY = "--cm-voice-caret-level";
+
 export function buildInputBarTheme(theme: ITheme): Extension {
   const c = resolveInputBarColors(theme);
 
@@ -298,11 +301,33 @@ export function buildInputBarTheme(theme: ITheme): Extension {
           borderColor: c.successColor,
         },
       },
-      '[data-voice-active="true"] & .cm-content': {
-        caretColor: c.voiceCursor,
+      // Where dictation writes (`voiceCaret`). Zero advance: the 2px border
+      // is taken back by the margins either side, so no text moves. Dotted
+      // while the mic comes up or the session holds, solid once it hears, and
+      // only the live caret follows the voice, by opacity alone.
+      ".cm-voice-caret": {
+        display: "inline-block",
+        width: "0",
+        height: "1.15em",
+        verticalAlign: "text-bottom",
+        marginLeft: "-1px",
+        marginRight: "-1px",
+        borderLeft: `2px dotted ${c.voiceSignal}`,
+        pointerEvents: "none",
       },
-      '[data-voice-active="true"] &.cm-focused .cm-cursor': {
-        borderLeft: `2px solid ${c.voiceCursor}`,
+      '.cm-voice-caret[data-phase="held"]': {
+        borderLeftColor: c.voiceHeld,
+      },
+      '.cm-voice-caret[data-phase="live"]': {
+        borderLeftStyle: "solid",
+        opacity: `calc(0.55 + 0.45 * var(${VOICE_CARET_LEVEL_PROPERTY}, 1))`,
+      },
+      "&[data-voice-caret-covers] .cm-cursorLayer": {
+        visibility: "hidden",
+      },
+      "@media (forced-colors: active)": {
+        ".cm-voice-caret": { borderLeftColor: "CanvasText" },
+        '.cm-voice-caret[data-phase="live"]': { borderLeftColor: "Highlight", opacity: "1" },
       },
     },
     { dark: true }

@@ -22,7 +22,6 @@ export interface InputBarColors {
   chipColor: string;
   errorColor: string;
   successColor: string;
-  voiceCursor: string;
   // The shell, also from the terminal palette: a terminal stays dark under a
   // light app theme, and app tokens land dark-on-dark on it.
   shellBg: string;
@@ -299,7 +298,6 @@ export function resolveInputBarColors(theme: ITheme): InputBarColors {
     chipColor: theme.cyan ?? theme.brightCyan ?? theme.cursor ?? "#58a6ff",
     errorColor: theme.red ?? "#f44747",
     successColor: theme.green ?? "#89d185",
-    voiceCursor: theme.yellow ?? theme.brightYellow ?? "#e5c07b",
     shellBg: mix(background, restDim * 100, "black"),
     shellBorder: mix(foreground, isDark ? 7 : 9, "transparent"),
     shellBorderHover: mix(foreground, isDark ? 11 : 14, "transparent"),

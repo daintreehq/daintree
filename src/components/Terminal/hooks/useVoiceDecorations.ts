@@ -4,19 +4,27 @@ import { useVoiceRecordingStore } from "@/store";
 import type { VoiceCorrectionRange } from "@/store/voiceRecordingStore";
 import { useDictationRangeStore } from "@/store/dictationRangeStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
-import { planVoiceWords } from "@/services/voiceInsertion";
+import { insertionSpan, planVoiceWords } from "@/services/voiceInsertion";
+import { isHeldBackSession } from "@/services/voiceDraftSend";
 import { isActiveVoiceSession } from "@shared/types";
+import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
 import {
   interimWidgetField,
   revealDictationStart,
   setDictationFollow,
   setInterimText,
   setPendingAIRanges,
+  setVoiceCaret,
+  VOICE_CARET_LEVEL_PROPERTY,
   type InterimPreview,
+  type VoiceCaretAt,
+  type VoiceCaretPhase,
 } from "../inputEditorExtensions";
 
 const NO_RANGES: VoiceCorrectionRange[] = [];
 const NOT_DICTATING = { session: null };
+// Per level update (about one a frame): about a third of the way to each new reading.
+const LEVEL_SMOOTHING = 0.35;
 
 interface UseVoiceDecorationsParams {
   terminalId: string;
@@ -49,6 +57,21 @@ export function useVoiceDecorations({ terminalId, editorViewRef }: UseVoiceDecor
   const anchor = useDictationRangeStore((s) =>
     sessionId ? s.getAnchor({ sessionId, panelId: terminalId, projectId }) : null
   );
+  // How the mic stands for a session writing words into this draft.
+  const caretPhase = useVoiceRecordingStore((s): VoiceCaretPhase | null => {
+    if (s.activeTarget?.panelId !== terminalId || s.activeTarget.rewrite !== undefined) return null;
+    switch (s.status) {
+      case "connecting":
+      case "recording":
+        return s.micSignal === "live" ? "live" : "starting";
+      case "reconnecting":
+      case "paused":
+      case "finishing":
+        return "held";
+      default:
+        return null;
+    }
+  });
   // Sessions whose cleanup has been shown from the start of its passage.
   const revealedRef = useRef(new Set<string>());
 
@@ -102,9 +125,21 @@ export function useVoiceDecorations({ terminalId, editorViewRef }: UseVoiceDecor
       for (const range of pendingRanges) if (range.session) revealed.add(range.session);
     }
 
+    // Where the session's next words go, as `resolveVoiceAnchor` will pick it
+    // before the first words fix it. Positions from a store out of step with
+    // the editor stay as they were, mapped through the typing.
+    let caretAt: VoiceCaretAt | undefined;
+    if (anchor) caretAt = inStep ? insertionSpan(draft, anchor).from : undefined;
+    else caretAt = sessionId && isHeldBackSession(terminalId, sessionId) ? "end" : "caret";
+
     view.dispatch({
       effects: [
         setInterimText.of(preview),
+        setVoiceCaret.of(
+          caretPhase
+            ? { phase: caretPhase, ...(caretAt !== undefined ? { at: caretAt } : {}) }
+            : { phase: null }
+        ),
         setPendingAIRanges.of(shownRanges),
         setDictationFollow.of(
           dictating && sessionId
@@ -119,6 +154,7 @@ export function useVoiceDecorations({ terminalId, editorViewRef }: UseVoiceDecor
     liveText,
     recordingRewrite,
     dictating,
+    caretPhase,
     correctionRanges,
     anchor,
     sessionId,
@@ -126,4 +162,31 @@ export function useVoiceDecorations({ terminalId, editorViewRef }: UseVoiceDecor
     projectId,
     editorViewRef,
   ]);
+
+  // The live caret's opacity follows the voice. Level arrives at frame rate,
+  // so it is written straight to the editor, never through React or a
+  // transaction, and smoothed so the caret doesn't flicker with every frame.
+  // Reduced motion holds it at full, read per update so flipping the
+  // preference mid-dictation takes effect at once.
+  useEffect(() => {
+    const view = editorViewRef.current;
+    if (!view || caretPhase !== "live") return;
+    const dom = view.dom;
+    let smooth = useVoiceRecordingStore.getState().audioLevel;
+    const write = (level: number) => {
+      smooth += (Math.min(1, Math.max(0, level)) - smooth) * LEVEL_SMOOTHING;
+      dom.style.setProperty(
+        VOICE_CARET_LEVEL_PROPERTY,
+        prefersReducedMotion() ? "1" : smooth.toFixed(3)
+      );
+    };
+    write(smooth);
+    const unsubscribe = useVoiceRecordingStore.subscribe((state, prev) => {
+      if (state.audioLevel !== prev.audioLevel) write(state.audioLevel);
+    });
+    return () => {
+      unsubscribe();
+      dom.style.removeProperty(VOICE_CARET_LEVEL_PROPERTY);
+    };
+  }, [caretPhase, editorViewRef]);
 }

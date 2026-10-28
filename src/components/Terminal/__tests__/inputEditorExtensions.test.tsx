@@ -46,7 +46,7 @@ import {
   minimalDocChange,
   createComboboxAttributes,
 } from "../inputEditorExtensions";
-import { formatChipLabel } from "../inputEditorExtensions/base";
+import { formatChipLabel, VOICE_CARET_LEVEL_PROPERTY } from "../inputEditorExtensions/base";
 import { appendAgentContextToDraft, formatAgentContextBlock } from "@shared/utils/agentContextDrag";
 import type { SlashCommand } from "@shared/types";
 
@@ -1632,21 +1632,6 @@ describe("resolveInputBarColors", () => {
     expect(colors.successColor).toBe("#89d185");
   });
 
-  it("resolves voiceCursor from theme.yellow", () => {
-    const colors = resolveInputBarColors({ ...fullTheme, yellow: "#e5c07b" });
-    expect(colors.voiceCursor).toBe("#e5c07b");
-  });
-
-  it("falls back voiceCursor to brightYellow when yellow is missing", () => {
-    const colors = resolveInputBarColors({ ...fullTheme, brightYellow: "#f9e2af" });
-    expect(colors.voiceCursor).toBe("#f9e2af");
-  });
-
-  it("falls back voiceCursor to #e5c07b when both yellow and brightYellow are missing", () => {
-    const colors = resolveInputBarColors(fullTheme);
-    expect(colors.voiceCursor).toBe("#e5c07b");
-  });
-
   it("fits an rgb() palette exactly as it fits the same colours in hex", () => {
     const hex = resolveInputBarColors({ background: "#1e1e2e", foreground: "#cdd6f4" });
     const rgb = resolveInputBarColors({
@@ -1698,18 +1683,25 @@ describe("buildInputBarTheme", () => {
     expect(invalidRule).toContain(`color: ${colors.errorColor}`);
   });
 
-  it("includes voice-active cursor CSS rules scoped to [data-voice-active]", () => {
+  it("draws the dictation caret dotted until the mic hears, then solid and level-driven", () => {
     const css = readGeneratedCss([buildInputBarTheme(theme)]);
     const colors = resolveInputBarColors(theme);
+    const base = parseDeclarations(extractRuleBody(css, ".cm-voice-caret"));
+    expect(base["border-left"]).toBe(`2px dotted ${colors.voiceSignal}`);
+    // Zero advance: the margins take back the border, so no text moves.
+    expect(
+      parseFloat(base.width!) +
+        2 +
+        parseFloat(base["margin-left"]!) +
+        parseFloat(base["margin-right"]!)
+    ).toBe(0);
+    const phase = (name: string) =>
+      parseDeclarations(extractRuleBody(css, `.cm-voice-caret[data-phase="${name}"]`));
+    expect(phase("live")["border-left-style"]).toBe("solid");
+    expect(phase("live").opacity).toContain(`var(${VOICE_CARET_LEVEL_PROPERTY}, 1)`);
+    expect(phase("held")["border-left-color"]).toBe(colors.voiceHeld.toLowerCase());
     expect(css).toMatch(
-      new RegExp(
-        `\\[data-voice-active="true"\\]\\s+\\.\\S+\\s+\\.cm-content\\s*\\{[^}]*caret-color:\\s*${colors.voiceCursor.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`
-      )
-    );
-    expect(css).toMatch(
-      new RegExp(
-        `\\[data-voice-active="true"\\]\\s+\\.\\S+\\.cm-focused\\s+\\.cm-cursor\\s*\\{[^}]*border-left:\\s*2px solid ${colors.voiceCursor.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`
-      )
+      /@media \(forced-colors: active\)\s*\{[^@]*\.cm-voice-caret\[data-phase="live"\]\s*\{[^}]*border-left-color:\s*Highlight/
     );
   });
 

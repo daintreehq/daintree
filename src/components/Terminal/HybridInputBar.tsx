@@ -729,6 +729,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     })();
     const placeholder = (() => {
       if (voiceSessionStatus) return voiceSessionStatus;
+      // Said only where the placeholder shows: a draft keeps its border clear.
+      if (isVoiceListeningChrome) return "Listening…";
       const agentName = agentId ? getAgentConfig(agentId)?.name : null;
       return agentName ? `Ask ${agentName}` : "Ask anything";
     })();
