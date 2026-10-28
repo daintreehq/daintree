@@ -6,6 +6,7 @@ import { insertNewline } from "@codemirror/commands";
 import type { ITheme } from "@xterm/xterm";
 import { resolveInputBarColors } from "@/utils/terminalTheme";
 import {
+  DURATION_100,
   UI_ANIMATION_DURATION,
   UI_PALETTE_ENTER_DURATION,
   EASE_OUT_EXPO,
@@ -318,9 +319,12 @@ export function buildInputBarTheme(theme: ITheme): Extension {
       '.cm-voice-caret[data-phase="held"]': {
         borderLeftColor: c.voiceHeld,
       },
+      // The level comes in raw, about once a frame; the transition is what
+      // smooths it, so the caret breathes with the voice rather than flickers.
       '.cm-voice-caret[data-phase="live"]': {
         borderLeftStyle: "solid",
         opacity: `calc(0.55 + 0.45 * var(${VOICE_CARET_LEVEL_PROPERTY}, 1))`,
+        transition: `opacity ${DURATION_100}ms linear`,
       },
       "&[data-voice-caret-covers] .cm-cursorLayer": {
         visibility: "hidden",

@@ -252,3 +252,40 @@ describe("HybridInputBar after a spoken scratch mid-draft (#14636)", () => {
     expect(useTerminalInputStore.getState().getDraftInput("term-1")).toBe("Intro. One. Outro.");
   });
 });
+
+describe("HybridInputBar dictation caret", () => {
+  afterEach(() => {
+    act(() => useVoiceRecordingStore.getState().finishSession());
+  });
+
+  it("marks where a dictation started away from the composer will write, and says when it hears", async () => {
+    const { view } = await mount();
+    expect(view.hasFocus).toBe(false);
+    const placeholder = () => view.contentDOM.querySelector(".cm-placeholder")?.textContent;
+    const caretPhase = () =>
+      view.contentDOM.querySelector<HTMLElement>(".cm-voice-caret")?.dataset.phase ?? null;
+    const seen: [string | null | undefined, string | null][] = [];
+    const record = () => seen.push([placeholder(), caretPhase()]);
+
+    record();
+    await act(async () => {
+      useVoiceRecordingStore.getState().beginSession({ panelId: "term-1" }, "s1");
+      useVoiceRecordingStore.getState().setStatus("recording");
+    });
+    record();
+    await act(async () => useVoiceRecordingStore.getState().setMicSignal("live"));
+    record();
+    await act(async () => useVoiceRecordingStore.getState().setStatus("paused"));
+    record();
+    await act(async () => useVoiceRecordingStore.getState().finishSession());
+    record();
+
+    expect(seen).toEqual([
+      ["Ask Claude", null],
+      ["Starting microphone…", "starting"],
+      ["Listening…", "live"],
+      ["Paused · Resume to continue", "held"],
+      ["Ask Claude", null],
+    ]);
+  });
+});

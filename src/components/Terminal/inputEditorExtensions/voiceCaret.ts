@@ -70,14 +70,14 @@ export function voiceCaretPosition(
   const length = state.doc.length;
   const preview = state.field(interimWidgetField, false);
   if (preview?.text) {
-    return {
-      pos: preview.pos === null ? length : Math.min(preview.pos, length),
-      afterPreview: true,
-    };
+    const pos = preview.pos === null ? length : Math.min(preview.pos, length);
+    return { phase, pos, afterPreview: true };
   }
-  if (typeof at === "number") return { pos: Math.min(at, length), afterPreview: false };
-  if (at === "caret" && caretCounts) return { pos: state.selection.main.from, afterPreview: false };
-  return { pos: length, afterPreview: false };
+  if (typeof at === "number") return { phase, pos: Math.min(at, length), afterPreview: false };
+  if (at === "caret" && caretCounts) {
+    return { phase, pos: state.selection.main.from, afterPreview: false };
+  }
+  return { phase, pos: length, afterPreview: false };
 }
 
 class VoiceCaretWidget extends WidgetType {

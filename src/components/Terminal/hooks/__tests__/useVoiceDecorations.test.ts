@@ -8,10 +8,15 @@ import {
   interimWidgetField,
   pendingAIField,
   revealDictationStart,
+  VOICE_CARET_LEVEL_PROPERTY,
+  voiceCaret,
 } from "../../inputEditorExtensions";
 
 // A streamed cleanup's rewrite through the hook that feeds the editor: drawn
 // over the passage while the editor shows the draft its positions came from.
+
+const motion = vi.hoisted(() => ({ reduced: false }));
+vi.mock("@/lib/appThemeViewTransition", () => ({ prefersReducedMotion: () => motion.reduced }));
 
 vi.mock("@/store", async () => {
   const { useVoiceRecordingStore } = await import("@/store/voiceRecordingStore");
@@ -38,6 +43,7 @@ function mount(doc: string) {
         interimWidgetField,
         pendingAIField,
         dictationFollowField,
+        voiceCaret,
         EditorView.updateListener.of((update) => {
           for (const tr of update.transactions) {
             for (const effect of tr.effects) {
@@ -231,5 +237,110 @@ describe("useVoiceDecorations", () => {
     });
     expect(reveals).toEqual([3]);
     view.destroy();
+  });
+
+  describe("dictation caret", () => {
+    const caret = (view: EditorView) =>
+      view.contentDOM.querySelector<HTMLElement>(".cm-voice-caret");
+    const level = (view: EditorView) => view.dom.style.getPropertyValue(VOICE_CARET_LEVEL_PROPERTY);
+
+    it("tracks the mic from pending through silent, live, paused and finishing", () => {
+      useTerminalInputStore.getState().setDraftInput(PANEL, DICTATED);
+      const view = mount(DICTATED);
+      const phases: (string | null)[] = [];
+      const seen = () => phases.push(caret(view)?.dataset.phase ?? null);
+
+      seen();
+      startDictation();
+      seen();
+      act(() => useVoiceRecordingStore.getState().setMicSignal("silent"));
+      seen();
+      act(() => useVoiceRecordingStore.getState().setMicSignal("live"));
+      seen();
+      act(() => useVoiceRecordingStore.getState().setStatus("paused"));
+      seen();
+      act(() => useVoiceRecordingStore.getState().setStatus("recording"));
+      seen();
+      act(() => useVoiceRecordingStore.getState().setStatus("finishing"));
+      seen();
+      act(() => useVoiceRecordingStore.getState().finishSession());
+      seen();
+
+      expect(phases).toEqual([null, "starting", "starting", "live", "held", "live", "held", null]);
+      view.destroy();
+    });
+
+    it("shows where the words go in a composer that never had focus", () => {
+      useTerminalInputStore.getState().setDraftInput(PANEL, DICTATED);
+      const view = mount(DICTATED);
+      expect(view.hasFocus).toBe(false);
+
+      startDictation();
+
+      // Never focused, so its caret at 0 isn't the user's: the words append.
+      const el = caret(view);
+      expect(el).not.toBeNull();
+      expect(view.posAtDOM(el!)).toBe(DICTATED.length);
+      view.destroy();
+    });
+
+    it("stays on the session's anchor once its words have one", () => {
+      useTerminalInputStore.getState().setDraftInput(PANEL, DICTATED);
+      const anchor = { from: 6, to: 6, edited: false };
+      useDictationRangeStore.setState({ getAnchor: () => anchor });
+      const view = mount(DICTATED);
+
+      startDictation();
+
+      expect(view.posAtDOM(caret(view)!)).toBe(6);
+      view.destroy();
+    });
+
+    it("draws none for a session writing to another composer", () => {
+      useTerminalInputStore.getState().setDraftInput(PANEL, DICTATED);
+      const view = mount(DICTATED);
+      startDictation("panel-2");
+      expect(caret(view)).toBeNull();
+      view.destroy();
+    });
+
+    it("follows the voice level, kept to 0-1, only while live and without a transaction per level", () => {
+      useTerminalInputStore.getState().setDraftInput(PANEL, DICTATED);
+      const view = mount(DICTATED);
+      const dispatch = vi.spyOn(view, "dispatch");
+      startDictation();
+      act(() => useVoiceRecordingStore.getState().setAudioLevel(1));
+      expect(level(view)).toBe("");
+
+      useVoiceRecordingStore.getState().setAudioLevel(0);
+      act(() => useVoiceRecordingStore.getState().setMicSignal("live"));
+      const before = dispatch.mock.calls.length;
+      const readings: number[] = [];
+      for (const reading of [0.4, 1.6, -0.2]) {
+        useVoiceRecordingStore.getState().setAudioLevel(reading);
+        readings.push(Number(level(view)));
+      }
+      expect(dispatch.mock.calls.length).toBe(before);
+      expect(readings).toEqual([0.4, 1, 0]);
+
+      act(() => useVoiceRecordingStore.getState().setStatus("paused"));
+      expect(level(view)).toBe("");
+      view.destroy();
+    });
+
+    it("holds the live caret at full under reduced motion", () => {
+      useTerminalInputStore.getState().setDraftInput(PANEL, DICTATED);
+      const view = mount(DICTATED);
+      motion.reduced = true;
+      try {
+        startDictation();
+        act(() => useVoiceRecordingStore.getState().setMicSignal("live"));
+        useVoiceRecordingStore.getState().setAudioLevel(0);
+        expect(Number(level(view))).toBe(1);
+      } finally {
+        motion.reduced = false;
+        view.destroy();
+      }
+    });
   });
 });

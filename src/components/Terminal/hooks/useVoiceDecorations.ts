@@ -23,8 +23,6 @@ import {
 
 const NO_RANGES: VoiceCorrectionRange[] = [];
 const NOT_DICTATING = { session: null };
-// Per level update (about one a frame): about a third of the way to each new reading.
-const LEVEL_SMOOTHING = 0.35;
 
 interface UseVoiceDecorationsParams {
   terminalId: string;
@@ -165,22 +163,17 @@ export function useVoiceDecorations({ terminalId, editorViewRef }: UseVoiceDecor
 
   // The live caret's opacity follows the voice. Level arrives at frame rate,
   // so it is written straight to the editor, never through React or a
-  // transaction, and smoothed so the caret doesn't flicker with every frame.
-  // Reduced motion holds it at full, read per update so flipping the
-  // preference mid-dictation takes effect at once.
+  // transaction. Reduced motion holds it at full, read per update so flipping
+  // the preference mid-dictation takes effect at once.
   useEffect(() => {
     const view = editorViewRef.current;
     if (!view || caretPhase !== "live") return;
     const dom = view.dom;
-    let smooth = useVoiceRecordingStore.getState().audioLevel;
     const write = (level: number) => {
-      smooth += (Math.min(1, Math.max(0, level)) - smooth) * LEVEL_SMOOTHING;
-      dom.style.setProperty(
-        VOICE_CARET_LEVEL_PROPERTY,
-        prefersReducedMotion() ? "1" : smooth.toFixed(3)
-      );
+      const shown = prefersReducedMotion() ? 1 : Math.min(1, Math.max(0, level));
+      dom.style.setProperty(VOICE_CARET_LEVEL_PROPERTY, shown.toFixed(3));
     };
-    write(smooth);
+    write(useVoiceRecordingStore.getState().audioLevel);
     const unsubscribe = useVoiceRecordingStore.subscribe((state, prev) => {
       if (state.audioLevel !== prev.audioLevel) write(state.audioLevel);
     });
