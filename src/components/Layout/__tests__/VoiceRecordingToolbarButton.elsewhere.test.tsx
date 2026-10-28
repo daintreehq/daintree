@@ -250,7 +250,8 @@ describe("VoiceRecordingToolbarButton — the session panel in a view that doesn
     act(() => {
       vi.advanceTimersByTime(10_000);
     });
-    expect(byTestId("voice-session-elapsed")!.textContent).toContain("0:40 · 0:05 paused");
+    expect(byTestId("voice-session-elapsed")!.textContent).toBe("0:40");
+    expect(byTestId("voice-session-detail")?.textContent ?? "").not.toContain("Paused");
 
     showElsewhere(pairings[1]!, paused(true));
     view.rerender(<VoiceRecordingToolbarButton />);
@@ -258,7 +259,8 @@ describe("VoiceRecordingToolbarButton — the session panel in a view that doesn
       vi.advanceTimersByTime(10_000);
     });
     // Ten seconds on from the reading, since it was made at NOW.
-    expect(byTestId("voice-session-elapsed")!.textContent).toContain("0:50 · 0:25 paused");
+    expect(byTestId("voice-session-elapsed")!.textContent).toBe("0:50");
+    expect(byTestId("voice-session-detail")!.textContent).toContain("Paused 0:25");
   });
 
   it("names the host a reply's words go to, and no project where the owner shows none", () => {
@@ -269,10 +271,8 @@ describe("VoiceRecordingToolbarButton — the session panel in a view that doesn
     render(<VoiceRecordingToolbarButton />);
     openPanel();
 
-    const text = panel()!.textContent ?? "";
-    expect(/Host(.*?)(?:Project|Worktree)/.exec(text)?.[1]).toBe("Annex");
     // The owning workspace is Alpha, but the owner's panel names no project for a reply.
-    expect(text).not.toContain("Project");
+    expect(byTestId("voice-session-place")!.textContent).toBe("Annex · feature/voice");
   });
 
   it("names no provider once the owner's panel names none", () => {
@@ -299,18 +299,18 @@ describe("VoiceRecordingToolbarButton — the session panel in a view that doesn
     );
     render(<VoiceRecordingToolbarButton />);
     openPanel();
-    expect(byTestId("voice-session-auto-stop")!.textContent).toContain("0:50");
+    expect(byTestId("voice-session-detail")!.textContent).toContain("Stops in 0:50 unless resumed");
 
     act(() => {
       vi.advanceTimersByTime(20_000);
     });
-    expect(byTestId("voice-session-auto-stop")!.textContent).toContain("0:30");
+    expect(byTestId("voice-session-detail")!.textContent).toContain("Stops in 0:30 unless resumed");
 
     // A countdown that has run out reads zero, never below it.
     act(() => {
       vi.advanceTimersByTime(60_000);
     });
-    expect(byTestId("voice-session-auto-stop")!.textContent).toContain("0:00");
+    expect(byTestId("voice-session-detail")!.textContent).toContain("Stops in 0:00 unless resumed");
   });
 
   it("offers no pause while the owner's session is finishing", () => {
