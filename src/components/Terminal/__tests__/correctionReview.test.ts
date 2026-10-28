@@ -258,13 +258,19 @@ describe("correction review", () => {
     land(view, review);
     const copy = " " + CORRECTED;
     view.dispatch(
-      outsideDraftWrite({ from: view.state.doc.length, insert: copy }, "", null, { anchor: 0 })
+      outsideDraftWrite({ from: view.state.doc.length, insert: copy }, "", null, {
+        selection: { anchor: 0 },
+      })
     );
     expect(reviewing(view)).toBe(true);
 
     // A scratch of the dictated copy, which a diff reads as removing the second.
     const end = view.state.doc.length;
-    view.dispatch(outsideDraftWrite({ from: end - copy.length, to: end }, "", null, { anchor: 0 }));
+    view.dispatch(
+      outsideDraftWrite({ from: end - copy.length, to: end }, "", null, {
+        selection: { anchor: 0 },
+      })
+    );
     expect(marked(view)).toEqual([]);
     expect(reviewing(view)).toBe(false);
   });
@@ -381,13 +387,9 @@ describe("correction review", () => {
     const view = mount(INTRO + RAW);
     const after = INTRO + CORRECTED;
     view.dispatch(
-      outsideDraftWrite(
-        minimalDocChange(view.state.doc.toString(), after)!,
-        after,
-        review,
-        undefined,
-        false
-      )
+      outsideDraftWrite(minimalDocChange(view.state.doc.toString(), after)!, after, review, {
+        reviewed: false,
+      })
     );
 
     expect(view.state.doc.toString()).toBe(after);

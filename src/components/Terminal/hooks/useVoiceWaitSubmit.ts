@@ -388,7 +388,9 @@ export function useVoiceWaitSubmit({
                 change,
                 pending
               );
-              finalView.dispatch(outsideDraftWrite(change, draft, landed, selection, reviewed));
+              finalView.dispatch(
+                outsideDraftWrite(change, draft, landed, { selection, reviewed, keepsCaret: true })
+              );
             } else {
               if (landed) replayLandedCorrection(finalView, landed, reviewed);
               if (pending)

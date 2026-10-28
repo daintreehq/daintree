@@ -1052,11 +1052,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         isApplyingExternalValueRef.current = true;
         // Only writes that keep the caret since this last ran (dictation,
         // its correction and file links) leave it to the user.
-        const selection =
-          inputState.caretMovingDraftRevision > appliedBefore
-            ? undefined
-            : selectionAfterOutsideWrite(view.state, view.hasFocus, change, pendingSelection);
-        view.dispatch(outsideDraftWrite(change, draft, landed, selection, reviewed));
+        const keepsCaret = inputState.caretMovingDraftRevision <= appliedBefore;
+        const selection = keepsCaret
+          ? selectionAfterOutsideWrite(view.state, view.hasFocus, change, pendingSelection)
+          : undefined;
+        view.dispatch(
+          outsideDraftWrite(change, draft, landed, { selection, reviewed, keepsCaret })
+        );
         // Emptied from outside (sent or cleared elsewhere): nothing to undo into.
         // A spoken "scratch that" or a cancelled dictation that empties it is
         // an edit, so undo brings the words back.

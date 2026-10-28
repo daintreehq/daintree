@@ -17,6 +17,12 @@ export {
 } from "./base";
 export { minimalDocChange } from "@/lib/textRangeMapping";
 export { createCaretTracker } from "./caretTracker";
+export {
+  dictationFollow,
+  dictationFollowField,
+  revealDictationStart,
+  setDictationFollow,
+} from "./dictationFollow";
 export type { AutoSizeConfig, ComboboxAttributes, InterimPreview } from "./base";
 
 export {
