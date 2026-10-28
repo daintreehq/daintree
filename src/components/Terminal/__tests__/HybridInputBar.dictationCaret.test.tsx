@@ -202,6 +202,21 @@ describe("HybridInputBar caret through outside writes", () => {
   });
 });
 
+describe("HybridInputBar scrolling on outside writes (#14928)", () => {
+  it("leaves dictation's writes to its follower, and scrolls to the caret for any other", async () => {
+    const { view } = await mount();
+    await write("hello");
+    const dispatch = vi.spyOn(view, "dispatch");
+    const scrolls = () =>
+      dispatch.mock.calls.flatMap(([spec]) => (spec?.changes ? [spec.scrollIntoView] : []));
+
+    await write("hello dictated", { keepsSelection: true });
+    await write("hello dictated there");
+
+    expect(scrolls()).toEqual([false, true]);
+  });
+});
+
 describe("HybridInputBar after a spoken scratch mid-draft (#14636)", () => {
   it("puts the caret where the words were, and undo brings them back", async () => {
     const { view } = await mount();

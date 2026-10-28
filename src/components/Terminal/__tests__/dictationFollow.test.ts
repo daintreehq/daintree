@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EditorState } from "@codemirror/state";
-import { EditorView, type MeasureRequest } from "@codemirror/view";
+import { EditorView } from "@codemirror/view";
 import {
   dictationFollow,
   interimWidgetField,
@@ -22,7 +22,8 @@ let contentPx = 0;
 let previewEndPx = 0;
 let scrollTop = 0;
 let writes: number[] = [];
-let queue: MeasureRequest<unknown>[] = [];
+type Request = NonNullable<Parameters<EditorView["requestMeasure"]>[0]>;
+let queue: Request[] = [];
 
 const lineBottom = (pos: number) => (Math.floor(pos / 10) + 1) * LINE_PX;
 const rect = (bottom: number) => ({
@@ -46,16 +47,17 @@ function mount(doc = DRAFT) {
       writes.push(scrollTop);
     },
   });
-  vi.spyOn(view, "coordsAtPos").mockImplementation((pos) => {
-    const bottom = lineBottom(pos);
+  // The side picks the character before or after the position.
+  vi.spyOn(view, "coordsAtPos").mockImplementation((pos, side = 1) => {
+    const bottom = lineBottom(side < 0 && pos > 0 ? pos - 1 : pos);
     return { left: 0, right: 0, ...rect(bottom) };
   });
-  view.requestMeasure = <T>(request?: MeasureRequest<T>) => {
+  vi.spyOn(view, "requestMeasure").mockImplementation((request) => {
     if (!request) return;
     const at = queue.findIndex((queued) => request.key != null && queued.key === request.key);
-    if (at >= 0) queue[at] = request as MeasureRequest<unknown>;
-    else queue.push(request as MeasureRequest<unknown>);
-  };
+    if (at >= 0) queue[at] = request;
+    else queue.push(request);
+  });
   return view;
 }
 
@@ -70,6 +72,12 @@ function flush(view: EditorView) {
 }
 
 function userScroll(view: EditorView, top: number) {
+  view.scrollDOM.dispatchEvent(new Event("wheel"));
+  layoutScroll(view, top);
+}
+
+/** The scroller moved without the person: clamped, kept in place, or reparented. */
+function layoutScroll(view: EditorView, top: number) {
   scrollTop = Math.min(Math.max(0, top), Math.max(0, contentPx - VIEW_PX));
   view.scrollDOM.dispatchEvent(new Event("scroll"));
 }
@@ -93,16 +101,17 @@ beforeEach(() => {
   scrollTop = 0;
   writes = [];
   queue = [];
-  vi.spyOn(HTMLElement.prototype, "getClientRects").mockImplementation(function (
-    this: HTMLElement
-  ) {
-    if (!this.classList.contains("cm-voice-interim")) return [] as unknown as DOMRectList;
-    return [rect(previewEndPx)] as unknown as DOMRectList;
+  Object.defineProperty(HTMLElement.prototype, "getClientRects", {
+    configurable: true,
+    value(this: HTMLElement) {
+      return this.classList.contains("cm-voice-interim") ? [rect(previewEndPx)] : [];
+    },
   });
 });
 
 afterEach(() => {
   document.body.innerHTML = "";
+  delete (HTMLElement.prototype as Partial<HTMLElement>).getClientRects;
   vi.restoreAllMocks();
 });
 
@@ -142,7 +151,7 @@ describe("dictationFollow", () => {
     view.dispatch({
       changes: { from: DRAFT.length, insert: words },
       effects: [
-        setDictationFollow.of({ session: "s1", end: DRAFT.length + words.length - 1 }),
+        setDictationFollow.of({ session: "s1", end: DRAFT.length + words.length }),
         setInterimText.of(""),
       ],
     });
@@ -184,6 +193,53 @@ describe("dictationFollow", () => {
     view.destroy();
   });
 
+  it("keeps following when the scroller moves without the person", () => {
+    const view = mount();
+    hear(view, "so the first", 420);
+
+    // Shorter content pulling it back, or the editor moving into the expanded view.
+    layoutScroll(view, 0);
+    hear(view, "so the first thing", 440);
+
+    expect(previewInView()).toBe(true);
+    view.destroy();
+  });
+
+  it("doesn't read its own scroll as the person's, however late it arrives", () => {
+    const view = mount();
+    hear(view, "so the first", 420);
+    view.scrollDOM.dispatchEvent(new Event("wheel"));
+
+    // More words arrive before the event for the follower's last scroll does.
+    previewEndPx = 440;
+    contentPx = 440 + PAD_PX;
+    view.dispatch({ effects: setInterimText.of("so the first thing") });
+    view.scrollDOM.dispatchEvent(new Event("scroll"));
+    flush(view);
+
+    expect(previewInView()).toBe(true);
+    view.destroy();
+  });
+
+  it("brings the words a stop writes into view", () => {
+    const view = mount();
+    view.dispatch({ effects: setDictationFollow.of({ session: "s1", end: DRAFT.length }) });
+    flush(view);
+    writes = [];
+
+    // The stop writes the last words and ends the session in the same pass.
+    const words = "x".repeat(40);
+    contentPx = lineBottom(DRAFT.length + words.length - 1) + PAD_PX;
+    view.dispatch({
+      changes: { from: DRAFT.length, insert: words },
+      effects: setDictationFollow.of({ session: null }),
+    });
+    flush(view);
+
+    expect(scrollTop).toBe(lineBottom(DRAFT.length + words.length - 1) + 5 - VIEW_PX);
+    view.destroy();
+  });
+
   it("follows again from the start of the next dictation", () => {
     const view = mount();
     hear(view, "so the first", 420);
@@ -216,7 +272,7 @@ describe("dictationFollow", () => {
     flush(view);
     expect(writes).toEqual([lineBottom(150) - LINE_PX - 5]);
 
-    // The cleanup streaming in, and landing shorter, moves nothing.
+    // The cleanup streaming in, and landing shorter, scrolls nothing of its own.
     contentPx = 300;
     view.dispatch({ changes: { from: 150, to: 200, insert: "So the first." } });
     flush(view);
