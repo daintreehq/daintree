@@ -1,29 +1,17 @@
 import {
   VOICE_SNAPSHOT_TRANSCRIPT_MAX_LENGTH,
-  type VoiceInputStatus,
   type VoicePublishDetailsRequest,
-  type VoiceSessionClockAnchor,
-  type VoiceSessionKind,
-  type VoiceSessionPhase,
   type VoiceSessionSnapshot,
 } from "@shared/types";
 import type { HostId } from "@shared/types/remoteHosts";
-import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
+import type { PanelInstance } from "@shared/types/panel";
 import { VOICE_WORKSPACE_NAME_MAX_LENGTH } from "@shared/types/voice";
-import { joinCompletedSegments } from "@/lib/voiceTranscriptSegments";
-import { deriveTerminalChrome } from "@/utils/terminalChrome";
-import { isCanopyReplyTarget } from "@/services/canopyReplyDictation";
+import type { VoiceSessionClock } from "@/services/VoiceRecordingService";
+import { buildOwnVoiceSessionDetails } from "@/services/ownVoiceSessionDetails";
 import { usePanelStore } from "@/store/panelStore";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 
 type VoiceRecordingSnapshot = ReturnType<typeof useVoiceRecordingStore.getState>;
-
-/** The owner's clock as the service reads it (`getSessionClock`). */
-export interface VoiceOwnerClock {
-  elapsedMs: number;
-  pausedMs: number;
-  autoStop: VoiceSessionClockAnchor["autoStop"];
-}
 
 /**
  * Coalesces the owner's reports: a burst of transcript words or a status change
@@ -32,102 +20,71 @@ export interface VoiceOwnerClock {
  */
 export const VOICE_DETAILS_PUBLISH_MS = 200;
 
-const PANEL_PHASES: ReadonlySet<VoiceInputStatus> = new Set<VoiceSessionPhase>([
-  "arming",
-  "connecting",
-  "recording",
-  "paused",
-  "reconnecting",
-  "finishing",
-]);
-
-function isPanelPhase(status: VoiceInputStatus): status is VoiceSessionPhase {
-  return PANEL_PHASES.has(status);
-}
-
 function clip(label: string | null | undefined): string | null {
   const trimmed = label?.trim();
   if (!trimmed) return null;
   return trimmed.slice(0, VOICE_WORKSPACE_NAME_MAX_LENGTH);
 }
 
-function countWords(text: string): number {
-  const words = text.trim();
-  return words ? words.split(/\s+/).length : 0;
-}
-
 /**
  * What the owner's control panel shows of its live session, for main to pass
- * on to every other view (#14921). Null when this view has no session a panel
- * would show.
+ * on to every other view (#14921): the owner's own panel details, with the
+ * clock as an anchor a view runs on and the host as an id each view names for
+ * itself. Null when this view has no session a panel would show.
  */
 export function buildVoiceSessionSnapshot(
   state: VoiceRecordingSnapshot,
   options: {
     panel: PanelInstance | undefined;
-    clock: VoiceOwnerClock | null;
+    clock: VoiceSessionClock | null;
     hostId: HostId;
     now: number;
   }
 ): VoiceSessionSnapshot | null {
   const target = state.activeTarget;
-  const phase = state.status;
-  if (!target || !isPanelPhase(phase)) return null;
-  const isCanopyReply = isCanopyReplyTarget(target);
-  const panel = options.panel && !isCanopyReply && isPtyPanel(options.panel) ? options.panel : null;
-  const kind: VoiceSessionKind = isCanopyReply
-    ? "canopy-reply"
-    : target.rewrite
-      ? "rewrite"
-      : "dictation";
-  const buffer = state.panelBuffers[target.panelId];
-  const transcript = [joinCompletedSegments(buffer?.completedSegments ?? []), buffer?.liveText]
-    .filter(Boolean)
-    .join(" ");
-  const notice = state.micNotice;
-  const { clock } = options;
+  if (!target) return null;
+  const details = buildOwnVoiceSessionDetails({
+    status: state.status,
+    target,
+    lockedPanelId: state.lockedTarget?.panelId ?? null,
+    micSignal: state.micSignal,
+    micDeviceLabel: state.micDeviceLabel,
+    micNotice: state.micNotice,
+    correctionEnabled: state.correctionEnabled,
+    buffer: state.panelBuffers[target.panelId],
+    panel: options.panel,
+    // The host goes as an id, so the owner's name for it doesn't matter.
+    hosts: [],
+    clock: options.clock,
+  });
+  if (!details) return null;
+  const { phase, elapsedMs } = details;
   return {
     phase,
-    kind,
-    targetTitle:
-      clip(panel?.title) ??
-      clip(target.panelTitle) ??
-      (isCanopyReply ? "Canopy reply" : "Terminal"),
-    targetChrome: panel
-      ? deriveTerminalChrome({
-          kind: panel.kind,
-          launchAgentId: panel.launchAgentId,
-          runtimeIdentity: panel.runtimeIdentity,
-          detectedAgentId: panel.detectedAgentId,
-          detectedProcessId: panel.detectedProcessId,
-          agentState: panel.agentState,
-          runtimeStatus: panel.runtimeStatus,
-          exitCode: panel.exitCode,
-        })
-      : null,
+    kind: details.kind,
+    targetTitle: clip(details.targetTitle) ?? details.targetTitle,
+    targetChrome: details.targetChrome,
     targetHostId: target.otherHostId ?? options.hostId,
-    projectName: clip(target.projectName),
-    worktreeLabel: clip(target.worktreeLabel),
-    micLabel: clip(state.micDeviceLabel),
-    micSignal: state.micSignal,
-    micNotice:
-      notice && notice.target.panelId === target.panelId
-        ? { kind: notice.kind, bluetooth: notice.kind === "silent" && notice.bluetooth }
-        : null,
+    projectName: clip(details.projectName),
+    worktreeLabel: clip(details.worktreeLabel),
+    micLabel: clip(details.micLabel),
+    micSignal: details.micSignal,
+    micNotice: details.micNotice,
     stopWarning: phase === "paused" ? state.pauseStopWarning : state.idleStopWarning,
-    correctionEnabled: state.correctionEnabled,
-    locked: state.lockedTarget?.panelId === target.panelId,
-    wordCount: countWords(transcript),
-    transcript: transcript.slice(-VOICE_SNAPSHOT_TRANSCRIPT_MAX_LENGTH),
-    clock: clock
-      ? {
-          at: options.now,
-          elapsedMs: clock.elapsedMs,
-          pausedMs: clock.pausedMs,
-          paused: phase === "paused",
-          autoStop: clock.autoStop,
-        }
-      : null,
+    correctionEnabled: details.correctionEnabled,
+    locked: details.locked,
+    wordCount: details.wordCount,
+    transcript: details.transcript.slice(-VOICE_SNAPSHOT_TRANSCRIPT_MAX_LENGTH),
+    clock:
+      elapsedMs === null
+        ? null
+        : {
+            at: options.now,
+            elapsedMs,
+            pausedMs: details.pausedMs,
+            paused: phase === "paused",
+            autoStop: details.autoStop,
+          },
   };
 }
 
@@ -158,7 +115,7 @@ export interface VoiceDetailsSource {
   /** The session this view owns now, or null. */
   sessionId(): string | null;
   /** The owner's session clock at `now`, or null once it is stopping. */
-  clock(now: number): VoiceOwnerClock | null;
+  clock(now: number): VoiceSessionClock | null;
   /** The host this view is on. */
   hostId(): HostId;
 }

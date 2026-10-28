@@ -28,12 +28,13 @@ export function elsewherePanelDetails(
     targetTitle: snapshot.targetTitle,
     targetChrome: snapshot.targetChrome,
     hostName: sessionHostName(snapshot.targetHostId ?? session.hostId, hosts),
-    projectName: snapshot.projectName ?? session.projectName,
+    projectName: snapshot.projectName,
     worktreeLabel: snapshot.worktreeLabel,
     micLabel: snapshot.micLabel,
     micSignal: snapshot.micSignal,
     micNotice: snapshot.micNotice,
-    providerName: session.provider ? transcriptionProviderName(session.provider) : null,
+    // The owner names its provider from its clock, so not once it is stopping.
+    providerName: clock && session.provider ? transcriptionProviderName(session.provider) : null,
     elapsedMs: clock ? clock.elapsedMs + since : null,
     pausedMs: clock ? clock.pausedMs + (clock.paused ? since : 0) : 0,
     autoStop: clock?.autoStop

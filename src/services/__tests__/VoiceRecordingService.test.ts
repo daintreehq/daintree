@@ -3346,11 +3346,19 @@ describe("VoiceRecordingService — a session another view owns (#14601)", () =>
       const requested = electron.voiceInput.onPauseRequested.mock.calls[0]![0];
 
       requested({ sessionId: "mine", paused: true });
-      requested({ sessionId: "mine", paused: false });
-      requested({ sessionId: "other", paused: true });
-
       expect(pause).toHaveBeenCalledTimes(1);
+      expect(resume).not.toHaveBeenCalled();
+
+      pause.mockClear();
+      requested({ sessionId: "mine", paused: false });
       expect(resume).toHaveBeenCalledTimes(1);
+      expect(pause).not.toHaveBeenCalled();
+
+      resume.mockClear();
+      requested({ sessionId: "other", paused: true });
+      requested({ sessionId: "other", paused: false });
+      expect(pause).not.toHaveBeenCalled();
+      expect(resume).not.toHaveBeenCalled();
       Reflect.set(voiceRecordingService, "sessionId", null);
     });
 

@@ -261,7 +261,7 @@ describe("VoiceRecordingToolbarButton — the session panel in a view that doesn
     expect(byTestId("voice-session-elapsed")!.textContent).toContain("0:50 · 0:25 paused");
   });
 
-  it("names the host a reply's words go to, and the session's project when the owner has none", () => {
+  it("names the host a reply's words go to, and no project where the owner shows none", () => {
     showElsewhere(
       pairings[1]!,
       snapshot({ kind: "canopy-reply", targetHostId: "studio-02", projectName: null })
@@ -270,10 +270,17 @@ describe("VoiceRecordingToolbarButton — the session panel in a view that doesn
     openPanel();
 
     const text = panel()!.textContent ?? "";
-    const host = /Host(.*?)Project/.exec(text)?.[1];
-    expect(host).toBe("Annex");
-    // The owning workspace's name, as main reported it.
-    expect(text).toContain("Alpha");
+    expect(/Host(.*?)(?:Project|Worktree)/.exec(text)?.[1]).toBe("Annex");
+    // The owning workspace is Alpha, but the owner's panel names no project for a reply.
+    expect(text).not.toContain("Project");
+  });
+
+  it("drops the provider once the owner's session is stopping, as the owner does", () => {
+    showElsewhere(pairings[1]!, snapshot({ phase: "finishing", clock: null }));
+    render(<VoiceRecordingToolbarButton />);
+    openPanel();
+
+    expect(panel()!.textContent).not.toContain("Deepgram");
   });
 
   it("counts an auto-stop down from the owner's reading", () => {

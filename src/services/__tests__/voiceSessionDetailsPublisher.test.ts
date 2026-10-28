@@ -5,14 +5,19 @@ import { usePanelStore } from "@/store/panelStore";
 import { VOICE_PARAGRAPH_BREAK } from "@/lib/voiceTranscriptSegments";
 import type { VoiceRewriteRequest } from "@/store/voiceRecordingStore";
 import type { PanelInstance } from "@shared/types/panel";
+import type { VoiceSessionClock } from "@/services/VoiceRecordingService";
 import {
   buildVoiceSessionSnapshot,
   startVoiceDetailsPublisher,
   VOICE_DETAILS_PUBLISH_MS,
-  type VoiceOwnerClock,
 } from "../voiceSessionDetailsPublisher";
 
-const running: VoiceOwnerClock = { elapsedMs: 4_200, pausedMs: 0, autoStop: null };
+const running: VoiceSessionClock = {
+  provider: "openai",
+  elapsedMs: 4_200,
+  pausedMs: 0,
+  autoStop: null,
+};
 
 function recordInto(panelId = "p-1", overrides: Record<string, unknown> = {}) {
   useVoiceRecordingStore.setState({
@@ -229,6 +234,7 @@ describe("startVoiceDetailsPublisher", () => {
         sessionId: () => sessionId,
         // A clock that runs from `startedAt`, as the service's does.
         clock: (now) => ({
+          provider: "openai",
           elapsedMs: now - startedAt,
           pausedMs: 0,
           autoStop: autoStopAt === null ? null : { reason: "idle", remainingMs: autoStopAt - now },
