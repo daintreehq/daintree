@@ -200,6 +200,9 @@ describe("useVoiceDecorations", () => {
   it("leaves a dictation into another composer alone", () => {
     useTerminalInputStore.getState().setDraftInput(PANEL, DICTATED);
     const view = mount(DICTATED);
+    // This composer still holds the session it last took words from.
+    startDictation();
+    act(() => useVoiceRecordingStore.getState().finishSession());
 
     startDictation("panel-2");
 

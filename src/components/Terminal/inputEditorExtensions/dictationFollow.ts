@@ -49,7 +49,8 @@ export const dictationFollowField = StateField.define<DictationFollow>({
 const MARGIN_PX = 5;
 // How long after a wheel, touch or key a scroll still counts as the person's.
 const INTENT_MS = 300;
-const INTENT_EVENTS = ["wheel", "touchmove", "keydown"] as const;
+const INTENT_EVENTS = ["wheel", "touchmove", "touchend"] as const;
+const SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End"]);
 
 interface Box {
   top: number;
@@ -117,6 +118,7 @@ class DictationFollower {
     for (const type of INTENT_EVENTS) {
       scroller.addEventListener(type, this.onIntent, { passive: true });
     }
+    scroller.addEventListener("keydown", this.onKeyDown);
     scroller.addEventListener("pointerdown", this.onPointerDown);
     scroller.ownerDocument.addEventListener("pointerup", this.onPointerUp, true);
     scroller.ownerDocument.addEventListener("pointercancel", this.onPointerUp, true);
@@ -154,6 +156,7 @@ class DictationFollower {
     const scroller = this.view.scrollDOM;
     scroller.removeEventListener("scroll", this.onScroll);
     for (const type of INTENT_EVENTS) scroller.removeEventListener(type, this.onIntent);
+    scroller.removeEventListener("keydown", this.onKeyDown);
     scroller.removeEventListener("pointerdown", this.onPointerDown);
     scroller.ownerDocument.removeEventListener("pointerup", this.onPointerUp, true);
     scroller.ownerDocument.removeEventListener("pointercancel", this.onPointerUp, true);
@@ -202,6 +205,9 @@ class DictationFollower {
   }
 
   private reveal(from: number) {
+    // The cleanup decides where the passage shows from now: the last words
+    // of the dictation it cleans up aren't followed past it.
+    this.following = false;
     this.settled(this.revealKeys, (view) => {
       if (from > view.state.doc.length) return null;
       const rect = positionRect(view, from, 1);
@@ -223,12 +229,18 @@ class DictationFollower {
     this.lastIntent = performance.now();
   };
 
+  private onKeyDown = (event: KeyboardEvent) => {
+    if (SCROLL_KEYS.has(event.key)) this.onIntent();
+  };
+
   private onPointerDown = (event: PointerEvent) => {
     // A press on the scroller itself, not its text, is on its scrollbar.
     if (event.target === this.view.scrollDOM) this.pointerHeld = true;
   };
 
+  // A quick drag can let go before the scroll it made is reported.
   private onPointerUp = () => {
+    if (this.pointerHeld) this.onIntent();
     this.pointerHeld = false;
   };
 

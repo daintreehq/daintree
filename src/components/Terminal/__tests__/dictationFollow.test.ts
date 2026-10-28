@@ -280,6 +280,47 @@ describe("dictationFollow", () => {
     view.destroy();
   });
 
+  it("doesn't follow the last words past a cleanup that has begun", () => {
+    const view = mount();
+    view.dispatch({ effects: setDictationFollow.of({ session: "s1", end: DRAFT.length }) });
+    flush(view);
+    writes = [];
+
+    // The stop's last words, the session's end and the cleanup in one pass.
+    const words = "x".repeat(40);
+    contentPx = lineBottom(DRAFT.length + words.length - 1) + PAD_PX;
+    view.dispatch({
+      changes: { from: DRAFT.length, insert: words },
+      effects: [setDictationFollow.of({ session: null }), revealDictationStart.of(150)],
+    });
+    flush(view);
+
+    expect(writes).toEqual([lineBottom(150) - LINE_PX - 5]);
+    view.destroy();
+  });
+
+  it("finds a passage start outside the rendered viewport by its line's height", () => {
+    const doc = Array.from({ length: 60 }, (_, i) => `line ${i}`).join("\n");
+    const view = mount(doc);
+    contentPx = 10000;
+    scrollTop = 1500;
+    vi.mocked(view.coordsAtPos).mockReturnValue(null);
+    const start = view.state.doc.line(30).from;
+
+    view.dispatch({ effects: revealDictationStart.of(start) });
+    flush(view);
+
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toBe(
+      1500 +
+        view.documentTop +
+        view.lineBlockAt(start).top -
+        view.scrollDOM.getBoundingClientRect().top -
+        5
+    );
+    view.destroy();
+  });
+
   it("doesn't move to a passage start already in view", () => {
     const view = mount();
     userScroll(view, 100);
