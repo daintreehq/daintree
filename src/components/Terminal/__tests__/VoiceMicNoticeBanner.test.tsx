@@ -80,13 +80,6 @@ describe("VoiceMicNoticeBanner", () => {
     expect(text()).toContain("The microphone disconnected, so dictation stopped");
   });
 
-  it("says which mic is in use instead of the chosen one", () => {
-    renderNotice({ kind: "fallback", target: TARGET, deviceLabel: "MacBook Pro Microphone" });
-
-    expect(text()).toContain("Using MacBook Pro Microphone");
-    expect(text()).toContain("Your chosen microphone isn't available");
-  });
-
   it("offers the built-in mic for a silent Bluetooth one", async () => {
     const notice: VoiceMicNotice = {
       kind: "silent",
@@ -131,7 +124,6 @@ describe("VoiceMicNoticeBanner", () => {
 
   it.each<VoiceMicNotice>([
     { kind: "lost", target: TARGET, deviceLabel: null },
-    { kind: "fallback", target: TARGET, deviceLabel: null },
     { kind: "silent", target: TARGET, deviceLabel: null, bluetooth: false, builtIn: null },
   ])("leaves the $kind announcement to the service's live region", (notice) => {
     const { container } = renderNotice(notice);

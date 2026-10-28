@@ -1683,7 +1683,7 @@ describe("buildInputBarTheme", () => {
     expect(invalidRule).toContain(`color: ${colors.errorColor}`);
   });
 
-  it("flags the dictation caret, and draws each phase as its own stem", () => {
+  it("draws the dictation caret as a level meter clear of the text", () => {
     const css = readGeneratedCss([buildInputBarTheme(theme)]);
     const colors = resolveInputBarColors(theme);
     // Every base rule whose selector list names the selector, merged in order;
@@ -1696,37 +1696,37 @@ describe("buildInputBarTheme", () => {
       if (bodies.length === 0) throw new Error(`selector ${selector} not found in CSS`);
       return Object.assign({}, ...bodies.map((m) => parseDeclarations(m[2] ?? "")));
     };
-    // The caret takes no width of its own: flag and stem are drawn out of flow.
-    expect(rule(".cm-voice-caret").display).toBeUndefined();
-    const flag = rule(".cm-voice-caret::before");
-    expect(flag.position).toBe("absolute");
-    expect([flag.width, flag.height]).toEqual(["6px", "2px"]);
-    const stem = rule(".cm-voice-caret::after");
-    expect(stem.position).toBe("absolute");
-    expect(stem["background-image"]).toContain("repeating-linear-gradient");
-    expect(rule(".cm-voice-caret")["--cm-voice-caret-ink"]).toBe(colors.voiceSignal.toLowerCase());
+    // The meter takes its own width, and starts a gap past the word before it.
+    expect(rule(".cm-voice-caret")["padding-left"]).toBe("11px");
+    const track = rule(".cm-voice-caret::before");
+    const fill = rule(".cm-voice-caret::after");
+    for (const part of [track, fill]) {
+      expect(part.position).toBe("absolute");
+      expect([part.left, part.width]).toEqual(["6px", "3px"]);
+    }
+    expect(track["background-color"]).toContain("color-mix");
+    expect(fill["background-color"]).toBe(colors.voiceSignal.toLowerCase());
+    expect(fill["transform-origin"]).toBe("bottom");
+    expect(fill.transform).toBe("scaley(0)");
 
-    const live = rule('.cm-voice-caret[data-phase="live"]');
-    expect(live.opacity).toContain(`var(${VOICE_CARET_LEVEL_PROPERTY}, 1)`);
-    expect(live.opacity).toContain(`${colors.voiceCaretFloor} +`);
-    expect(rule('.cm-voice-caret[data-phase="live"]::after')["background-image"]).toBe("none");
+    const live = rule('.cm-voice-caret[data-phase="live"]::after');
+    expect(live.transform).toContain(`var(${VOICE_CARET_LEVEL_PROPERTY}, 1)`);
+    expect(live.transition).toContain("transform");
 
-    expect(rule('.cm-voice-caret[data-phase="held"]')["--cm-voice-caret-ink"]).toBe(
-      colors.voiceHeld.toLowerCase()
-    );
-    const corner = rule('.cm-voice-caret[data-phase="held"]::after');
-    expect(corner.bottom).toBe("auto");
-    expect(corner["background-image"]).toBe("none");
+    const held = rule('.cm-voice-caret[data-phase="held"]::after');
+    expect(held["background-color"]).toBe(colors.voiceHeld.toLowerCase());
+    expect(held.transform).toBe("scaley(0.25)");
 
-    // Reduced motion holds the live caret at full, over the live rule.
+    // Reduced motion holds the fill full, over the live rule, and lets its
+    // opacity carry the voice.
     expect(css).toMatch(
-      /@media \(prefers-reduced-motion: reduce\)\s*\{[^@]*\.cm-content \.cm-voice-caret\[data-phase="live"\]\s*\{\s*opacity:\s*1/
-    );
-    expect(css).toMatch(
-      /@media \(forced-colors: active\)\s*\{[^@]*\.cm-voice-caret\[data-phase="live"\]::after\s*\{[^}]*border-color:\s*Highlight/
+      /@media \(prefers-reduced-motion: reduce\)\s*\{[^@]*\.cm-content \.cm-voice-caret\[data-phase="live"\]::after\s*\{\s*transform:\s*none[^}]*opacity:\s*calc\(0\.55 \+/
     );
     expect(css).toMatch(
-      /@media \(forced-colors: active\)\s*\{[^@]*\.cm-voice-caret\[data-phase="held"\]::after\s*\{[^}]*border-color:\s*GrayText/
+      /@media \(forced-colors: active\)\s*\{[^@]*\.cm-voice-caret::after\s*\{[^}]*border-left:\s*3px solid Highlight/
+    );
+    expect(css).toMatch(
+      /@media \(forced-colors: active\)\s*\{[^@]*\.cm-voice-caret\[data-phase="held"\]::after\s*\{[^}]*border-left-color:\s*GrayText/
     );
   });
 

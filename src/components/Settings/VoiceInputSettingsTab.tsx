@@ -731,6 +731,7 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
 
             <MicTestRow
               deviceId={settings.deviceId}
+              deviceLabel={settings.deviceLabel}
               active={isActive}
               disabled={micPermission === "denied" || micPermission === "restricted"}
             />

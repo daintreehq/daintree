@@ -701,6 +701,8 @@ interface CaptureAttempt {
   deviceId: string | null;
   // UI-only: device names never go into logs.
   deviceLabel: string | null;
+  // A working mic other than the chosen one opened: named once it hears, never a notice.
+  substituted: boolean;
   // The OS pulled the track ("ended"). Latched, so a lost attempt is never
   // promoted and a lost session is torn down once.
   lost: boolean;
@@ -770,6 +772,7 @@ class VoiceRecordingService {
   private elapsedTimer: ReturnType<typeof setInterval> | null = null;
   private sessionStartedAt = 0;
   private selectedDeviceId = "";
+  private selectedDeviceLabel = "";
   private recordingMode: VoiceRecordingMode = "tap-or-hold";
   // The voice shortcut press that is down right now, outside toggle mode.
   // `claimed` once that press started (or resumed) a recording, so only its
@@ -1576,6 +1579,7 @@ class VoiceRecordingService {
     const hasProviderKey = hasTranscriptionKey(settings);
     const isConfigured = settings.enabled && hasProviderKey;
     this.selectedDeviceId = settings.deviceId ?? "";
+    this.selectedDeviceLabel = settings.deviceLabel ?? "";
     this.recordingMode = settings.recordingMode ?? "tap-or-hold";
     this.hasOpenAIKey = hasCleanupKey(settings);
     this.transcriptionProvider = settings.transcriptionProvider;
@@ -2419,6 +2423,7 @@ class VoiceRecordingService {
       timeline,
       deviceId: null,
       deviceLabel: null,
+      substituted: false,
       lost: false,
       frozen: false,
     };
@@ -2464,9 +2469,11 @@ class VoiceRecordingService {
     let opened: OpenedMic;
     // Snapshot: a settings change while the mic opens mustn't read as a fallback.
     const requestedDeviceId = this.selectedDeviceId;
+    const requestedDeviceLabel = this.selectedDeviceLabel;
     try {
       opened = await openChosenMic(requestedDeviceId, {
         canFallBack: () => !this.isStartRequestStale(startRequestId),
+        chosenLabel: requestedDeviceLabel,
       });
     } catch (error) {
       abandonCapture();
@@ -2540,8 +2547,9 @@ class VoiceRecordingService {
     // the chosen one is gone or won't open.
     capture.deviceLabel = opened.label;
     capture.deviceId = opened.deviceId;
-    const usingFallbackMic = opened.substituted;
-    if (usingFallbackMic) {
+    capture.substituted = opened.substituted;
+    if (opened.relocatedId) void this.rememberRelocatedMic(requestedDeviceId, opened.relocatedId);
+    if (opened.substituted) {
       logWarn(`${LOG_PREFIX} Microphone device mismatch`, {
         requested: requestedDeviceId,
         actual: opened.deviceId,
@@ -2794,11 +2802,6 @@ class VoiceRecordingService {
     // announcing here would tell the user to speak into a mic still delivering
     // zeros.
     useVoiceRecordingStore.getState().setMicDeviceLabel(capture.deviceLabel);
-    if (usingFallbackMic) {
-      useVoiceRecordingStore
-        .getState()
-        .setMicNotice({ kind: "fallback", target, deviceLabel: capture.deviceLabel });
-    }
 
     this.sessionStartedAt = Date.now();
     this.sessionProvider = this.transcriptionProvider;
@@ -5372,11 +5375,8 @@ class VoiceRecordingService {
     state.setMicSignal("live");
     this.playCue("dictation-start");
     if (state.micNotice?.kind === "silent") state.setMicNotice(null);
-    // One announcement, so the fallback mic isn't replaced before it's read.
-    const fallbackMic =
-      state.micNotice?.kind === "fallback"
-        ? (state.micNotice.deviceLabel ?? "another microphone")
-        : null;
+    const capture = this.sessionCapture;
+    const fallbackMic = capture?.substituted ? (capture.deviceLabel ?? "another microphone") : null;
     state.announce(
       fallbackMic
         ? `Dictation started in ${formatTargetLabel(target)}, using ${fallbackMic}.`
@@ -5450,6 +5450,20 @@ class VoiceRecordingService {
     });
   }
 
+  // The saved id went stale and the mic's name found it again: save the id it
+  // has now, so settings list it as connected and the next start goes straight
+  // to it. Only over the same saved choice, never one made while it opened.
+  private async rememberRelocatedMic(staleId: string, deviceId: string): Promise<void> {
+    try {
+      const saved = await window.electron.voiceInput.getSettings();
+      if (saved.deviceId !== staleId) return;
+      await window.electron.voiceInput.setSettings({ deviceId });
+      if (this.selectedDeviceId === staleId) this.selectedDeviceId = deviceId;
+    } catch (err) {
+      logDebug(`${LOG_PREFIX} Could not save the relocated microphone`, voiceErrorLogFields(err));
+    }
+  }
+
   /**
    * The silent-mic notice's way forward: make the built-in mic the dictation
    * mic, then restart the session it was raised for on it. The restart is a
@@ -5476,6 +5490,7 @@ class VoiceRecordingService {
         return;
       }
       this.selectedDeviceId = builtIn.deviceId;
+      this.selectedDeviceLabel = builtIn.label;
       const state = useVoiceRecordingStore.getState();
       // The choice is saved either way; only the session the notice belongs
       // to is restarted, and only while it is still running.

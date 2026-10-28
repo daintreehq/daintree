@@ -202,11 +202,6 @@ describe("VoiceSessionPanel (#14920)", () => {
     },
     {
       micSignal: "live" as const,
-      micNotice: { kind: "fallback" as const, bluetooth: false },
-      audio: "Delivering audio · fallback",
-    },
-    {
-      micSignal: "live" as const,
       micNotice: { kind: "lost" as const, bluetooth: false },
       audio: "Disconnected",
     },

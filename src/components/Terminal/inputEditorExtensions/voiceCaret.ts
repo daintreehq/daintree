@@ -137,10 +137,11 @@ const CARET_WIDGETS: Record<VoiceCaretPhase, VoiceCaretWidget> = {
 };
 
 /**
- * Draws where dictation will write, focused or not, without blinking. A
- * zero-advance widget, so the text around it doesn't move, and past the grey
- * preview while one shows (the preview's side is 1). When the editor's own
- * caret sits at the same spot it steps aside, so there is one caret, not two.
+ * Draws where dictation will write, focused or not, without blinking: a level
+ * meter in a few pixels of its own, so it stands clear of the word before it,
+ * and past the grey preview while one shows (the preview's side is 1). When
+ * the editor's own caret sits at the same spot it steps aside, so there is one
+ * caret, not two.
  */
 class VoiceCaretView {
   decorations: DecorationSet = Decoration.none;

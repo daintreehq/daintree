@@ -43,7 +43,7 @@ const CHIP_SVG_SIZE = {
   flexShrink: "0",
 } as const;
 
-/** The live dictation caret's opacity follows the mic level through this property, 0 to 1. */
+/** The live dictation caret's meter follows the mic level through this property, 0 to 1. */
 export const VOICE_CARET_LEVEL_PROPERTY = "--cm-voice-caret-level";
 
 export function buildInputBarTheme(theme: ITheme): Extension {
@@ -88,12 +88,8 @@ export function buildInputBarTheme(theme: ITheme): Extension {
       ".cm-placeholder": {
         color: `var(--ib-placeholder, ${c.placeholder})`,
       },
-      // The clip reaches a few pixels left of the text, so a caret drawn
-      // across a line's first boundary paints whole; the text stays put.
       ".cm-scroller": {
         overflow: "hidden",
-        paddingLeft: "3px",
-        marginLeft: "-3px",
       },
       ".cm-line": {
         padding: "0",
@@ -205,7 +201,11 @@ export function buildInputBarTheme(theme: ITheme): Extension {
       "@media (prefers-reduced-motion: reduce)": {
         ".cm-chip-remove": { transition: "none" },
         // `.cm-content` outranks the live rule further down.
-        '.cm-content .cm-voice-caret[data-phase="live"]': { opacity: "1" },
+        '.cm-content .cm-voice-caret[data-phase="live"]::after': {
+          transform: "none",
+          transition: "none",
+          opacity: `calc(${c.voiceCaretFloor} + ${1 - c.voiceCaretFloor} * var(${VOICE_CARET_LEVEL_PROPERTY}, 1))`,
+        },
       },
       ".cm-diff-chip": {
         ...chipStyle,
@@ -308,81 +308,61 @@ export function buildInputBarTheme(theme: ITheme): Extension {
           borderColor: c.successColor,
         },
       },
-      // Where dictation writes (`voiceCaret`). An empty inline with the caret
-      // drawn out of flow, so no text moves. The flag on its head is what sets
-      // it apart from the keyboard's caret in every phase, blinking or not;
-      // the stem says the phase: dashed while the mic comes up, solid once it
-      // hears, cut to a corner in the held ink while the session holds, which
-      // keeps the place without claiming the line. Only the live caret
-      // follows the voice, by opacity alone; reduced motion holds it.
+      // Where dictation writes (`voiceCaret`): a thin level meter set a gap
+      // past the text, so it reads as the mic and never as the keyboard's
+      // caret. A quiet track holds the place in every phase; the fill is the
+      // voice, rising with it while live, empty while the mic comes up, and a
+      // still neutral stub while the session holds. Reduced motion keeps the
+      // fill full and lets only its opacity follow the voice.
       ".cm-voice-caret": {
         position: "relative",
+        paddingLeft: "11px",
         pointerEvents: "none",
-        "--cm-voice-caret-ink": c.voiceSignal,
       },
       ".cm-voice-caret::before, .cm-voice-caret::after": {
         content: '""',
         position: "absolute",
-        top: "0",
-        left: "-1px",
-        backgroundColor: "var(--cm-voice-caret-ink)",
+        top: "1px",
+        bottom: "1px",
+        left: "6px",
+        width: "3px",
+        borderRadius: "1px",
       },
       ".cm-voice-caret::before": {
-        width: "6px",
-        height: "2px",
+        // The expanded editor portals outside the shell that sets `--ib-fg`.
+        backgroundColor: "color-mix(in oklab, var(--ib-fg, currentColor) 16%, transparent)",
       },
-      // Even dashes from a gradient: a dotted border bunches its dots at the
-      // ends of a 20px line and reads as a colon after the word.
       ".cm-voice-caret::after": {
-        bottom: "0",
-        width: "2px",
-        backgroundColor: "transparent",
-        backgroundImage:
-          "repeating-linear-gradient(to bottom, var(--cm-voice-caret-ink) 0 3px, transparent 3px 5px)",
-        backgroundPosition: "0 1px",
-      },
-      '.cm-voice-caret[data-phase="held"]': {
-        "--cm-voice-caret-ink": c.voiceHeld,
+        backgroundColor: c.voiceSignal,
+        transformOrigin: "bottom",
+        transform: "scaleY(0)",
       },
       '.cm-voice-caret[data-phase="held"]::after': {
-        bottom: "auto",
-        height: "8px",
-        backgroundImage: "none",
-        backgroundColor: "var(--cm-voice-caret-ink)",
+        backgroundColor: c.voiceHeld,
+        transform: "scaleY(0.25)",
       },
       // The level comes in raw, about once a frame; the transition is what
-      // smooths it, so the caret breathes with the voice rather than flickers.
-      '.cm-voice-caret[data-phase="live"]': {
-        opacity: `calc(${c.voiceCaretFloor} + ${1 - c.voiceCaretFloor} * var(${VOICE_CARET_LEVEL_PROPERTY}, 1))`,
-        transition: `opacity ${DURATION_100}ms linear`,
-      },
+      // smooths it, so the meter moves with the voice rather than flickers.
       '.cm-voice-caret[data-phase="live"]::after': {
-        backgroundImage: "none",
-        backgroundColor: "var(--cm-voice-caret-ink)",
+        transform: `scaleY(max(0.12, var(${VOICE_CARET_LEVEL_PROPERTY}, 1)))`,
+        transition: `transform ${DURATION_100}ms linear`,
       },
-      'body[data-reduce-animations="true"] & .cm-voice-caret, body[data-performance-mode="true"] & .cm-voice-caret':
-        { opacity: "1" },
+      'body[data-reduce-animations="true"] & .cm-voice-caret[data-phase="live"]::after, body[data-performance-mode="true"] & .cm-voice-caret[data-phase="live"]::after':
+        {
+          transform: "none",
+          transition: "none",
+          opacity: `calc(${c.voiceCaretFloor} + ${1 - c.voiceCaretFloor} * var(${VOICE_CARET_LEVEL_PROPERTY}, 1))`,
+        },
       "&[data-voice-caret-covers] .cm-cursorLayer": {
         visibility: "hidden",
       },
-      // System inks replace author colours and gradients, so the phases are
-      // borders: dotted CanvasText starting, solid Highlight live, a GrayText
-      // corner held.
+      // System inks replace author backgrounds, so the meter is borders: a
+      // CanvasText outline, filled in Highlight live and GrayText held.
       "@media (forced-colors: active)": {
         ".cm-voice-caret::before, .cm-voice-caret::after": { background: "none" },
-        ".cm-voice-caret::before": { height: "0", borderTop: "2px solid CanvasText" },
-        ".cm-voice-caret::after": { width: "0", borderLeft: "2px dotted CanvasText" },
-        '.cm-voice-caret[data-phase="live"]': { opacity: "1" },
-        '.cm-voice-caret[data-phase="live"]::before, .cm-voice-caret[data-phase="live"]::after': {
-          borderColor: "Highlight",
-          background: "none",
-        },
-        '.cm-voice-caret[data-phase="live"]::after': { borderLeftStyle: "solid" },
-        '.cm-voice-caret[data-phase="held"]::before, .cm-voice-caret[data-phase="held"]::after': {
-          borderColor: "GrayText",
-          background: "none",
-        },
-        '.cm-voice-caret[data-phase="held"]::after': { borderLeftStyle: "solid" },
+        ".cm-voice-caret::before": { border: "1px solid CanvasText", width: "1px" },
+        ".cm-voice-caret::after": { width: "0", borderLeft: "3px solid Highlight" },
+        '.cm-voice-caret[data-phase="held"]::after': { borderLeftColor: "GrayText" },
       },
     },
     { dark: true }

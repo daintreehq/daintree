@@ -35,7 +35,7 @@ export interface VoiceSessionDetails {
   worktreeLabel: string | null;
   micLabel: string | null;
   micSignal: VoiceMicSignal;
-  micNotice: { kind: "lost" | "fallback" | "silent"; bluetooth: boolean } | null;
+  micNotice: { kind: "lost" | "silent"; bluetooth: boolean } | null;
   providerName: string | null;
   /** Wall time since the session began, pauses included; null before it has begun or once it stops. */
   elapsedMs: number | null;
@@ -154,8 +154,7 @@ function micStatus(details: VoiceSessionDetails): string {
   if (phase === "finishing") return "Stopped";
   if (micNotice?.kind === "lost") return "Disconnected";
   if (hasNoAudio(details)) return micNotice?.bluetooth ? "No audio · Bluetooth" : "No audio";
-  const signal = micSignal === "live" ? "Delivering audio" : "Waiting for audio";
-  return micNotice?.kind === "fallback" ? `${signal} · fallback` : signal;
+  return micSignal === "live" ? "Delivering audio" : "Waiting for audio";
 }
 
 /**

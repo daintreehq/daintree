@@ -172,7 +172,8 @@ describe("startMicTest", () => {
         deviceId: "mic-1",
         onSample: vi.fn(),
         onEnded: vi.fn(),
-        isCurrent: () => false,
+        // Current while the mics are listed, gone by the time the first open fails.
+        isCurrent: vi.fn().mockReturnValueOnce(true).mockReturnValue(false),
       })
     ).rejects.toBe("unavailable");
     expect(gum).toHaveBeenCalledTimes(1);

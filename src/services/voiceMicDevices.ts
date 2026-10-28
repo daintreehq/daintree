@@ -88,9 +88,20 @@ export interface OpenedMic {
   substituted: boolean;
   /** Why the chosen mic failed to open before the system default did; null when it didn't. */
   chosenFailure: unknown;
+  /**
+   * The chosen mic's id as listed now, when that differs from the one asked
+   * for: its saved id went stale and its name found it again. Null otherwise.
+   */
+  relocatedId: string | null;
 }
 
 const SYSTEM_DEFAULT_MIC: MediaStreamConstraints = { audio: true, video: false };
+
+interface ListedMic {
+  deviceId: string;
+  groupId: string;
+  label: string;
+}
 
 /**
  * Opens the mic dictation records from, by the rules dictation and the mic
@@ -99,14 +110,26 @@ const SYSTEM_DEFAULT_MIC: MediaStreamConstraints = { audio: true, video: false }
  * already opens the default; one that is connected but won't start rejects,
  * and Chromium never tries another, so the default is asked for here. Only a
  * device failure falls back: a permission denial is final, and `canFallBack`
- * lets a caller whose start went stale skip opening a second mic. Rejects
+ * lets a caller whose start went stale skip opening a mic at all. Rejects
  * with the last attempt's error.
+ *
+ * Chromium's device ids are salted per origin and can be reset, so a saved id
+ * can stop naming anything: `chosenLabel`, the name saved with it, finds the
+ * mic again when exactly one listed mic has that name. A track reporting the
+ * "default" alias is the chosen mic when it is the same physical device, by
+ * group where both say, by name otherwise.
  */
 export async function openChosenMic(
   deviceId: string,
-  options: { canFallBack?: () => boolean } = {}
+  options: { canFallBack?: () => boolean; chosenLabel?: string } = {}
 ): Promise<OpenedMic> {
   const specific = isSpecificMicId(deviceId);
+  const chosenLabel = options.chosenLabel ? stripPseudoDevicePrefix(options.chosenLabel) : "";
+  const chosen = specific ? await findChosenMic(deviceId, chosenLabel) : null;
+  if (specific && options.canFallBack?.() === false) {
+    throw new DOMException("The microphone request was superseded", "AbortError");
+  }
+  const targetId = chosen?.deviceId ?? deviceId;
   let stream: MediaStream;
   let chosenFailure: unknown = null;
   if (!specific) {
@@ -114,7 +137,7 @@ export async function openChosenMic(
   } else {
     try {
       stream = await navigator.mediaDevices.getUserMedia({
-        audio: { deviceId: { ideal: deviceId } },
+        audio: { deviceId: { ideal: targetId } },
         video: false,
       });
     } catch (error) {
@@ -125,19 +148,57 @@ export async function openChosenMic(
   }
 
   let actualId: string | null = null;
+  let groupId: string | null = null;
   let label: string | null = null;
   try {
     const track = stream.getAudioTracks()[0];
     label = track?.label ? stripPseudoDevicePrefix(track.label) || null : null;
-    actualId = track?.getSettings?.().deviceId || null;
+    const settings = track?.getSettings?.();
+    actualId = settings?.deviceId || null;
+    groupId = settings?.groupId || null;
   } catch {
     // A track that can't describe itself still records; only the naming is lost.
+  }
+
+  let openedChosen: boolean;
+  if (actualId === null) openedChosen = chosenFailure === null;
+  else if (isSpecificMicId(actualId)) openedChosen = actualId === targetId;
+  else {
+    // An alias opened. A shared group says it is the chosen mic; a name alone
+    // can't, once the chosen mic failed and the default is some other device.
+    openedChosen =
+      chosen !== null &&
+      (groupId && chosen.groupId
+        ? groupId === chosen.groupId
+        : chosenFailure === null && label === chosen.label);
   }
   return {
     stream,
     deviceId: actualId,
     label,
-    substituted: specific && (actualId !== null ? actualId !== deviceId : chosenFailure !== null),
+    substituted: specific && !openedChosen,
     chosenFailure,
+    relocatedId: chosen && chosen.deviceId !== deviceId ? chosen.deviceId : null,
   };
+}
+
+// The chosen mic as listed now: by its id, else by its saved name when exactly
+// one mic has it. Unnamed entries (no permission yet) can't be matched.
+async function findChosenMic(deviceId: string, label: string): Promise<ListedMic | null> {
+  try {
+    const inputs = (await navigator.mediaDevices.enumerateDevices())
+      .filter((device) => device.kind === "audioinput" && isSpecificMicId(device.deviceId))
+      .map((device) => ({
+        deviceId: device.deviceId,
+        groupId: device.groupId,
+        label: stripPseudoDevicePrefix(device.label),
+      }));
+    const listed = inputs.find((device) => device.deviceId === deviceId);
+    if (listed) return listed;
+    if (!label) return null;
+    const named = inputs.filter((device) => device.label === label);
+    return named.length === 1 ? named[0]! : null;
+  } catch {
+    return null;
+  }
 }
