@@ -25,7 +25,8 @@ export interface VoiceInsertPlan {
 const HUGS_PREVIOUS = /^[\s.,;:!?)\]}]/;
 const OPENS = /[([{]$/;
 
-function insertionSpan(draft: string, anchor: TrackedTextRange | null): DictationTextSpan {
+/** The span the session's next words replace: empty where they only go in. */
+export function insertionSpan(draft: string, anchor: TrackedTextRange | null): DictationTextSpan {
   if (!anchor) return { from: draft.length, to: draft.length };
   const to = Math.min(anchor.to, draft.length);
   // A selection the user changed since dictation began is theirs again: the

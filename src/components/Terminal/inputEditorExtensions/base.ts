@@ -6,6 +6,7 @@ import { insertNewline } from "@codemirror/commands";
 import type { ITheme } from "@xterm/xterm";
 import { resolveInputBarColors } from "@/utils/terminalTheme";
 import {
+  DURATION_100,
   UI_ANIMATION_DURATION,
   UI_PALETTE_ENTER_DURATION,
   EASE_OUT_EXPO,
@@ -41,6 +42,9 @@ const CHIP_SVG_SIZE = {
   width: "14px",
   flexShrink: "0",
 } as const;
+
+/** The live dictation caret's opacity follows the mic level through this property, 0 to 1. */
+export const VOICE_CARET_LEVEL_PROPERTY = "--cm-voice-caret-level";
 
 export function buildInputBarTheme(theme: ITheme): Extension {
   const c = resolveInputBarColors(theme);
@@ -196,6 +200,8 @@ export function buildInputBarTheme(theme: ITheme): Extension {
       },
       "@media (prefers-reduced-motion: reduce)": {
         ".cm-chip-remove": { transition: "none" },
+        // `.cm-content` outranks the live rule further down.
+        '.cm-content .cm-voice-caret[data-phase="live"]::after': { opacity: "1" },
       },
       ".cm-diff-chip": {
         ...chipStyle,
@@ -298,11 +304,40 @@ export function buildInputBarTheme(theme: ITheme): Extension {
           borderColor: c.successColor,
         },
       },
-      '[data-voice-active="true"] & .cm-content': {
-        caretColor: c.voiceCursor,
+      // Where dictation writes (`voiceCaret`). An empty inline with the line
+      // drawn out of flow, so no text moves. Dotted while the mic comes up or the session
+      // holds, solid once it hears, and only the live caret follows the
+      // voice, by opacity alone; reduced motion holds it at full.
+      ".cm-voice-caret": {
+        position: "relative",
+        pointerEvents: "none",
       },
-      '[data-voice-active="true"] &.cm-focused .cm-cursor': {
-        borderLeft: `2px solid ${c.voiceCursor}`,
+      ".cm-voice-caret::after": {
+        content: '""',
+        position: "absolute",
+        top: "0",
+        bottom: "0",
+        left: "-1px",
+        borderLeft: `2px dotted ${c.voiceSignal}`,
+      },
+      '.cm-voice-caret[data-phase="held"]::after': {
+        borderLeftColor: c.voiceHeld,
+      },
+      // The level comes in raw, about once a frame; the transition is what
+      // smooths it, so the caret breathes with the voice rather than flickers.
+      '.cm-voice-caret[data-phase="live"]::after': {
+        borderLeftStyle: "solid",
+        opacity: `calc(0.55 + 0.45 * var(${VOICE_CARET_LEVEL_PROPERTY}, 1))`,
+        transition: `opacity ${DURATION_100}ms linear`,
+      },
+      'body[data-reduce-animations="true"] & .cm-voice-caret::after, body[data-performance-mode="true"] & .cm-voice-caret::after':
+        { opacity: "1" },
+      "&[data-voice-caret-covers] .cm-cursorLayer": {
+        visibility: "hidden",
+      },
+      "@media (forced-colors: active)": {
+        ".cm-voice-caret::after": { borderLeftColor: "CanvasText" },
+        '.cm-voice-caret[data-phase="live"]::after': { borderLeftColor: "Highlight", opacity: "1" },
       },
     },
     { dark: true }

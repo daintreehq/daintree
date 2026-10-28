@@ -14,6 +14,7 @@ export {
   createComboboxAttributes,
   createPlainPasteKeymap,
   removeChipRange,
+  VOICE_CARET_LEVEL_PROPERTY,
 } from "./base";
 export { minimalDocChange } from "@/lib/textRangeMapping";
 export { createCaretTracker } from "./caretTracker";
@@ -23,6 +24,15 @@ export {
   revealDictationStart,
   setDictationFollow,
 } from "./dictationFollow";
+export {
+  currentVoiceCaretEffects,
+  requestVoiceCaret,
+  setVoiceCaret,
+  voiceCaret,
+  voiceCaretField,
+  voiceCaretPosition,
+} from "./voiceCaret";
+export type { VoiceCaretAt, VoiceCaretPhase } from "./voiceCaret";
 export type { AutoSizeConfig, ComboboxAttributes, InterimPreview } from "./base";
 
 export {

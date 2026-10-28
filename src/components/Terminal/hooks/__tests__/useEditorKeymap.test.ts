@@ -5,6 +5,7 @@ import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { undo, undoDepth } from "@codemirror/commands";
 import { createComposerHistory } from "../../inputEditorExtensions/composerHistory";
+import { requestVoiceCaret, voiceCaret } from "../../inputEditorExtensions/voiceCaret";
 import type { Dispatch, SetStateAction } from "react";
 import type { ActiveCompletionContext } from "../../hybridInputParsing";
 import type { AutocompleteItem } from "../../AutocompleteMenu";
@@ -548,6 +549,38 @@ describe("useEditorKeymap", () => {
       expect(undo(view)).toBe(true);
       expect(view.state.doc.toString()).toBe("");
       view.destroy();
+    });
+
+    it.each([
+      ["brings the caret of a session still open back with the draft", true, "live"],
+      ["leaves the caret of a session ended since behind", false, null],
+    ])("%s", (_name, stillOpen, expected) => {
+      const view = new EditorView({
+        parent: document.createElement("div"),
+        state: EditorState.create({ doc: "half a prompt", extensions: [voiceCaret] }),
+      });
+      try {
+        view.dispatch({ effects: requestVoiceCaret(view, { phase: "live", at: "end" }) });
+        let stashed: EditorState | undefined;
+        const { handlers } = renderKeymap(makeLatest({ isAutocompleteOpen: false }), {
+          editorViewRef: { current: view },
+          stashEditorState: vi.fn((_id: string, state: EditorState) => {
+            stashed = state;
+          }),
+          popStashedEditorState: vi.fn(() => stashed),
+        });
+
+        expect(handlers.onStash()).toBe(true);
+        if (!stillOpen) view.dispatch({ effects: requestVoiceCaret(view, { phase: null }) });
+        expect(handlers.onPopStash()).toBe(true);
+
+        expect(view.state.doc.toString()).toBe("half a prompt");
+        expect(
+          view.contentDOM.querySelector<HTMLElement>(".cm-voice-caret")?.dataset.phase ?? null
+        ).toBe(expected);
+      } finally {
+        view.destroy();
+      }
     });
   });
 });

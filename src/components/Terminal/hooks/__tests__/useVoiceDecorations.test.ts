@@ -4,10 +4,13 @@ import { act, renderHook } from "@testing-library/react";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import {
+  currentVoiceCaretEffects,
   dictationFollowField,
   interimWidgetField,
   pendingAIField,
   revealDictationStart,
+  VOICE_CARET_LEVEL_PROPERTY,
+  voiceCaret,
 } from "../../inputEditorExtensions";
 
 // A streamed cleanup's rewrite through the hook that feeds the editor: drawn
@@ -22,6 +25,7 @@ const { useVoiceRecordingStore } = await import("@/store/voiceRecordingStore");
 const { useTerminalInputStore } = await import("@/store/terminalInputStore");
 const { useDictationRangeStore } = await import("@/store/dictationRangeStore");
 const { useVoiceDecorations } = await import("../useVoiceDecorations");
+const { claimWaitingSend } = await import("@/services/voiceDraftSend");
 
 const PANEL = "panel-1";
 const DICTATED = "um so fix the bug";
@@ -29,15 +33,16 @@ const DICTATED = "um so fix the bug";
 // Where each passage shown from its start begins, in the order they were shown.
 let reveals: number[] = [];
 
-function mount(doc: string) {
+function mount(doc: string, parent: HTMLElement = document.createElement("div")) {
   const view = new EditorView({
-    parent: document.createElement("div"),
+    parent,
     state: EditorState.create({
       doc,
       extensions: [
         interimWidgetField,
         pendingAIField,
         dictationFollowField,
+        voiceCaret,
         EditorView.updateListener.of((update) => {
           for (const tr of update.transactions) {
             for (const effect of tr.effects) {
@@ -231,5 +236,211 @@ describe("useVoiceDecorations", () => {
     });
     expect(reveals).toEqual([3]);
     view.destroy();
+  });
+
+  describe("dictation caret", () => {
+    const caret = (view: EditorView) =>
+      view.contentDOM.querySelector<HTMLElement>(".cm-voice-caret");
+    const caretPos = (view: EditorView) => {
+      const el = caret(view);
+      return el ? view.posAtDOM(el) : null;
+    };
+    const level = (view: EditorView) => view.dom.style.getPropertyValue(VOICE_CARET_LEVEL_PROPERTY);
+
+    // Destroyed whatever an assertion did, so a failure leaves no editor behind.
+    let views: EditorView[] = [];
+    const mountCaret = (doc: string, parent?: HTMLElement) => {
+      const view = mount(doc, parent);
+      views.push(view);
+      return view;
+    };
+    afterEach(() => {
+      for (const view of views) {
+        view.dom.parentElement?.remove();
+        view.destroy();
+      }
+      views = [];
+    });
+
+    it("tracks the mic from pending through silent, live, paused, reconnecting and finishing", () => {
+      useTerminalInputStore.getState().setDraftInput(PANEL, DICTATED);
+      const view = mountCaret(DICTATED);
+      const phases: (string | null)[] = [];
+      const seen = () => phases.push(caret(view)?.dataset.phase ?? null);
+      const store = () => useVoiceRecordingStore.getState();
+
+      seen();
+      act(() => store().beginSession({ panelId: PANEL }, "s1"));
+      seen();
+      // The mic can hear before the provider's session has opened.
+      act(() => store().setMicSignal("live"));
+      seen();
+      act(() => {
+        store().setStatus("recording");
+        store().setMicSignal("silent");
+      });
+      seen();
+      act(() => store().setMicSignal("live"));
+      seen();
+      act(() => store().setStatus("paused"));
+      seen();
+      act(() => store().setStatus("recording"));
+      seen();
+      // Reconnecting isn't listening, however live the mic still is.
+      act(() => store().setStatus("reconnecting"));
+      seen();
+      act(() => store().setStatus("finishing"));
+      seen();
+      act(() => store().finishSession());
+      seen();
+
+      expect(phases).toEqual([
+        null,
+        "starting",
+        "live",
+        "starting",
+        "live",
+        "held",
+        "live",
+        "held",
+        "held",
+        null,
+      ]);
+    });
+
+    it("shows where the words go in a composer that never had focus", () => {
+      useTerminalInputStore.getState().setDraftInput(PANEL, DICTATED);
+      const view = mountCaret(DICTATED);
+      expect(view.hasFocus).toBe(false);
+
+      startDictation();
+
+      // Never focused, so its caret at 0 isn't the user's: the words append.
+      expect(caretPos(view)).toBe(DICTATED.length);
+    });
+
+    it("shows at the caret the user left, after focus has gone elsewhere", () => {
+      useTerminalInputStore.getState().setDraftInput(PANEL, DICTATED);
+      const parent = document.body.appendChild(document.createElement("div"));
+      const view = mountCaret(DICTATED, parent);
+      view.focus();
+      view.dispatch({ selection: { anchor: 6 } });
+      view.contentDOM.blur();
+
+      startDictation();
+
+      expect(view.hasFocus).toBe(false);
+      expect(caretPos(view)).toBe(6);
+    });
+
+    it("shows at the end for a session held back behind a waiting send", () => {
+      useTerminalInputStore.getState().setDraftInput(PANEL, DICTATED);
+      const parent = document.body.appendChild(document.createElement("div"));
+      const view = mountCaret(DICTATED, parent);
+      view.focus();
+      view.dispatch({ selection: { anchor: 6 } });
+      const release = claimWaitingSend(PANEL, new Set(["an-earlier-session"]));
+      try {
+        startDictation();
+        expect(caretPos(view)).toBe(DICTATED.length);
+      } finally {
+        release();
+      }
+    });
+
+    it.each([
+      [{ from: 3, to: 9, edited: false }, 3],
+      // A selection edited since dictation began is the user's again: the
+      // words go after it.
+      [{ from: 3, to: 9, edited: true }, 9],
+    ])("stays where the session's anchor puts the words (%o)", (anchor, expected) => {
+      useTerminalInputStore.getState().setDraftInput(PANEL, DICTATED);
+      useDictationRangeStore.setState({ getAnchor: () => anchor });
+      const view = mountCaret(DICTATED);
+
+      startDictation();
+
+      expect(caretPos(view)).toBe(expected);
+    });
+
+    it("keeps its place through typing the store hasn't caught up with", () => {
+      useTerminalInputStore.getState().setDraftInput(PANEL, DICTATED);
+      const anchor = { from: 6, to: 6, edited: false };
+      useDictationRangeStore.setState({ getAnchor: () => anchor });
+      const view = mountCaret(DICTATED);
+      startDictation();
+
+      view.dispatch({ changes: { from: 0, insert: "ok " } });
+      act(() => useVoiceRecordingStore.getState().setMicSignal("live"));
+
+      expect(caret(view)?.dataset.phase).toBe("live");
+      expect(caretPos(view)).toBe(9);
+    });
+
+    it("draws none for a spoken rewrite, which writes no words of its own", () => {
+      useTerminalInputStore.getState().setDraftInput(PANEL, DICTATED);
+      const view = mountCaret(DICTATED);
+      const selection = {
+        text: "um so",
+        range: () => ({ from: 0, to: 5 }),
+        onLost: () => {},
+        apply: () => true,
+        release: () => {},
+      };
+      act(() => {
+        useVoiceRecordingStore
+          .getState()
+          .beginSession(
+            { panelId: PANEL, rewrite: { selection, instruction: [], cancelled: false } },
+            "s1"
+          );
+        useVoiceRecordingStore.getState().setMicSignal("live");
+      });
+      expect(caret(view)).toBeNull();
+    });
+
+    it("leaves the session's caret where a popped stash can find it", () => {
+      useTerminalInputStore.getState().setDraftInput(PANEL, DICTATED);
+      const view = mountCaret(DICTATED);
+      startDictation();
+      expect(currentVoiceCaretEffects(view).map((effect) => effect.value.phase)).toEqual([
+        "starting",
+      ]);
+      act(() => useVoiceRecordingStore.getState().finishSession());
+      expect(currentVoiceCaretEffects(view)).toEqual([]);
+    });
+
+    it("draws none for a session writing to another composer", () => {
+      useTerminalInputStore.getState().setDraftInput(PANEL, DICTATED);
+      const view = mountCaret(DICTATED);
+      startDictation("panel-2");
+      expect(caret(view)).toBeNull();
+    });
+
+    it("follows the voice level, kept to 0-1, only while live and without a transaction per level", () => {
+      useTerminalInputStore.getState().setDraftInput(PANEL, DICTATED);
+      const view = mountCaret(DICTATED);
+      const dispatch = vi.spyOn(view, "dispatch");
+      startDictation();
+      act(() => useVoiceRecordingStore.getState().setAudioLevel(1));
+      expect(level(view)).toBe("");
+
+      useVoiceRecordingStore.getState().setAudioLevel(0);
+      act(() => useVoiceRecordingStore.getState().setMicSignal("live"));
+      const before = dispatch.mock.calls.length;
+      const readings: number[] = [];
+      for (const reading of [0.4, 1.6, -0.2]) {
+        useVoiceRecordingStore.getState().setAudioLevel(reading);
+        readings.push(Number(level(view)));
+      }
+      expect(dispatch.mock.calls.length).toBe(before);
+      expect(readings).toEqual([0.4, 1, 0]);
+
+      // Paused, the voice no longer reaches it.
+      act(() => useVoiceRecordingStore.getState().setStatus("paused"));
+      expect(level(view)).toBe("");
+      useVoiceRecordingStore.getState().setAudioLevel(0.7);
+      expect(level(view)).toBe("");
+    });
   });
 });
