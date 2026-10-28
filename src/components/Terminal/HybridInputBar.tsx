@@ -52,6 +52,8 @@ import { useFleetArmingStore } from "@/store/fleetArmingStore";
 
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { VoiceInputButton } from "./VoiceInputButton";
+import { DictationCancelConfirmOverlay, useDictationCancelConfirm } from "./DictationCancelConfirm";
+import { DICTATION_CANCEL_CONFIRM_PROMPT } from "@/lib/pressAgain";
 import { DictionaryLearnPrompt } from "./DictionaryLearnPrompt";
 import { Archive, X } from "lucide-react";
 import { Paperclip } from "@/components/icons";
@@ -1339,6 +1341,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       ) : null;
 
     const handleDictationEscape = () => voiceRecordingService.handleEscape(voiceId);
+    const dictationCancelConfirm = useDictationCancelConfirm(voiceId);
 
     const collapseEditor = () => setIsExpanded(false);
 
@@ -1849,6 +1852,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         {/* Outside the shell, which is busy for the whole wait: a live region
             inside it would hold its announcements until the send. */}
         {!isExpanded && voiceSubmitAnnouncer}
+        {/* A reply box sits inside Canopy's dialog, where the app's announcer
+            that says this for every other composer goes unheard. */}
+        {voiceTarget && (
+          <div role="status" aria-live="polite" className="sr-only">
+            {dictationCancelConfirm ? DICTATION_CANCEL_CONFIRM_PROMPT : ""}
+          </div>
+        )}
         <div className="flex items-end gap-2">
           <div
             ref={inputShellRef}
@@ -1906,6 +1916,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               streamed={voiceCorrectionStreamed}
               onPresentChange={setIsVoiceSubmitPresenting}
             />
+            {dictationCancelConfirm && (
+              <DictationCancelConfirmOverlay
+                key={dictationCancelConfirm.expiresAt}
+                confirm={dictationCancelConfirm}
+              />
+            )}
             {showVoiceSessionCaption && (
               <div
                 aria-hidden="true"

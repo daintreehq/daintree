@@ -530,6 +530,8 @@ describe("VoiceRecordingService — recent dictations (#14637)", () => {
 
     begin("panel-1");
     say("words I meant to throw away");
+    // The first press asks for a second (#14927).
+    expect(service.handleEscape("panel-1")).toBe(true);
     expect(service.handleEscape("panel-1")).toBe(true);
     await vi.waitFor(() => expect(voiceStore.getState().status).toBe("idle"));
     await flush();

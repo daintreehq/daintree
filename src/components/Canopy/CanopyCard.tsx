@@ -51,6 +51,7 @@ import { isHandBackStop, isHandBackUnseen } from "@shared/utils/runHandBack";
 import type { BrandMarkSurface } from "@/lib/brandIcon";
 import type { HybridInputBarHandle } from "@/components/Terminal/HybridInputBar";
 import { isMac } from "@/lib/platform";
+import { PRESS_AGAIN_CONFIRM_MS } from "@/lib/pressAgain";
 import { isNewWindowClick } from "@/components/Hosts/hostSwitching";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
 import {
@@ -88,7 +89,7 @@ const WarningGlyph = SEVERITY_GLYPH.warning;
 /** A grid pane's header control: a ghost icon button with a 14px glyph. */
 const CONTROL_ICON = "[&_svg]:size-3.5";
 /** How long a first press of Trash waits for the second before it stands down. */
-export const TRASH_CONFIRM_MS = 4_000;
+export const TRASH_CONFIRM_MS = PRESS_AGAIN_CONFIRM_MS;
 
 export interface CanopyCardHandlers {
   /** `newWindow`: Cmd/Ctrl held, so another host's run opens in a new window. */

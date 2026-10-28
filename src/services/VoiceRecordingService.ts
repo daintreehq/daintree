@@ -76,6 +76,7 @@ import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { VOICE_INPUT_SETTINGS_CHANGED_EVENT } from "@/lib/voiceInputSettingsEvents";
 import { registerEscapeFallback } from "@/lib/escapeStack";
+import { DICTATION_CANCEL_CONFIRM_PROMPT, PRESS_AGAIN_CONFIRM_MS } from "@/lib/pressAgain";
 import { useCanopyStore } from "@/store/canopyStore";
 import {
   isCanopyReplyTarget,
@@ -539,6 +540,20 @@ function afterDictatedWords(target: VoiceRecordingTarget, sessionId: string | nu
   return anchor ? anchor.to : record.range.to;
 }
 
+/** Whether cancelling takes something out: words that were the selection leave the text as it is. */
+function changesDraft({ from, to, restore = "" }: DictatedSpan, draft: string): boolean {
+  return draft.slice(from, to) !== restore;
+}
+
+/** The draft a cancel leaves, the spans undone last first as `cancelDictation` writes them. */
+function draftAfterCancel(spans: DictatedSpan[], draft: string): string {
+  let next = draft;
+  for (const { from, to, restore = "" } of spans) {
+    if (draft.slice(from, to) !== restore) next = next.slice(0, from) + restore + next.slice(to);
+  }
+  return next;
+}
+
 /**
  * Where `offset` ends up once each span is taken out, or swapped for the
  * selection it replaced; one inside a span goes to its start.
@@ -776,6 +791,11 @@ class VoiceRecordingService {
   // long stops as if the dictation key were pressed. Paused sessions keep the
   // 60s rule above.
   private idleTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  // An Escape that would discard dictated words waits this long for a second.
+  private cancelConfirmTimeoutId: ReturnType<typeof setTimeout> | null = null;
+  // Whether the Escape being handled is the key repeating, so holding it
+  // down can't press it a second time.
+  private escapeRepeat = false;
   private idleWarnTimeoutId: ReturnType<typeof setTimeout> | null = null;
   private static readonly IDLE_AUTO_STOP_MS = 180_000;
   private static readonly IDLE_WARN_LEAD_MS = 10_000;
@@ -1473,6 +1493,7 @@ class VoiceRecordingService {
     // that completes a chord (Cmd+K Cmd+D) or stops a session is never
     // claimed, and its release does nothing.
     const handleShortcutKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") this.escapeRepeat = e.repeat;
       if (e.repeat) return;
       // Every combo that starts recording has to arm the release, or a second
       // override combo would start push-to-talk that its keyup can't stop.
@@ -1613,8 +1634,10 @@ class VoiceRecordingService {
    * Escape that reached dictation, from the global fallback or from the target
    * composer (`panelId`). It cancels the dictation, taking its text back out of
    * the draft, unless that text has been edited: then it stops and keeps it,
-   * as the dictation key does. Returns whether it acted, so a finishing or
-   * idle session leaves the key to whatever is next in line.
+   * as the dictation key does. A cancel that would take words out asks for a
+   * second Escape first (#14927); the session carries on meanwhile. Returns
+   * whether it acted, so a finishing or idle session leaves the key to
+   * whatever is next in line.
    */
   handleEscape(panelId?: string): boolean {
     const state = useVoiceRecordingStore.getState();
@@ -1669,14 +1692,56 @@ class VoiceRecordingService {
     const draft = useTerminalInputStore.getState().getDraftInput(target.panelId, target.projectId);
     const spans = record ? dictatedSpans(record, draft) : [];
     if (!spans) {
+      this.clearCancelConfirm();
       void this.stop(
         "Dictation stopped. Its text was kept because it changed after you dictated it.",
         { preserveLiveText: true, reason: "escape" }
       );
       return true;
     }
+    // Only a cancel that changes the draft loses anything, read afresh on
+    // every press: what landed while the first waited goes too.
+    const sessionId = state.panelBuffers[target.panelId]?.dictationSessionId ?? null;
+    if (sessionId && draftAfterCancel(spans, draft) !== draft) {
+      const confirm = state.dictationCancelConfirm;
+      const confirmed =
+        confirm?.panelId === target.panelId &&
+        confirm.sessionId === sessionId &&
+        performance.now() < confirm.expiresAt;
+      if (!confirmed) {
+        this.armCancelConfirm(target.panelId, sessionId);
+        // A reply box's own composer says it while Canopy is open: the app's
+        // announcer goes unheard inside its dialog.
+        if (!isCanopyReplyTarget(target) || !useCanopyStore.getState().isOpen) {
+          useVoiceRecordingStore.getState().announce(DICTATION_CANCEL_CONFIRM_PROMPT);
+        }
+        return true;
+      }
+      if (this.escapeRepeat) return true;
+    }
     void this.cancelDictation(target, record, spans);
     return true;
+  }
+
+  private armCancelConfirm(panelId: string, sessionId: string): void {
+    this.clearCancelConfirm();
+    const confirm = { panelId, sessionId, expiresAt: performance.now() + PRESS_AGAIN_CONFIRM_MS };
+    useVoiceRecordingStore.getState().setDictationCancelConfirm(confirm);
+    this.cancelConfirmTimeoutId = setTimeout(() => {
+      this.cancelConfirmTimeoutId = null;
+      // A newer press or the session's end may have replaced it already.
+      const store = useVoiceRecordingStore.getState();
+      if (store.dictationCancelConfirm === confirm) store.setDictationCancelConfirm(null);
+    }, PRESS_AGAIN_CONFIRM_MS);
+  }
+
+  private clearCancelConfirm(): void {
+    if (this.cancelConfirmTimeoutId !== null) {
+      clearTimeout(this.cancelConfirmTimeoutId);
+      this.cancelConfirmTimeoutId = null;
+    }
+    const store = useVoiceRecordingStore.getState();
+    if (store.dictationCancelConfirm) store.setDictationCancelConfirm(null);
   }
 
   /**
@@ -1730,9 +1795,7 @@ class VoiceRecordingService {
       // a diff's guess across the whole stretch.
       // Words that were the selection leave the text as it is, so only the
       // spans that change it are written.
-      const applied = spans.filter(
-        ({ from, to, restore = "" }) => draft.slice(from, to) !== restore
-      );
+      const applied = spans.filter((span) => changesDraft(span, draft));
       let next = draft;
       for (const { from, to, restore = "" } of applied) {
         const before = next;
@@ -1893,6 +1956,7 @@ class VoiceRecordingService {
    * (#14604). Escape, a closed panel and teardown end the start outright.
    */
   private requestUserStop(reason: VoiceStopReason = "user"): Promise<void> {
+    this.clearCancelConfirm();
     if (this.deferStopToStartup(reason)) return Promise.resolve();
     const { status, pendingTarget } = useVoiceRecordingStore.getState();
     if ((pendingTarget || status === "arming") && !this.stream) {
@@ -2882,6 +2946,7 @@ class VoiceRecordingService {
     } = {}
   ): Promise<void> {
     const reason = options.reason ?? "user";
+    this.clearCancelConfirm();
     if (this.stopPromise) {
       // Whatever joined wants something of this stop besides an end of speech:
       // a send, a teardown, a retarget. A "send it" still to land doesn't send.
@@ -5329,6 +5394,7 @@ class VoiceRecordingService {
   }
 
   private clearTimers(): void {
+    this.clearCancelConfirm();
     this.sessionClockRunning = false;
     this.clearElapsedTimer();
     this.clearPauseTimeout();
@@ -5619,6 +5685,7 @@ class VoiceRecordingService {
     // timers must be cleared or they fire against the new singleton's state.
     this.clearPauseTimeout();
     this.clearIdleTimeout();
+    this.clearCancelConfirm();
     this.clearElapsedTimer();
     this.sessionClockRunning = false;
     this.clearMicSilenceTimer();
