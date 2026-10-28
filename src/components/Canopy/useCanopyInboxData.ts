@@ -110,23 +110,25 @@ export function useCanopyInboxData({
         )
         .join("\u0000")
     : "";
+  const present = useMemo(
+    () => participants.filter((id) => !awayKey.split("\u0000").includes(id)),
+    [participants, awayKey]
+  );
   const readings = useMemo<HostReading[]>(
     () =>
       everyHost
-        ? participants
-            .filter((id) => !awayKey.split("\u0000").includes(id))
-            .map((id) =>
-              id === ownHostId
-                ? { hostId: id, canopy: ownCanopy, fleet: ownFleet, error: null }
-                : {
-                    hostId: id,
-                    canopy: remotes.states.get(id)?.canopy ?? null,
-                    fleet: remotes.states.get(id)?.fleet ?? null,
-                    error: remotes.states.get(id)?.error ?? null,
-                  }
-            )
+        ? present.map((id) =>
+            id === ownHostId
+              ? { hostId: id, canopy: ownCanopy, fleet: ownFleet, error: null }
+              : {
+                  hostId: id,
+                  canopy: remotes.states.get(id)?.canopy ?? null,
+                  fleet: remotes.states.get(id)?.fleet ?? null,
+                  error: remotes.states.get(id)?.error ?? null,
+                }
+          )
         : [],
-    [everyHost, participants, awayKey, ownHostId, ownCanopy, ownFleet, remotes.states]
+    [everyHost, present, ownHostId, ownCanopy, ownFleet, remotes.states]
   );
   const merged = useMemo(
     () => (everyHost ? mergeHostReadings(readings) : null),
@@ -292,7 +294,7 @@ export function useCanopyInboxData({
     hostName,
     remote,
     remotes,
-    participants,
+    participants: present,
     api,
     terminalApi,
     readings,

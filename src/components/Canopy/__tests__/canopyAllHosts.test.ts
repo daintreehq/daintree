@@ -597,11 +597,27 @@ describe("createAllHostsRoute", () => {
 });
 
 describe("hostAway", () => {
+  const HANDSHAKE = {
+    version: "1.0.0",
+    commit: "abc",
+    protocolVersion: 1,
+    platform: "linux",
+    arch: "x64",
+  } as const;
+  const DRIVER = {
+    leaseId: 1,
+    endpointId: "e",
+    clientId: "c",
+    clientName: "greg-mbp",
+    isHostLocal: false,
+    acquiredAt: 1,
+  };
+
   it.each([
     ["the window's own host", null, true, false],
     ["a first dial", { status: "connecting", attempt: 1 }, false, false],
     ["a link down before anything was read", { status: "disconnected" }, false, false],
-    ["a link up", { status: "connected", rttMs: 1, handshake: null as never }, true, false],
+    ["a link up", { status: "connected", rttMs: 1, handshake: HANDSHAKE }, true, false],
     ["a link that failed", { status: "unreachable", lastSeenAt: null, detail: null }, false, true],
     ["a dial retried after one failed", { status: "connecting", attempt: 2 }, false, true],
     [
@@ -616,8 +632,15 @@ describe("hostAway", () => {
       {
         status: "version-mismatch",
         mismatch: { kind: "protocol", local: 2, remote: 1 },
-        remote: null as never,
+        remote: HANDSHAKE,
       },
+      true,
+      false,
+    ],
+    ["a host driven from elsewhere", { status: "driven-elsewhere", driver: DRIVER }, false, false],
+    [
+      "a host driven from elsewhere once read",
+      { status: "driven-elsewhere", driver: DRIVER },
       true,
       false,
     ],

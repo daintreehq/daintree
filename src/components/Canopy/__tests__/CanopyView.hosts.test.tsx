@@ -17,6 +17,7 @@ const state = vi.hoisted(() => ({
   retryHostProjects: vi.fn(),
   switchWindowHost: vi.fn(),
   reportError: vi.fn(),
+  readWork: vi.fn(async () => Promise.reject(new Error("no records"))),
 }));
 
 vi.mock("react-dom", async () => {
@@ -44,6 +45,7 @@ vi.mock("@/clients/canopyHostClient", () => ({
   canopyHostClient: {
     invoke: state.invoke,
     release: state.release,
+    readAssistantWork: state.readWork,
     onEvent: (callback: (event: CanopyHostEvent) => void) => {
       state.listeners.add(callback);
       return () => state.listeners.delete(callback);
@@ -752,7 +754,7 @@ describe("the Canopy host picker", () => {
       }),
     ];
     state.invoke.mockRejectedValue(
-      Object.assign(new Error("Host studio is not connected"), { code: "HOST_DISCONNECTED" })
+      new Error("[AppError|HOST_DISCONNECTED] Host studio is not connected")
     );
     installElectron();
     useCanopyStore.setState({ hostId: "studio" });
@@ -761,6 +763,7 @@ describe("the Canopy host picker", () => {
     expect(document.body.textContent).toContain("Can't reach studio-01");
     expect(document.body.textContent).toContain("Unreachable.");
     expect(document.querySelector("[data-canopy-card]")).toBeNull();
+    expect(state.reportError).not.toHaveBeenCalled();
 
     state.invoke.mockClear();
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
@@ -786,7 +789,7 @@ describe("the Canopy host picker", () => {
     expect(state.reportError).not.toHaveBeenCalled();
 
     state.invoke.mockImplementation(async (_hostId: string, channel: string) => {
-      if (channel === "canopy:set-scope") throw new Error("scope refused");
+      if (channel === "canopy:set-scope") throw new Error("[AppError|INTERNAL] scope refused");
       return channel === "fleet:get-snapshot"
         ? remoteFleet
         : channel === "canopy:set-active"
@@ -797,7 +800,7 @@ describe("the Canopy host picker", () => {
     await settle();
     expect(state.reportError).toHaveBeenCalledWith(
       "unhandledrejection",
-      expect.objectContaining({ message: "scope refused" }),
+      expect.objectContaining({ code: "INTERNAL" }),
       expect.anything()
     );
   });
@@ -1112,6 +1115,11 @@ describe("All hosts", () => {
     await settle();
     saysNothingOf("studio-01");
     expect(summaryWords()).toBe("Nothing needs you");
+    // Left out, not let go: its viewer stays open for the link to come back on,
+    // and no assistant's work is read from it meanwhile.
+    expect(state.release).not.toHaveBeenCalled();
+    expect(state.readWork.mock.calls.map((call) => call[0])).toContain("build");
+    expect(state.readWork.mock.calls.map((call) => call[0])).not.toContain("studio");
 
     // Back: the link comes up and says `resync`, and its agents are read and listed.
     state.invoke.mockImplementation(answers);

@@ -82,7 +82,12 @@ import { CANOPY_ROLE_FILTERS, type CanopyRoleFilter } from "./canopyAssistants";
 import { isFullAgentDirectory } from "@shared/types/agentDirectory";
 import { CanopyBulkEnableDialog } from "./CanopyBulkEnableDialog";
 import type { BulkTarget } from "@shared/utils/canopyBulkEnable";
-import { canopyBulkTransport, ownCanopyApi, remoteCanopyApi } from "./canopyHostSource";
+import {
+  canopyBulkTransport,
+  ownCanopyApi,
+  remoteCanopyApi,
+  unlessHostDisconnected,
+} from "./canopyHostSource";
 import { ALL_HOSTS_ID, canopyOwnHostId } from "@/store/canopyStore";
 import { describeHostMenuState, type HostMenuRow } from "@/components/Hosts/hostModel";
 import { isNewWindowClick } from "@/components/Hosts/hostSwitching";
@@ -347,10 +352,13 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
   useEffect(() => {
     if (!isOpen || !showingOwnHost) return;
     const unsubscribe = window.electron.canopy.onSnapshotUpdated(applySnapshot);
-    safeFireAndForget(window.electron.canopy.setActive(true).then(applySnapshot));
+    // A window on another host asks that host, whose link may be down.
+    safeFireAndForget(
+      unlessHostDisconnected(window.electron.canopy.setActive(true).then(applySnapshot))
+    );
     return () => {
       unsubscribe();
-      safeFireAndForget(window.electron.canopy.setActive(false));
+      safeFireAndForget(unlessHostDisconnected(window.electron.canopy.setActive(false)));
     };
   }, [isOpen, showingOwnHost, applySnapshot]);
 
