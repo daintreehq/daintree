@@ -339,7 +339,6 @@ function liveSessionUpdateFor(webContentsId: number): VoiceLiveSessionUpdate {
       hostId,
       projectId: workspaceId,
       projectName: session.projectInfo.name ?? session.workspaceName,
-      provider: session.stats.provider,
       details: session.details,
     },
   };
@@ -1540,7 +1539,6 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // Correction settings are read live from store per-event so mid-session changes apply.
     const settings = getVoiceSettings();
     session.stats.provider = settings.transcriptionProvider;
-    publishLiveSession();
     // Like the keyterms, the rules are the dictionary as it was at the start.
     const rewriteHeardAs = createHeardAsRewriter(collectHeardAsRules(settings.dictionary));
 

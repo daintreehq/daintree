@@ -40,7 +40,6 @@ describe("voiceRecordingStore — session elsewhere (#14601)", () => {
     hostId: "local",
     projectId: "p-a",
     projectName: "Alpha",
-    provider: null,
     details: null,
   };
 

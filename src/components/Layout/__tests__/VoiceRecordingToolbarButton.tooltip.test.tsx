@@ -238,7 +238,6 @@ describe("VoiceRecordingToolbarButton — dictation in another view (#14601)", (
         hostId: "local",
         projectId: "p-a",
         projectName: "Alpha",
-        provider: null,
         details: null,
       },
     });
@@ -273,7 +272,6 @@ describe("VoiceRecordingToolbarButton — dictation in another view (#14601)", (
         hostId: "local",
         projectId: scratchId,
         projectName: null,
-        provider: null,
         details: null,
       },
     });
@@ -292,7 +290,6 @@ describe("VoiceRecordingToolbarButton — dictation in another view (#14601)", (
         hostId: "local",
         projectId: null,
         projectName: null,
-        provider: null,
         details: null,
       },
     });
@@ -313,7 +310,6 @@ describe("VoiceRecordingToolbarButton — dictation in another view (#14601)", (
         hostId: "local",
         projectId: "p-a",
         projectName: "Alpha",
-        provider: null,
         details: null,
       },
     });
@@ -335,7 +331,6 @@ describe("VoiceRecordingToolbarButton — dictation in another view (#14601)", (
         hostId: "local",
         projectId: "p-a",
         projectName: "Alpha",
-        provider: null,
         details: null,
       },
     });
@@ -392,7 +387,6 @@ describe("VoiceRecordingToolbarButton — dictation on another host (#14773)", (
         hostId: "studio-01",
         projectId: "proj-r",
         projectName: "Remote R",
-        provider: null,
         details: null,
       },
     });
@@ -408,7 +402,6 @@ describe("VoiceRecordingToolbarButton — dictation on another host (#14773)", (
         hostId: "studio-01",
         projectId: "proj-r",
         projectName: "Remote R",
-        provider: null,
         details: null,
       },
     });
@@ -424,7 +417,6 @@ describe("VoiceRecordingToolbarButton — dictation on another host (#14773)", (
         hostId: "local",
         projectId: "p-a",
         projectName: "Alpha",
-        provider: null,
         details: null,
       },
     });
@@ -440,7 +432,6 @@ describe("VoiceRecordingToolbarButton — dictation on another host (#14773)", (
         hostId: "studio-09",
         projectId: null,
         projectName: null,
-        provider: null,
         details: null,
       },
     });
@@ -458,7 +449,6 @@ describe("VoiceRecordingToolbarButton — dictation on another host (#14773)", (
         hostId: "studio-01",
         projectId: scratchId,
         projectName: null,
-        provider: null,
         details: null,
       },
     });
@@ -489,6 +479,7 @@ describe("VoiceRecordingToolbarButton — dictation another view owns looks like
     locked: false,
     wordCount: 3,
     transcript: "fix the build",
+    provider: "openai",
     clock: { at: 0, elapsedMs: 5_000, pausedMs: 0, paused: false, autoStop: null },
     ...overrides,
   });
@@ -529,7 +520,6 @@ describe("VoiceRecordingToolbarButton — dictation another view owns looks like
         hostId: pairing.hostId,
         projectId: "p-a",
         projectName: "Alpha",
-        provider: "openai",
         details: value,
       },
     });
@@ -753,7 +743,6 @@ describe("VoiceRecordingToolbarButton polish — issue #8176", () => {
             hostId: "local",
             projectId: "p",
             projectName: "A",
-            provider: null,
             details: null,
           },
         },

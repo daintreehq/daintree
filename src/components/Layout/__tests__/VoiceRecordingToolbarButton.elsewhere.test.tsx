@@ -71,6 +71,7 @@ function snapshot(overrides: Partial<VoiceSessionSnapshot> = {}): VoiceSessionSn
     locked: false,
     wordCount: 4,
     transcript: "fix the flaky test",
+    provider: "deepgram",
     clock: { at: NOW, elapsedMs: 65_000, pausedMs: 0, paused: false, autoStop: null },
     ...overrides,
   };
@@ -116,7 +117,6 @@ function showElsewhere(
     hostId: pairing.hostId,
     projectId: "p-a",
     projectName: "Alpha",
-    provider: "deepgram",
     details,
   };
   act(() => {
@@ -275,8 +275,8 @@ describe("VoiceRecordingToolbarButton — the session panel in a view that doesn
     expect(text).not.toContain("Project");
   });
 
-  it("drops the provider once the owner's session is stopping, as the owner does", () => {
-    showElsewhere(pairings[1]!, snapshot({ phase: "finishing", clock: null }));
+  it("names no provider once the owner's panel names none", () => {
+    showElsewhere(pairings[1]!, snapshot({ phase: "finishing", clock: null, provider: null }));
     render(<VoiceRecordingToolbarButton />);
     openPanel();
 

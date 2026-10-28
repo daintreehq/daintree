@@ -189,6 +189,12 @@ describe("buildVoiceSessionSnapshot", () => {
     expect(build({ clock: null })).toMatchObject({ phase: "finishing", clock: null });
   });
 
+  it("names the provider the owner started on, and none once its clock is gone", () => {
+    recordInto();
+    expect(build({ clock: { ...running, provider: "grok" } })?.provider).toBe("grok");
+    expect(build({ clock: null })?.provider).toBeNull();
+  });
+
   it("passes on the owner's auto-stop warning for the state it is in", () => {
     recordInto("p-1", { idleStopWarning: true, pauseStopWarning: false });
     expect(build()?.stopWarning).toBe(true);
@@ -216,6 +222,7 @@ describe("startVoiceDetailsPublisher", () => {
   let sessionId: string | null;
   let startedAt: number;
   let autoStopAt: number | null;
+  let clockReads: number;
   let accepted: boolean;
   let published: VoicePublishDetailsRequest[];
   let stopPublishing: () => void;
@@ -225,6 +232,7 @@ describe("startVoiceDetailsPublisher", () => {
     startedAt = 100_000;
     sessionId = "s1";
     autoStopAt = null;
+    clockReads = 0;
     accepted = true;
     published = [];
     usePanelStore.setState({ panelsById: { "p-1": claudePane("Claude") } });
@@ -232,13 +240,18 @@ describe("startVoiceDetailsPublisher", () => {
     stopPublishing = startVoiceDetailsPublisher(
       {
         sessionId: () => sessionId,
-        // A clock that runs from `startedAt`, as the service's does.
-        clock: (now) => ({
-          provider: "openai",
-          elapsedMs: now - startedAt,
-          pausedMs: 0,
-          autoStop: autoStopAt === null ? null : { reason: "idle", remainingMs: autoStopAt - now },
-        }),
+        // A clock that runs from `startedAt`, as the service's does. Each
+        // read is one flush of the publisher.
+        clock: (now) => {
+          clockReads++;
+          return {
+            provider: "openai",
+            elapsedMs: now - startedAt,
+            pausedMs: 0,
+            autoStop:
+              autoStopAt === null ? null : { reason: "idle", remainingMs: autoStopAt - now },
+          };
+        },
         hostId: () => "local",
       },
       (request) => {
@@ -309,15 +322,17 @@ describe("startVoiceDetailsPublisher", () => {
     expect(published).toHaveLength(3);
   });
 
-  it("reports the target pane being renamed while nothing else changes", async () => {
+  it("reports the target pane being renamed, and ignores every other pane", async () => {
     nudge();
     await vi.advanceTimersByTimeAsync(VOICE_DETAILS_PUBLISH_MS);
+    const reads = clockReads;
 
-    // Another pane changing is nothing to report.
+    // Another pane changing isn't even looked at.
     usePanelStore.setState({
       panelsById: { ...usePanelStore.getState().panelsById, "p-2": { ...claudePane(), id: "p-2" } },
     });
     await vi.advanceTimersByTimeAsync(VOICE_DETAILS_PUBLISH_MS);
+    expect(clockReads).toBe(reads);
     expect(published).toHaveLength(1);
 
     usePanelStore.setState({

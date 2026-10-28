@@ -3138,7 +3138,6 @@ describe("VoiceRecordingService — a session another view owns (#14601)", () =>
     hostId: "local",
     projectId: "project-a",
     projectName: "Alpha",
-    provider: null,
     details: null as VoiceSessionSnapshot | null,
   };
   // The owner's report, with only its phase mattering here.
@@ -3158,6 +3157,7 @@ describe("VoiceRecordingService — a session another view owns (#14601)", () =>
     locked: false,
     wordCount: 0,
     transcript: "",
+    provider: null,
     clock: null,
   });
 

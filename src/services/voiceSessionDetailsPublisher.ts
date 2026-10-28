@@ -75,6 +75,7 @@ export function buildVoiceSessionSnapshot(
     locked: details.locked,
     wordCount: details.wordCount,
     transcript: details.transcript.slice(-VOICE_SNAPSHOT_TRANSCRIPT_MAX_LENGTH),
+    provider: elapsedMs === null ? null : (options.clock?.provider ?? null),
     clock:
       elapsedMs === null
         ? null
@@ -172,10 +173,13 @@ export function startVoiceDetailsPublisher(
   const unsubscribeVoice = useVoiceRecordingStore.subscribe(schedule);
   // The target pane's title and identity can change while nothing else does
   // (a quiet pause), so only its own changes count.
-  let seenPanel: PanelInstance | undefined;
-  const unsubscribePanels = usePanelStore.subscribe((state) => {
+  const targetPanel = (panelsById: ReturnType<typeof usePanelStore.getState>["panelsById"]) => {
     const panelId = useVoiceRecordingStore.getState().activeTarget?.panelId;
-    const panel = panelId ? state.panelsById[panelId] : undefined;
+    return panelId ? panelsById[panelId] : undefined;
+  };
+  let seenPanel = targetPanel(usePanelStore.getState().panelsById);
+  const unsubscribePanels = usePanelStore.subscribe((state) => {
+    const panel = targetPanel(state.panelsById);
     if (panel === seenPanel) return;
     seenPanel = panel;
     schedule();

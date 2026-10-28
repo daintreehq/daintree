@@ -106,8 +106,6 @@ export interface VoiceSessionElsewhere {
   /** That workspace, a project or a scratch, as its own host knows it. */
   projectId: string | null;
   projectName: string | null;
-  /** The transcription provider, once main has started one for the session. */
-  provider: "openai" | "deepgram" | "grok" | null;
   /** What the owner last reported, or null until its first report lands. */
   details: VoiceSessionSnapshot | null;
 }
@@ -179,6 +177,8 @@ export interface VoiceSessionSnapshot {
   wordCount: number;
   /** The end of the words so far, at most VOICE_SNAPSHOT_TRANSCRIPT_MAX_LENGTH. */
   transcript: string;
+  /** The provider the owner started on, as its panel names it; null with no clock. */
+  provider: "openai" | "deepgram" | "grok" | null;
   /** Null once the session is stopping. */
   clock: VoiceSessionClockAnchor | null;
 }

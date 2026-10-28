@@ -1560,7 +1560,6 @@ describe("voiceInput — a session live in another view (#14601)", () => {
       hostId: "local",
       projectId: "project-a",
       projectName: "Alpha",
-      provider: "openai",
       details: null,
     };
     expect(lastLive(viewB)?.session).toEqual(elsewhere);
@@ -1600,7 +1599,6 @@ describe("voiceInput — a session live in another view (#14601)", () => {
         hostId: "local",
         projectId: "project-a",
         projectName: "Alpha",
-        provider: "openai",
         details: null,
       },
     });
@@ -1881,7 +1879,6 @@ describe("voiceInput — one dictation across hosts (#14773)", () => {
         hostId: "local",
         projectId: "project-a",
         projectName: "Alpha",
-        provider: "openai",
         details: null,
       };
       expect(lastLive(studio1)?.session).toEqual(elsewhere);
@@ -1934,7 +1931,6 @@ describe("voiceInput — one dictation across hosts (#14773)", () => {
         hostId: "studio-01",
         projectId: "proj-r",
         projectName: "Remote R",
-        provider: "openai",
         details: null,
       });
       expect(lastLive(studio1)?.session).toBeNull();
@@ -1993,6 +1989,7 @@ describe("voiceInput — one dictation across hosts (#14773)", () => {
       locked: false,
       wordCount: 3,
       transcript: "fix the build",
+      provider: "openai",
       clock: { at: 1_000, elapsedMs: 7_000, pausedMs: 0, paused: false, autoStop: null },
       ...overrides,
     });
@@ -2062,7 +2059,6 @@ describe("voiceInput — one dictation across hosts (#14773)", () => {
         expect(lastLive(shown)!.revision).toBeGreaterThan(before);
         expect(lastLive(shown)?.session).toMatchObject({
           sessionId: "a",
-          provider: "openai",
           details: details(),
         });
         if (cached) expect(lastLive(cached)?.session).toMatchObject({ details: details() });
