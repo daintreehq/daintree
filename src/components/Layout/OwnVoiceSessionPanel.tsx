@@ -18,15 +18,19 @@ const readLevel = () => useVoiceRecordingStore.getState().audioLevel;
 export function OwnVoiceSessionPanel({
   pauseShortcut,
   stopShortcut,
+  sendShortcut,
   onGoToTarget,
   onTogglePause,
   onStop,
+  onSend,
 }: {
   pauseShortcut?: string;
   stopShortcut?: string;
+  sendShortcut?: string;
   onGoToTarget: () => void;
   onTogglePause: () => void;
   onStop: () => void;
+  onSend: () => void;
 }) {
   const status = useVoiceRecordingStore((state) => state.status);
   const target = useVoiceRecordingStore((state) => state.activeTarget);
@@ -78,6 +82,10 @@ export function OwnVoiceSessionPanel({
       onGoToTarget={onGoToTarget}
       onTogglePause={onTogglePause}
       onStop={onStop}
+      sendShortcut={sendShortcut}
+      onSend={onSend}
+      // Read with the rest each render, which the clock drives once a second.
+      canSend={voiceRecordingService.canSendActiveSession()}
     />
   );
 }

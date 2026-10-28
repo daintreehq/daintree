@@ -437,12 +437,14 @@ export function useVoiceWaitSubmit({
         ownVoice
           ? voiceProjectId
           : (voiceProjectId ?? useProjectStore.getState().currentProject?.id),
-        () => {
+        (options) => {
           if (isDisabledRef.current?.()) {
             void voiceRecordingService.stop("Dictation stopped.", { reason: "send" });
             return;
           }
-          startVoiceWaitSubmit({ spoken: true });
+          // A spoken "send it" unless the session panel's Send asked, which
+          // sends whatever Enter would.
+          startVoiceWaitSubmit({ spoken: options?.spoken ?? true });
         }
       ),
     [voiceId, voiceProjectId, ownVoice, startVoiceWaitSubmit]

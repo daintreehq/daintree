@@ -529,7 +529,7 @@ interface VoiceSessionButtonProps {
  * never carries into the next one.
  */
 // What can take the slot when a session ends: the lock's button or another
-// view's session. The placeholder takes no focus.
+// view's session.
 const VOICE_SLOT_SUCCESSOR_SELECTOR =
   '[data-testid="voice-locked-button"], [data-testid="voice-elsewhere-button"]';
 
@@ -544,6 +544,7 @@ function VoiceSessionButton({
   "data-toolbar-item": dataToolbarItem,
 }: VoiceSessionButtonProps) {
   const [open, setOpen] = useState(false);
+  const sendShortcut = useEffectiveCombo("voiceInput.stopAndSend");
   // Going to the target moves the keyboard there, so the close must not
   // hand it back to the mic. Each opening starts without it: a close the
   // exit never finished doesn't decide the next one.
@@ -559,14 +560,22 @@ function VoiceSessionButton({
   // A layout cleanup, so the focused element is still in the document: whether
   // it shows its ring now decides whether the successor shows one.
   useLayoutEffect(() => {
-    const toolbar = triggerRef.current?.closest('[role="toolbar"]') ?? null;
+    const trigger = triggerRef.current;
+    const toolbar = trigger?.closest('[role="toolbar"]') ?? null;
     return () => {
-      if (!holdsFocusRef.current || !toolbar) return;
+      if (!holdsFocusRef.current || !toolbar || !trigger) return;
       const visible = document.activeElement?.matches(":focus-visible") ?? false;
+      // The placeholder takes no focus, so a slot nothing takes hands it to
+      // the toolbar item beside it, read while the mic is still among them.
+      const items = Array.from(toolbar.querySelectorAll<HTMLElement>("[data-toolbar-item]"));
+      const at = items.indexOf(trigger);
+      const neighbour = at < 0 ? null : (items[at - 1] ?? items[at + 1] ?? null);
       requestAnimationFrame(() => {
         const active = document.activeElement;
         if (active && active !== document.body) return;
-        const successor = toolbar.querySelector<HTMLElement>(VOICE_SLOT_SUCCESSOR_SELECTOR);
+        const successor =
+          toolbar.querySelector<HTMLElement>(VOICE_SLOT_SUCCESSOR_SELECTOR) ??
+          (neighbour?.isConnected ? neighbour : null);
         if (!successor) return;
         // A pointer user didn't ask for the successor's tooltip either.
         if (!visible) armTooltipFocusSuppression();
@@ -652,7 +661,8 @@ function VoiceSessionButton({
       <PopoverContent
         side="bottom"
         align="end"
-        className="w-auto p-0"
+        // A short window scrolls the panel rather than cutting its actions off.
+        className="max-h-[var(--radix-popover-content-available-height)] w-auto overflow-y-auto p-0"
         aria-label="Dictation session"
         {...focusHandlers}
         onCloseAutoFocus={(event) => {
@@ -670,9 +680,16 @@ function VoiceSessionButton({
             void voiceRecordingService.goToActiveTarget();
           }}
           onTogglePause={() => voiceRecordingService.togglePause()}
+          sendShortcut={sendShortcut}
           onStop={() => {
+            // The stop takes the keyboard back to the dictation, as its key does.
+            leavingRef.current = true;
             setOpen(false);
             void voiceRecordingService.stopActiveSession();
+          }}
+          onSend={() => {
+            setOpen(false);
+            void voiceRecordingService.stopAndSend();
           }}
         />
       </PopoverContent>

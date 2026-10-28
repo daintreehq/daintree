@@ -102,6 +102,21 @@ export function registerVoiceActions(actions: ActionRegistry): void {
     },
   }));
 
+  actions.set("voiceInput.stopAndSend", () => ({
+    id: "voiceInput.stopAndSend",
+    title: "Stop voice dictation and send",
+    description:
+      "Stop dictation and send the prompt it was dictating into, the way Enter would, without going to its terminal",
+    category: "voice",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    keywords: ["dictate", "mic", "speech", "submit", "send", "stop"],
+    run: async () => {
+      await voiceRecordingService.stopAndSend();
+    },
+  }));
+
   actions.set("voiceInput.lockTarget", () => ({
     id: "voiceInput.lockTarget",
     title: "Lock voice dictation to panel",

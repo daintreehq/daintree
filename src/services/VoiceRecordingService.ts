@@ -189,6 +189,11 @@ const spokenSendKey = (panelId: string, projectId: string | undefined) =>
 
 type StartStepLogger = (step: string, details?: Record<string, unknown>) => void;
 
+/** How a composer's send was asked for: a spoken "send it" holds back a too-short draft. */
+export interface VoiceSendOptions {
+  spoken?: boolean;
+}
+
 /** The running session's clock, as {@link VoiceRecordingService.getSessionClock} reads it. */
 export interface VoiceSessionClock {
   /** The provider the session started on. */
@@ -833,7 +838,7 @@ class VoiceRecordingService {
   // The composer showing each panel's draft, which owns its send, keyed by
   // panel and draft scope: an isolated composer on the same terminal keeps a
   // draft of its own and must not take the pane's send.
-  private spokenSendHandlers = new Map<string, () => void>();
+  private spokenSendHandlers = new Map<string, (options?: VoiceSendOptions) => void>();
   private pendingRewrites = new Set<PendingRewrite>();
   // Null until the settings have been read: a rewrite then goes ahead and main
   // reports a missing key.
@@ -5391,13 +5396,39 @@ class VoiceRecordingService {
   }
 
   /**
-   * The session panel's Stop: the user's stop for whatever this view is
-   * recording, the same one the dictation key makes, and nothing when there
-   * is nothing left to stop, so a late click can't start another session.
+   * The session panel's Stop: the dictation key's stop for whatever this view
+   * is recording, taking the person back to it as the key does (#14791), and
+   * nothing when there is nothing left to stop, so a late click can't start
+   * another session.
    */
   stopActiveSession(): Promise<void> {
     this.initialize();
-    return this.stopAnySession() ?? Promise.resolve();
+    return this.stopAnySession({ pressedHere: true }) ?? Promise.resolve();
+  }
+
+  /**
+   * Stop and send, staying where the person is: the session panel's Send and
+   * its key. Its composer sends as Enter would. Without one mounted to send
+   * from, the dictation still stops and its words stay in the draft; another
+   * view's session stops there.
+   */
+  async stopAndSend(): Promise<void> {
+    this.initialize();
+    if (this.sendActiveSession()) return;
+    const stopping = this.stopAnySession();
+    if (stopping) {
+      await stopping;
+      notify({
+        type: "info",
+        title: "Dictation stopped",
+        message:
+          "Its prompt wasn't sent: the composer isn't open here. The words are in its draft.",
+        context: { eventKind: "uiFeedback" },
+      });
+      return;
+    }
+    const elsewhere = useVoiceRecordingStore.getState().sessionElsewhere;
+    if (elsewhere) await this.stopSessionElsewhere(elsewhere, false);
   }
 
   /**
@@ -5437,7 +5468,11 @@ class VoiceRecordingService {
    * "send it". The handler runs Enter's dictation path: stop, wait for the
    * correction, send.
    */
-  onSpokenSend(panelId: string, projectId: string | undefined, handler: () => void): () => void {
+  onSpokenSend(
+    panelId: string,
+    projectId: string | undefined,
+    handler: (options?: VoiceSendOptions) => void
+  ): () => void {
     const key = spokenSendKey(panelId, projectId);
     this.spokenSendHandlers.set(key, handler);
     return () => {
@@ -5445,6 +5480,33 @@ class VoiceRecordingService {
         this.spokenSendHandlers.delete(key);
       }
     };
+  }
+
+  /** Whether the session panel's Send has a composer to send from. */
+  canSendActiveSession(): boolean {
+    return this.activeSessionSend() !== null;
+  }
+
+  /**
+   * The session panel's Send: the dictation stops and its composer sends the
+   * draft as Enter would, without the person going there. Nothing happens
+   * when no composer for it is mounted to send from.
+   */
+  sendActiveSession(): boolean {
+    this.initialize();
+    const send = this.activeSessionSend();
+    if (!send) return false;
+    send({ spoken: false });
+    return true;
+  }
+
+  private activeSessionSend(): ((options?: VoiceSendOptions) => void) | null {
+    const { activeTarget, status } = useVoiceRecordingStore.getState();
+    if (!activeTarget || status === "finishing" || !isActiveVoiceSession(status)) return null;
+    return (
+      this.spokenSendHandlers.get(spokenSendKey(activeTarget.panelId, activeTarget.projectId)) ??
+      null
+    );
   }
 
   // A stop is the surest end of speech there is, so a send its drain lands goes

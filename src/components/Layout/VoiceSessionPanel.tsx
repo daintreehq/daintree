@@ -1,11 +1,12 @@
-import { useEffect, useRef, type ReactNode } from "react";
-import { Pause, Play, Square } from "lucide-react";
+import { useEffect, useId, useRef, type ReactNode } from "react";
+import { ChevronRight, CornerDownLeft, Pause, Play, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { KbdChord } from "@/components/ui/Kbd";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { POPOVER_ROW_HOVER_CLASS } from "@/components/ui/popoverHeader";
 import { cn } from "@/lib/utils";
 import { pluralize } from "@/lib/pluralize";
+import { SEVERITY_VISUAL } from "@/lib/statusSeverity";
 import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
 import type { TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import type { VoiceMicSignal } from "@/store/voiceRecordingStore";
@@ -56,14 +57,28 @@ export interface VoiceSessionPanelProps {
   onGoToTarget: () => void;
   onTogglePause: () => void;
   onStop: () => void;
+  /**
+   * Stop, and send the draft from its composer without going there. Left out
+   * where the view can't send for the session; a rewrite instruction has
+   * nothing to send.
+   */
+  onSend?: () => void;
+  /** Whether the composer is there to send from right now. */
+  canSend?: boolean;
+  sendShortcut?: string;
 }
 
-const TRANSCRIPT_TAIL_CHARS = 160;
+// Enough for three lines at the panel's width: what was just heard, never
+// the whole draft.
+const TRANSCRIPT_TAIL_CHARS = 240;
 // The meter's floor and smoothing, matched to the toolbar's bars so the two
 // agree on what counts as sound.
 const NOISE_FLOOR = 0.04;
 const TAU_ATTACK = 0.015;
 const TAU_RELEASE = 0.08;
+const METER_SEGMENTS = 10;
+// The last stretch before an auto-stop, when its line steps up to primary ink.
+const AUTO_STOP_SOON_MS = 10_000;
 
 function formatClock(ms: number): string {
   const seconds = Math.floor(ms / 1000);
@@ -71,22 +86,58 @@ function formatClock(ms: number): string {
   return `${minutes}:${(seconds % 60).toString().padStart(2, "0")}`;
 }
 
-function phaseLabel(phase: VoiceSessionPhase, micSignal: VoiceMicSignal): string {
+function hasNoAudio({ micSignal, micNotice }: VoiceSessionDetails): boolean {
+  return micSignal === "silent" || micNotice?.kind === "silent" || micNotice?.kind === "lost";
+}
+
+function phaseLabel(details: VoiceSessionDetails): string {
+  const { phase, micSignal, micNotice, providerName } = details;
   switch (phase) {
     case "arming":
       return "Arming";
     case "connecting":
     case "recording":
-      if (micSignal === "silent") return "No audio";
-      if (micSignal !== "live") return "Starting microphone";
-      return phase === "connecting" ? "Listening · connecting" : "Listening";
+      if (micNotice?.kind === "lost") return "Microphone disconnected";
+      if (hasNoAudio(details)) return "No audio";
+      return micSignal === "live" ? "Listening" : "Starting microphone";
     case "paused":
       return "Paused";
     case "reconnecting":
-      return "Reconnecting";
+      return providerName ? `Reconnecting to ${providerName}` : "Reconnecting";
     case "finishing":
       return "Finishing transcription";
   }
+}
+
+/** What is wrong with the mic, when something is. */
+function micProblem(details: VoiceSessionDetails): string | null {
+  const { phase, micLabel, micNotice } = details;
+  const mic = micLabel ?? "the microphone";
+  if (phase !== "connecting" && phase !== "recording") return null;
+  if (micNotice?.kind === "lost") return `${mic} stopped delivering audio`;
+  if (!hasNoAudio(details)) return null;
+  return micNotice?.bluetooth
+    ? `Nothing heard from ${mic}. Bluetooth mics can take a moment to start.`
+    : `Nothing heard from ${mic}. Check the selected microphone.`;
+}
+
+/** The line under the state: what is under way, and what happens next. */
+function phaseDetail(details: VoiceSessionDetails): string | null {
+  const { phase, micSignal, providerName, pausedMs, autoStop } = details;
+  const parts: string[] = [];
+  if (phase === "connecting" && micSignal === "live" && providerName) {
+    parts.push(`Connecting to ${providerName}`);
+  }
+  if (phase === "paused" && pausedMs >= 1000) parts.push(`Paused ${formatClock(pausedMs)}`);
+  if (autoStop) {
+    const remaining = formatClock(autoStop.remainingMs);
+    parts.push(
+      autoStop.reason === "pause"
+        ? `Stops in ${remaining} unless resumed`
+        : `Stops in ${remaining} without new words`
+    );
+  }
+  return parts.length ? parts.join(" · ") : null;
 }
 
 const KIND_LABEL: Record<VoiceSessionKind, string> = {
@@ -95,39 +146,25 @@ const KIND_LABEL: Record<VoiceSessionKind, string> = {
   "canopy-reply": "Canopy reply",
 };
 
-function micStatus({
-  micSignal,
-  micNotice,
-}: Pick<VoiceSessionDetails, "micSignal" | "micNotice">): string {
+function micStatus(details: VoiceSessionDetails): string {
+  const { phase, micSignal, micNotice } = details;
+  if (phase === "paused") return "Paused";
+  if (phase === "finishing") return "Stopped";
   if (micNotice?.kind === "lost") return "Disconnected";
-  if (micSignal === "silent" || micNotice?.kind === "silent") {
-    return micNotice?.bluetooth ? "No audio · Bluetooth" : "No audio";
-  }
+  if (hasNoAudio(details)) return micNotice?.bluetooth ? "No audio · Bluetooth" : "No audio";
   const signal = micSignal === "live" ? "Delivering audio" : "Waiting for audio";
   return micNotice?.kind === "fallback" ? `${signal} · fallback` : signal;
 }
 
-function autoStopLabel(autoStop: NonNullable<VoiceSessionDetails["autoStop"]>): string {
-  const remaining = formatClock(autoStop.remainingMs);
-  return autoStop.reason === "pause"
-    ? `In ${remaining} unless resumed`
-    : `In ${remaining} without new words`;
-}
-
 /**
- * The input level as a bar that fills from the left, written from a RAF loop
- * straight to its transform so the panel never re-renders per frame.
+ * The input level as a row of segments lit from the left, written from a RAF
+ * loop straight to their opacity so the panel never re-renders per frame.
+ * Segments rather than one bar, so it can't read as progress.
  */
-function VoiceSessionLevel({ active, readLevel }: { active: boolean; readLevel: () => number }) {
-  const fillRef = useRef<HTMLSpanElement | null>(null);
+function VoiceSessionLevel({ readLevel }: { readLevel: () => number }) {
+  const segmentRefs = useRef<Array<HTMLSpanElement | null>>([]);
 
   useEffect(() => {
-    const fill = fillRef.current;
-    if (!fill) return;
-    if (!active) {
-      fill.style.transform = "scaleX(0)";
-      return;
-    }
     let last = performance.now();
     let envelope = 0;
     let rafId = 0;
@@ -142,40 +179,49 @@ function VoiceSessionLevel({ active, readLevel }: { active: boolean; readLevel: 
         const tau = target > envelope ? TAU_ATTACK : TAU_RELEASE;
         envelope += (target - envelope) * (1 - Math.exp(-gap / tau));
       }
-      fill.style.transform = `scaleX(${Math.min(1, envelope).toFixed(3)})`;
+      const lit = Math.round(Math.min(1, envelope) * METER_SEGMENTS);
+      segmentRefs.current.forEach((segment, i) => {
+        if (segment) segment.dataset.lit = i < lit ? "true" : "false";
+      });
       rafId = requestAnimationFrame(tick);
     };
     rafId = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafId);
-  }, [active, readLevel]);
+  }, [readLevel]);
 
   return (
     <span
       aria-hidden="true"
-      className="relative block h-1 w-full overflow-hidden rounded-full bg-overlay-subtle"
+      className="flex h-3 items-center gap-0.5"
       data-testid="voice-session-level"
     >
-      <span
-        ref={fillRef}
-        className="absolute inset-0 origin-left rounded-full bg-text-secondary"
-        style={{ transform: "scaleX(0)" }}
-      />
+      {Array.from({ length: METER_SEGMENTS }, (_, i) => (
+        <span
+          key={i}
+          ref={(el) => {
+            segmentRefs.current[i] = el;
+          }}
+          data-lit="false"
+          className="h-full w-1 rounded-full bg-overlay-strong data-[lit=true]:bg-text-primary forced-colors:bg-[GrayText] forced-colors:data-[lit=true]:bg-[CanvasText]"
+        />
+      ))}
     </span>
   );
 }
 
 function DetailRow({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="grid grid-cols-[6.5rem_1fr] gap-2 text-xs">
+    <div className="grid grid-cols-[6rem_1fr] gap-2">
       <dt className="text-text-secondary">{label}</dt>
-      <dd className="min-w-0 truncate text-text-primary">{children}</dd>
+      <dd className="min-w-0 break-words text-text-secondary">{children}</dd>
     </div>
   );
 }
 
 /**
  * The toolbar mic's control panel for a live dictation (#14920): where the
- * words go, everything known about the session, and its pause and stop.
+ * words go, what the session is doing, what it has heard, its pause and stop,
+ * and then everything else known about it.
  */
 export function VoiceSessionPanel({
   details,
@@ -185,6 +231,9 @@ export function VoiceSessionPanel({
   onGoToTarget,
   onTogglePause,
   onStop,
+  onSend,
+  canSend = false,
+  sendShortcut,
 }: VoiceSessionPanelProps) {
   const {
     phase,
@@ -198,7 +247,6 @@ export function VoiceSessionPanel({
     micSignal,
     providerName,
     elapsedMs,
-    pausedMs,
     autoStop,
     correctionEnabled,
     locked,
@@ -208,51 +256,215 @@ export function VoiceSessionPanel({
   const isPaused = phase === "paused";
   const canPause = phase === "recording" || isPaused;
   const canStop = phase !== "finishing";
-  const levelActive = (phase === "recording" || phase === "connecting") && micSignal === "live";
+  const showSend = onSend !== undefined && kind !== "rewrite";
+  const noAudio = (phase === "connecting" || phase === "recording") && hasNoAudio(details);
+  const levelActive =
+    (phase === "recording" || phase === "connecting" || phase === "reconnecting") &&
+    micSignal === "live" &&
+    !noAudio;
+  const place = [hostName, projectName, worktreeLabel].filter(Boolean).join(" · ");
+  const problem = micProblem(details);
+  const detail = phaseDetail(details);
+  const placeId = useId();
+  const sendNoteId = useId();
+  // Send there but not possible right now: Stop is the action left to make.
+  const sendBlocked = showSend && !canSend && phase !== "finishing";
+  const stopIsPrimary = !showSend || sendBlocked;
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const targetRef = useRef<HTMLButtonElement | null>(null);
+  const lastFocusedRef = useRef<Element | null>(null);
+
+  // A phase change can disable the control the keyboard is on (Pause while
+  // reconnecting, everything while finishing), which drops focus to the
+  // page; the top row, always there, takes it instead.
+  useEffect(() => {
+    const last = lastFocusedRef.current;
+    if (!(last instanceof HTMLButtonElement) || !last.disabled) return;
+    if (!rootRef.current?.contains(last)) return;
+    const active = document.activeElement;
+    if (active && active !== document.body && active !== last) return;
+    targetRef.current?.focus({ preventScroll: true });
+  }, [phase, canSend]);
+  const stopsSoon = autoStop !== null && autoStop.remainingMs <= AUTO_STOP_SOON_MS;
   const tail =
     transcript.length > TRANSCRIPT_TAIL_CHARS
       ? `…${transcript.slice(-TRANSCRIPT_TAIL_CHARS).trimStart()}`
       : transcript;
+  const WarningIcon = SEVERITY_VISUAL.warning.Icon;
 
   return (
-    <div className="flex w-80 flex-col" data-testid="voice-session-panel" data-phase={phase}>
+    <div
+      ref={rootRef}
+      className="flex w-80 flex-col"
+      data-testid="voice-session-panel"
+      data-phase={phase}
+      onFocus={(event) => {
+        lastFocusedRef.current = event.target;
+      }}
+    >
       <button
+        ref={targetRef}
         type="button"
         onClick={onGoToTarget}
         className={cn(
-          "flex items-center gap-2 border-b border-divider px-3 py-2 text-left",
+          "flex items-center gap-2.5 px-3 py-2.5 text-left outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
           POPOVER_ROW_HOVER_CLASS
         )}
         aria-label={`Go to ${targetTitle}`}
+        aria-describedby={place ? placeId : undefined}
         data-testid="voice-session-target"
       >
-        <span className="flex h-4 w-4 shrink-0 items-center justify-center text-text-secondary">
+        <span className="flex h-4 w-4 shrink-0 items-center justify-center self-start pt-0.5 text-text-secondary">
           <TerminalIcon chrome={targetChrome ?? undefined} />
         </span>
-        <span className="min-w-0 flex-1 truncate text-sm font-medium text-text-primary">
-          {targetTitle}
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="line-clamp-2 break-words text-sm font-medium text-text-primary">
+            {targetTitle}
+          </span>
+          {place && (
+            <span
+              id={placeId}
+              className="break-words text-xs text-text-secondary"
+              data-testid="voice-session-place"
+            >
+              {place}
+            </span>
+          )}
         </span>
+        <ChevronRight className="h-4 w-4 shrink-0 text-text-secondary" aria-hidden="true" />
       </button>
 
-      <div className="flex flex-col gap-2 px-3 py-2">
-        <div className="flex items-center justify-between gap-2 text-xs">
-          <span className="font-medium text-text-primary" data-testid="voice-session-state">
-            {phaseLabel(phase, micSignal)}
+      <div className="flex flex-col gap-1 border-t border-divider px-3 py-2.5">
+        <div className="flex items-center gap-2">
+          {noAudio && (
+            <WarningIcon
+              className={cn("h-3.5 w-3.5 shrink-0", SEVERITY_VISUAL.warning.toneClass)}
+              aria-hidden="true"
+            />
+          )}
+          <span
+            className="min-w-0 flex-1 truncate text-sm font-medium text-text-primary"
+            data-testid="voice-session-state"
+          >
+            {phaseLabel(details)}
           </span>
+          {levelActive && <VoiceSessionLevel readLevel={readLevel} />}
           {elapsedMs !== null && (
-            <span className="tabular-nums text-text-secondary" data-testid="voice-session-elapsed">
+            <span
+              className="shrink-0 text-xs tabular-nums text-text-secondary"
+              data-testid="voice-session-elapsed"
+            >
               {formatClock(elapsedMs)}
-              {pausedMs >= 1000 && ` · ${formatClock(pausedMs)} paused`}
             </span>
           )}
         </div>
-        <VoiceSessionLevel active={levelActive} readLevel={readLevel} />
+        {problem && (
+          <span className="text-xs text-text-secondary" data-testid="voice-session-problem">
+            {problem}
+          </span>
+        )}
+        {detail && (
+          <span
+            className={cn(
+              "text-xs",
+              stopsSoon ? "font-medium text-text-primary" : "text-text-secondary"
+            )}
+            data-testid="voice-session-detail"
+          >
+            {detail}
+          </span>
+        )}
       </div>
 
-      <dl className="flex flex-col gap-1 border-t border-divider px-3 py-2">
-        {hostName && <DetailRow label="Host">{hostName}</DetailRow>}
-        {projectName && <DetailRow label="Project">{projectName}</DetailRow>}
-        {worktreeLabel && <DetailRow label="Worktree">{worktreeLabel}</DetailRow>}
+      <div className="flex flex-col gap-1 border-t border-divider px-3 py-2.5">
+        <span className="text-xs text-text-secondary" data-testid="voice-session-words">
+          {pluralize(wordCount, "word")}
+        </span>
+        {tail ? (
+          <div className="flex max-h-[3.75rem] flex-col justify-end overflow-hidden">
+            <p
+              className="break-words text-xs leading-5 text-text-primary select-text"
+              data-testid="voice-session-transcript"
+            >
+              {tail}
+            </p>
+          </div>
+        ) : (
+          <span className="text-xs text-text-secondary">Nothing heard yet</span>
+        )}
+      </div>
+
+      <div className="flex flex-col gap-1.5 border-t border-divider px-3 py-2.5">
+        {showSend && (
+          <Button
+            variant="contrast"
+            size="sm"
+            className="w-full"
+            onClick={onSend}
+            disabled={!canSend || phase === "finishing"}
+            aria-describedby={sendBlocked ? sendNoteId : undefined}
+            data-testid="voice-session-send"
+          >
+            <CornerDownLeft />
+            Stop and send
+            {sendShortcut && (
+              <KbdChord
+                shortcut={sendShortcut}
+                density="compact"
+                foreground="inverse"
+                className="ml-auto"
+              />
+            )}
+          </Button>
+        )}
+        {sendBlocked && (
+          <span
+            id={sendNoteId}
+            className="text-xs text-text-secondary"
+            data-testid="voice-session-send-note"
+          >
+            Its composer isn't open, so it can't send from here
+          </span>
+        )}
+        {/* Wraps when spelled-out shortcuts (Ctrl+Shift+Space) need the room. */}
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="flex-[1_1_auto] justify-start"
+            onClick={onTogglePause}
+            disabled={!canPause}
+            data-testid="voice-session-pause"
+          >
+            {isPaused ? <Play /> : <Pause />}
+            {isPaused ? "Resume" : "Pause"}
+            {pauseShortcut && (
+              <KbdChord shortcut={pauseShortcut} density="compact" className="ml-auto" />
+            )}
+          </Button>
+          <Button
+            variant={stopIsPrimary ? "contrast" : "ghost"}
+            size="sm"
+            className="flex-[1_1_auto] justify-start"
+            onClick={onStop}
+            disabled={!canStop}
+            data-testid="voice-session-stop"
+          >
+            <Square className="fill-current" />
+            Stop and return
+            {stopShortcut && (
+              <KbdChord
+                shortcut={stopShortcut}
+                density="compact"
+                foreground={stopIsPrimary ? "inverse" : "secondary"}
+                className="ml-auto"
+              />
+            )}
+          </Button>
+        </div>
+      </div>
+
+      <dl className="flex flex-col gap-1 border-t border-divider px-3 py-2.5 text-xs">
         <DetailRow label="Microphone">{micLabel ?? "Default microphone"}</DetailRow>
         <DetailRow label="Audio">
           <span data-testid="voice-session-mic">{micStatus(details)}</span>
@@ -260,52 +472,8 @@ export function VoiceSessionPanel({
         {providerName && <DetailRow label="Transcription">{providerName}</DetailRow>}
         <DetailRow label="Type">{KIND_LABEL[kind]}</DetailRow>
         <DetailRow label="AI correction">{correctionEnabled ? "On" : "Off"}</DetailRow>
-        <DetailRow label="Target">{locked ? "Locked" : "Not locked"}</DetailRow>
-        {autoStop && (
-          <DetailRow label="Auto-stop">
-            <span data-testid="voice-session-auto-stop">{autoStopLabel(autoStop)}</span>
-          </DetailRow>
-        )}
+        <DetailRow label="Target lock">{locked ? "On" : "Off"}</DetailRow>
       </dl>
-
-      <div className="flex flex-col gap-1 border-t border-divider px-3 py-2">
-        <span className="text-xs text-text-secondary" data-testid="voice-session-words">
-          {pluralize(wordCount, "word")}
-        </span>
-        {tail && (
-          <p
-            className="line-clamp-3 text-xs text-text-primary select-text"
-            data-testid="voice-session-transcript"
-          >
-            {tail}
-          </p>
-        )}
-      </div>
-
-      <div className="flex items-center justify-end gap-2 border-t border-divider px-3 py-2">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onTogglePause}
-          disabled={!canPause}
-          data-testid="voice-session-pause"
-        >
-          {isPaused ? <Play /> : <Pause />}
-          {isPaused ? "Resume" : "Pause"}
-          {pauseShortcut && <KbdChord shortcut={pauseShortcut} density="compact" />}
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={onStop}
-          disabled={!canStop}
-          data-testid="voice-session-stop"
-        >
-          <Square />
-          Stop
-          {stopShortcut && <KbdChord shortcut={stopShortcut} density="compact" />}
-        </Button>
-      </div>
     </div>
   );
 }

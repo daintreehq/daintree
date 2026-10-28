@@ -217,6 +217,7 @@ export type BuiltInKeyAction =
   | "voiceInput.toggleAssistant"
   | "voiceInput.rewriteSelection"
   | "voiceInput.togglePause"
+  | "voiceInput.stopAndSend"
   | "voiceInput.lockTarget"
   | "voiceInput.unlockTarget"
   | "voiceInput.recallRecentTarget"
@@ -413,6 +414,7 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "voiceInput.toggleAssistant",
   "voiceInput.rewriteSelection",
   "voiceInput.togglePause",
+  "voiceInput.stopAndSend",
   "voiceInput.lockTarget",
   "voiceInput.unlockTarget",
   "voiceInput.recallRecentTarget",
