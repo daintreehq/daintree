@@ -88,8 +88,12 @@ export function buildInputBarTheme(theme: ITheme): Extension {
       ".cm-placeholder": {
         color: `var(--ib-placeholder, ${c.placeholder})`,
       },
+      // The clip reaches a few pixels left of the text, so a caret drawn
+      // across a line's first boundary paints whole; the text stays put.
       ".cm-scroller": {
         overflow: "hidden",
+        paddingLeft: "3px",
+        marginLeft: "-3px",
       },
       ".cm-line": {
         padding: "0",
@@ -201,7 +205,7 @@ export function buildInputBarTheme(theme: ITheme): Extension {
       "@media (prefers-reduced-motion: reduce)": {
         ".cm-chip-remove": { transition: "none" },
         // `.cm-content` outranks the live rule further down.
-        '.cm-content .cm-voice-caret[data-phase="live"]::after': { opacity: "1" },
+        '.cm-content .cm-voice-caret[data-phase="live"]': { opacity: "1" },
       },
       ".cm-diff-chip": {
         ...chipStyle,
@@ -304,40 +308,81 @@ export function buildInputBarTheme(theme: ITheme): Extension {
           borderColor: c.successColor,
         },
       },
-      // Where dictation writes (`voiceCaret`). An empty inline with the line
-      // drawn out of flow, so no text moves. Dotted while the mic comes up or the session
-      // holds, solid once it hears, and only the live caret follows the
-      // voice, by opacity alone; reduced motion holds it at full.
+      // Where dictation writes (`voiceCaret`). An empty inline with the caret
+      // drawn out of flow, so no text moves. The flag on its head is what sets
+      // it apart from the keyboard's caret in every phase, blinking or not;
+      // the stem says the phase: dashed while the mic comes up, solid once it
+      // hears, cut to a corner in the held ink while the session holds, which
+      // keeps the place without claiming the line. Only the live caret
+      // follows the voice, by opacity alone; reduced motion holds it.
       ".cm-voice-caret": {
         position: "relative",
         pointerEvents: "none",
+        "--cm-voice-caret-ink": c.voiceSignal,
       },
-      ".cm-voice-caret::after": {
+      ".cm-voice-caret::before, .cm-voice-caret::after": {
         content: '""',
         position: "absolute",
         top: "0",
-        bottom: "0",
         left: "-1px",
-        borderLeft: `2px dotted ${c.voiceSignal}`,
+        backgroundColor: "var(--cm-voice-caret-ink)",
+      },
+      ".cm-voice-caret::before": {
+        width: "6px",
+        height: "2px",
+      },
+      // Even dashes from a gradient: a dotted border bunches its dots at the
+      // ends of a 20px line and reads as a colon after the word.
+      ".cm-voice-caret::after": {
+        bottom: "0",
+        width: "2px",
+        backgroundColor: "transparent",
+        backgroundImage:
+          "repeating-linear-gradient(to bottom, var(--cm-voice-caret-ink) 0 3px, transparent 3px 5px)",
+        backgroundPosition: "0 1px",
+      },
+      '.cm-voice-caret[data-phase="held"]': {
+        "--cm-voice-caret-ink": c.voiceHeld,
       },
       '.cm-voice-caret[data-phase="held"]::after': {
-        borderLeftColor: c.voiceHeld,
+        bottom: "auto",
+        height: "8px",
+        backgroundImage: "none",
+        backgroundColor: "var(--cm-voice-caret-ink)",
       },
       // The level comes in raw, about once a frame; the transition is what
       // smooths it, so the caret breathes with the voice rather than flickers.
-      '.cm-voice-caret[data-phase="live"]::after': {
-        borderLeftStyle: "solid",
-        opacity: `calc(0.55 + 0.45 * var(${VOICE_CARET_LEVEL_PROPERTY}, 1))`,
+      '.cm-voice-caret[data-phase="live"]': {
+        opacity: `calc(${c.voiceCaretFloor} + ${1 - c.voiceCaretFloor} * var(${VOICE_CARET_LEVEL_PROPERTY}, 1))`,
         transition: `opacity ${DURATION_100}ms linear`,
       },
-      'body[data-reduce-animations="true"] & .cm-voice-caret::after, body[data-performance-mode="true"] & .cm-voice-caret::after':
+      '.cm-voice-caret[data-phase="live"]::after': {
+        backgroundImage: "none",
+        backgroundColor: "var(--cm-voice-caret-ink)",
+      },
+      'body[data-reduce-animations="true"] & .cm-voice-caret, body[data-performance-mode="true"] & .cm-voice-caret':
         { opacity: "1" },
       "&[data-voice-caret-covers] .cm-cursorLayer": {
         visibility: "hidden",
       },
+      // System inks replace author colours and gradients, so the phases are
+      // borders: dotted CanvasText starting, solid Highlight live, a GrayText
+      // corner held.
       "@media (forced-colors: active)": {
-        ".cm-voice-caret::after": { borderLeftColor: "CanvasText" },
-        '.cm-voice-caret[data-phase="live"]::after': { borderLeftColor: "Highlight", opacity: "1" },
+        ".cm-voice-caret::before, .cm-voice-caret::after": { background: "none" },
+        ".cm-voice-caret::before": { height: "0", borderTop: "2px solid CanvasText" },
+        ".cm-voice-caret::after": { width: "0", borderLeft: "2px dotted CanvasText" },
+        '.cm-voice-caret[data-phase="live"]': { opacity: "1" },
+        '.cm-voice-caret[data-phase="live"]::before, .cm-voice-caret[data-phase="live"]::after': {
+          borderColor: "Highlight",
+          background: "none",
+        },
+        '.cm-voice-caret[data-phase="live"]::after': { borderLeftStyle: "solid" },
+        '.cm-voice-caret[data-phase="held"]::before, .cm-voice-caret[data-phase="held"]::after': {
+          borderColor: "GrayText",
+          background: "none",
+        },
+        '.cm-voice-caret[data-phase="held"]::after': { borderLeftStyle: "solid" },
       },
     },
     { dark: true }

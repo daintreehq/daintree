@@ -184,7 +184,9 @@ class VoiceCaretView {
       return;
     }
     const main = view.state.selection.main;
-    this.covers = view.hasFocus && main.empty && main.head === at.pos;
+    // Past a preview the two carets share a position but not a spot: the
+    // keyboard's stays before the grey words, where typing goes.
+    this.covers = view.hasFocus && main.empty && main.head === at.pos && !at.afterPreview;
     this.decorations = Decoration.set(
       Decoration.widget({
         widget: CARET_WIDGETS[at.phase],
