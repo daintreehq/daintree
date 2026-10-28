@@ -4,6 +4,7 @@ import { act, renderHook } from "@testing-library/react";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import {
+  currentVoiceCaretEffects,
   dictationFollowField,
   interimWidgetField,
   pendingAIField,
@@ -396,6 +397,17 @@ describe("useVoiceDecorations", () => {
         useVoiceRecordingStore.getState().setMicSignal("live");
       });
       expect(caret(view)).toBeNull();
+    });
+
+    it("leaves the session's caret where a popped stash can find it", () => {
+      useTerminalInputStore.getState().setDraftInput(PANEL, DICTATED);
+      const view = mountCaret(DICTATED);
+      startDictation();
+      expect(currentVoiceCaretEffects(view).map((effect) => effect.value.phase)).toEqual([
+        "starting",
+      ]);
+      act(() => useVoiceRecordingStore.getState().finishSession());
+      expect(currentVoiceCaretEffects(view)).toEqual([]);
     });
 
     it("draws none for a session writing to another composer", () => {
