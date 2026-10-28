@@ -17,7 +17,7 @@ const state = vi.hoisted(() => ({
   retryHostProjects: vi.fn(),
   switchWindowHost: vi.fn(),
   reportError: vi.fn(),
-  readWork: vi.fn(async () => Promise.reject(new Error("no records"))),
+  readWork: vi.fn(async (_hostId: string) => Promise.reject(new Error("no records"))),
 }));
 
 vi.mock("react-dom", async () => {
