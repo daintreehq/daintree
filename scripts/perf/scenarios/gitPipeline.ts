@@ -255,6 +255,9 @@ async function getScalingHarness(): Promise<ScalingHarness> {
       queue
     );
     monitor.startWithoutGitStatus();
+    // These scenarios drive every pass themselves. First-status recovery can
+    // otherwise outlive the warmup queue and race the measured quiet ticks.
+    monitor.pausePolling();
     monitors.push(monitor);
   }
   scalingHarness = { monitors, queue, warmedAt: 0 };
@@ -395,8 +398,7 @@ export const gitPipelineScenarios: PerfScenario[] = [
     async run() {
       const harness = await getScalingHarness();
       await ensureWarm(harness);
-      // First-status recovery can still be queued after a slow fixture warmup.
-      // The quiet sweep must not race those passes through the single-flight guard.
+      // Keep fixture warmup outside the measured quiet sweep.
       await harness.queue.onIdle();
       const observerMisses = spawnObserverMisses();
       // A successful skip or full pass advances the revision even when the

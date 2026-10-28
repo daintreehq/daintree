@@ -29,7 +29,7 @@ export async function readWorktreeIdentity(
       maxStdoutBytes: IDENTITY_OUTPUT_BYTES,
       okExitCodes,
     });
-  const [located, head] = await Promise.all([
+  const commands = [
     run([
       "rev-parse",
       "--path-format=absolute",
@@ -39,7 +39,12 @@ export async function readWorktreeIdentity(
     ]),
     // Exit 1 with no output is a detached HEAD; an unborn branch still names its ref.
     run(["symbolic-ref", "-q", "HEAD"], [1]),
-  ]);
+  ] as const;
+  const [located, head] = await Promise.all(commands).catch(async (error: unknown) => {
+    // A failed probe must not leave its peer holding the worktree open on Windows.
+    await Promise.allSettled(commands);
+    throw error;
+  });
   const lines = located.stdout.toString("utf8").split("\n");
   if (lines.length !== 4 || lines[3] !== "") throw new Error("Unexpected rev-parse output");
   const [worktreePath, gitDir, commonDir] = lines as [string, string, string];
