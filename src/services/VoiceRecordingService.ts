@@ -145,6 +145,7 @@ import {
   focusDictationComposer,
   revealDictationComposer,
 } from "@/services/voiceComposerFocus";
+import { captureFocusEpoch, isFocusEpochCurrent } from "@/components/Terminal/paneFocusRequest";
 import {
   isSameHost,
   namesSessionHost,
@@ -5406,8 +5407,14 @@ class VoiceRecordingService {
   async goToActiveTarget(): Promise<void> {
     const target = useVoiceRecordingStore.getState().activeTarget;
     if (!target) return;
-    const found = await this.focusActiveTarget(target);
-    if (found && !isCanopyReplyTarget(target)) revealDictationComposer(target.panelId);
+    // A project switch can take a while; a pane the person picks meanwhile
+    // keeps the keyboard.
+    const epoch = captureFocusEpoch();
+    const isCurrent = () => isFocusEpochCurrent(epoch);
+    const found = await this.focusActiveTarget(target, isCurrent);
+    if (found && isCurrent() && !isCanopyReplyTarget(target)) {
+      revealDictationComposer(target.panelId);
+    }
   }
 
   /**
@@ -5484,7 +5491,9 @@ class VoiceRecordingService {
     // Vite HMR disposes and re-evaluates this module; the old singleton's
     // timers must be cleared or they fire against the new singleton's state.
     this.clearPauseTimeout();
+    this.clearIdleTimeout();
     this.clearElapsedTimer();
+    this.sessionClockRunning = false;
     this.clearMicSilenceTimer();
     this.cancelScheduledPrefetch();
     // Release anyone waiting on a correction; none of them may land now, so

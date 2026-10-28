@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Profiler } from "react";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { VoiceSessionPanel, type VoiceSessionDetails } from "../VoiceSessionPanel";
+import { deriveTerminalChrome } from "@/utils/terminalChrome";
 
 vi.mock("@/lib/appThemeViewTransition", () => ({ prefersReducedMotion: () => true }));
 vi.mock("@/components/Terminal/TerminalIcon", () => ({
@@ -35,6 +36,12 @@ function details(overrides: Partial<VoiceSessionDetails> = {}): VoiceSessionDeta
   };
 }
 
+function levelFill(meter: HTMLElement): HTMLElement {
+  const fill = meter.firstElementChild;
+  if (!(fill instanceof HTMLElement)) throw new Error("The meter has no fill");
+  return fill;
+}
+
 function renderPanel(overrides: Partial<VoiceSessionDetails> = {}, readLevel = () => 0) {
   const handlers = { onGoToTarget: vi.fn(), onTogglePause: vi.fn(), onStop: vi.fn() };
   const view = render(
@@ -47,7 +54,11 @@ function renderPanel(overrides: Partial<VoiceSessionDetails> = {}, readLevel = (
     />
   );
   const text = (id: string) => view.queryByTestId(id)?.textContent ?? null;
-  const button = (id: string) => view.getByTestId(id) as HTMLButtonElement;
+  const button = (id: string) => {
+    const el = view.getByTestId(id);
+    if (!(el instanceof HTMLButtonElement)) throw new Error(`No button ${id}`);
+    return el;
+  };
   return { ...view, handlers, text, button };
 }
 
@@ -58,13 +69,13 @@ afterEach(() => {
 
 describe("VoiceSessionPanel (#14920)", () => {
   it("leads with the target's icon and title, and goes there on click", () => {
-    const { getByTestId, handlers } = renderPanel({
-      targetChrome: { iconId: "claude" } as VoiceSessionDetails["targetChrome"],
-    });
+    const chrome = deriveTerminalChrome({ kind: "terminal", launchAgentId: "claude" });
+    const { getByTestId, handlers } = renderPanel({ targetChrome: chrome });
     const target = getByTestId("voice-session-target");
     expect(target.textContent).toContain("claude · notes");
     expect(target.getAttribute("aria-label")).toBe("Go to claude · notes");
-    expect(getByTestId("target-icon").getAttribute("data-icon")).toBe("claude");
+    expect(getByTestId("target-icon").getAttribute("data-icon")).toBe(chrome.iconId);
+    expect(chrome.iconId).not.toBe("terminal");
 
     fireEvent.click(target);
     expect(handlers.onGoToTarget).toHaveBeenCalledTimes(1);
@@ -126,10 +137,27 @@ describe("VoiceSessionPanel (#14920)", () => {
     expect(handlers.onStop).toHaveBeenCalledTimes(canStop ? 1 : 0);
   });
 
-  it("puts each control's shortcut beside it", () => {
+  it("puts each control's own shortcut beside it", () => {
     const { button } = renderPanel();
-    expect(button("voice-session-pause").querySelector("kbd")).not.toBeNull();
-    expect(button("voice-session-stop").querySelector("kbd")).not.toBeNull();
+    const keys = (id: string) =>
+      Array.from(button(id).querySelectorAll("kbd"))
+        .map((kbd) => kbd.textContent)
+        .join("");
+    expect(keys("voice-session-pause")).toMatch(/P$/);
+    expect(keys("voice-session-stop")).toMatch(/\.$/);
+  });
+
+  it("leaves a control's shortcut out when none is bound", () => {
+    const view = render(
+      <VoiceSessionPanel
+        details={details()}
+        readLevel={() => 0}
+        onGoToTarget={() => {}}
+        onTogglePause={() => {}}
+        onStop={() => {}}
+      />
+    );
+    expect(view.container.querySelector("kbd")).toBeNull();
   });
 
   it("counts wall time through a pause and says how long it was paused", () => {
@@ -186,12 +214,14 @@ describe("VoiceSessionPanel (#14920)", () => {
   });
 
   it("shows the words so far, the newest end of a long transcript", () => {
-    const long = `${"word ".repeat(60)}the newest words`;
-    const { text } = renderPanel({ wordCount: 63, transcript: long });
-    expect(text("voice-session-words")).toBe("63 words");
-    const shown = text("voice-session-transcript")!;
+    const long = `the oldest words ${"word ".repeat(60)}the newest words`;
+    const { text } = renderPanel({ wordCount: 66, transcript: long });
+    expect(text("voice-session-words")).toBe("66 words");
+    const shown = text("voice-session-transcript") ?? "";
     expect(shown.startsWith("…")).toBe(true);
     expect(shown.endsWith("the newest words")).toBe(true);
+    expect(shown).not.toContain("oldest");
+    expect(shown.length).toBeLessThan(long.length);
   });
 
   it("says when nothing has been heard yet", () => {
@@ -220,7 +250,7 @@ describe("VoiceSessionPanel (#14920)", () => {
         />
       </Profiler>
     );
-    const fill = view.getByTestId("voice-session-level").firstElementChild as HTMLElement;
+    const fill = levelFill(view.getByTestId("voice-session-level"));
     const before = commits;
     const step = (t: number) => act(() => frames.shift()?.(t));
 
@@ -235,7 +265,7 @@ describe("VoiceSessionPanel (#14920)", () => {
   it("holds the meter empty while nothing is listening", () => {
     const raf = vi.spyOn(window, "requestAnimationFrame");
     const { getByTestId } = renderPanel({ phase: "paused" }, () => 0.9);
-    const fill = getByTestId("voice-session-level").firstElementChild as HTMLElement;
+    const fill = levelFill(getByTestId("voice-session-level"));
     expect(fill.style.transform).toBe("scaleX(0)");
     expect(raf).not.toHaveBeenCalled();
   });

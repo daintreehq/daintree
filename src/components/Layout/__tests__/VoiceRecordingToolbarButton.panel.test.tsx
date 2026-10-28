@@ -5,6 +5,21 @@ import { VoiceRecordingToolbarButton } from "../VoiceRecordingToolbarButton";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { usePanelStore } from "@/store/panelStore";
 import { primeRadix } from "@/components/ui/radix-loader";
+import type { PtyPanelData } from "@shared/types/panel";
+
+// Past the tick Radix hands focus back in after a close.
+const AFTER_FOCUS_RESTORE_MS = 20;
+
+const TARGET_PANEL: PtyPanelData = {
+  id: "p-1",
+  kind: "terminal",
+  title: "Claude · notes",
+  cwd: "/repo",
+  cols: 80,
+  rows: 24,
+  location: "grid",
+  launchAgentId: "claude",
+};
 
 const service = vi.hoisted(() => ({
   focusActiveTarget: vi.fn(),
@@ -19,7 +34,13 @@ vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: vi.fn() 
 vi.mock("@/hooks", () => ({
   useEffectiveCombo: (actionId: string) =>
     actionId === "voiceInput.togglePause" ? "Cmd+Shift+P" : "Cmd+.",
-  useShortcutHintHover: () => ({}),
+  useShortcutHintHover: () => ({
+    onPointerEnter: () => {},
+    onPointerLeave: () => {},
+    onPointerDown: () => {},
+    onFocus: () => {},
+    onBlur: () => {},
+  }),
 }));
 vi.mock("@/components/Hosts/hostList", () => ({
   useHostList: () => ({ hosts: [], localSummary: null }),
@@ -50,13 +71,7 @@ beforeEach(() => {
   usePanelStore.setState({
     panelsById: {
       ...usePanelStore.getState().panelsById,
-      "p-1": {
-        id: "p-1",
-        kind: "terminal",
-        title: "Claude · notes",
-        location: "grid",
-        launchAgentId: "claude",
-      } as never,
+      "p-1": TARGET_PANEL,
     },
   });
 });
@@ -90,8 +105,14 @@ function startSession(status: "recording" | "paused" | "finishing" = "recording"
   });
 }
 
+function byTestId(id: string): HTMLButtonElement {
+  const el = document.querySelector(`[data-testid="${id}"]`);
+  if (!(el instanceof HTMLButtonElement)) throw new Error(`No button ${id}`);
+  return el;
+}
+
 function mic(): HTMLButtonElement {
-  return document.querySelector('[data-testid="voice-session-button"]') as HTMLButtonElement;
+  return byTestId("voice-session-button");
 }
 
 function panel(): HTMLElement | null {
@@ -131,7 +152,7 @@ describe("VoiceRecordingToolbarButton — the session panel (#14920)", () => {
     expect(service.goToActiveTarget).toHaveBeenCalledTimes(1);
     expect(panel()).toBeNull();
     // Past the tick Radix would hand focus back in: the close claimed it.
-    await act(() => new Promise((resolve) => setTimeout(resolve, 10)));
+    await act(() => new Promise((resolve) => setTimeout(resolve, AFTER_FOCUS_RESTORE_MS)));
     expect(document.activeElement).not.toBe(mic());
   });
 
@@ -142,7 +163,9 @@ describe("VoiceRecordingToolbarButton — the session panel (#14920)", () => {
 
     fireEvent.click(document.querySelector('[data-testid="voice-session-pause"]')!);
     expect(service.togglePause).toHaveBeenCalledTimes(1);
-    act(() => useVoiceRecordingStore.setState({ status: "paused" }));
+    act(() => {
+      useVoiceRecordingStore.setState({ status: "paused" });
+    });
     expect(panel()?.getAttribute("data-phase")).toBe("paused");
     expect(document.querySelector('[data-testid="voice-session-pause"]')!.textContent).toContain(
       "Resume"
@@ -176,10 +199,94 @@ describe("VoiceRecordingToolbarButton — the session panel (#14920)", () => {
     startSession();
     render(<VoiceRecordingToolbarButton />);
     openPanel();
-    const reads = service.getSessionClock.mock.calls.length;
+    const elapsed = () =>
+      document.querySelector('[data-testid="voice-session-elapsed"]')?.textContent;
+    expect(elapsed()).toBe("1:05");
 
-    act(() => useVoiceRecordingStore.setState({ status: "paused" }));
-    expect(service.getSessionClock.mock.calls.length).toBeGreaterThan(reads);
+    service.getSessionClock.mockReturnValue({
+      provider: "deepgram",
+      elapsedMs: 70_000,
+      pausedMs: 0,
+      autoStop: { reason: "pause", remainingMs: 60_000 },
+    });
+    act(() => {
+      useVoiceRecordingStore.setState({ status: "paused" });
+    });
+    expect(elapsed()).toBe("1:10");
+  });
+
+  it("ticks the clock once a second while open, and stops reading once closed", () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      startSession();
+      render(<VoiceRecordingToolbarButton />);
+      openPanel();
+      service.getSessionClock.mockReturnValue({
+        provider: "deepgram",
+        elapsedMs: 66_000,
+        pausedMs: 0,
+        autoStop: null,
+      });
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      expect(document.querySelector('[data-testid="voice-session-elapsed"]')?.textContent).toBe(
+        "1:06"
+      );
+
+      fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+      const reads = service.getSessionClock.mock.calls.length;
+      act(() => {
+        vi.advanceTimersByTime(5000);
+      });
+      expect(service.getSessionClock.mock.calls.length).toBe(reads);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("hands the keyboard to the lock's button when the session ends under it", async () => {
+    startSession();
+    useVoiceRecordingStore.setState({
+      lockedTarget: { panelId: "p-1", panelTitle: "claude · notes" },
+    });
+    render(
+      <div role="toolbar">
+        <VoiceRecordingToolbarButton />
+      </div>
+    );
+    openPanel();
+    expect(panel()!.contains(document.activeElement)).toBe(true);
+
+    act(() => {
+      useVoiceRecordingStore.setState({ status: "idle", activeTarget: null });
+    });
+    const locked = document.querySelector('[data-testid="voice-locked-button"]');
+    expect(locked).not.toBeNull();
+    await vi.waitFor(() => expect(document.activeElement).toBe(locked));
+  });
+
+  it("leaves the keyboard alone when the session ends somewhere it isn't", async () => {
+    startSession();
+    useVoiceRecordingStore.setState({
+      lockedTarget: { panelId: "p-1", panelTitle: "claude · notes" },
+    });
+    const view = render(
+      <div role="toolbar">
+        <VoiceRecordingToolbarButton />
+        <input data-testid="elsewhere" />
+      </div>
+    );
+    const elsewhere = view.getByTestId("elsewhere");
+    act(() => {
+      elsewhere.focus();
+    });
+
+    act(() => {
+      useVoiceRecordingStore.setState({ status: "idle", activeTarget: null });
+    });
+    await act(() => new Promise((resolve) => setTimeout(resolve, AFTER_FOCUS_RESTORE_MS)));
+    expect(document.activeElement).toBe(elsewhere);
   });
 
   it("keeps the panel open as the session finishes, with Stop gone quiet", () => {
@@ -187,11 +294,11 @@ describe("VoiceRecordingToolbarButton — the session panel (#14920)", () => {
     render(<VoiceRecordingToolbarButton />);
     openPanel();
 
-    act(() => useVoiceRecordingStore.setState({ status: "finishing" }));
+    act(() => {
+      useVoiceRecordingStore.setState({ status: "finishing" });
+    });
     expect(panel()?.getAttribute("data-phase")).toBe("finishing");
-    expect(
-      (document.querySelector('[data-testid="voice-session-stop"]') as HTMLButtonElement).disabled
-    ).toBe(true);
+    expect(byTestId("voice-session-stop").disabled).toBe(true);
   });
 
   it("starts closed for the next session after one ends with it open", () => {
@@ -199,9 +306,13 @@ describe("VoiceRecordingToolbarButton — the session panel (#14920)", () => {
     const view = render(<VoiceRecordingToolbarButton />);
     openPanel();
 
-    act(() => useVoiceRecordingStore.setState({ status: "idle", activeTarget: null }));
+    act(() => {
+      useVoiceRecordingStore.setState({ status: "idle", activeTarget: null });
+    });
     expect(panel()).toBeNull();
-    act(() => startSession());
+    act(() => {
+      startSession();
+    });
     view.rerender(<VoiceRecordingToolbarButton />);
     expect(panel()).toBeNull();
   });

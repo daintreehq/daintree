@@ -527,6 +527,11 @@ interface VoiceSessionButtonProps {
  * Mounted only while there is a session, so a closed session's open state
  * never carries into the next one.
  */
+// What can take the slot when a session ends: the lock's button or another
+// view's session. The placeholder takes no focus.
+const VOICE_SLOT_SUCCESSOR_SELECTOR =
+  '[data-testid="voice-locked-button"], [data-testid="voice-elsewhere-button"]';
+
 function VoiceSessionButton({
   title,
   waveMode,
@@ -539,14 +544,49 @@ function VoiceSessionButton({
 }: VoiceSessionButtonProps) {
   const [open, setOpen] = useState(false);
   // Going to the target moves the keyboard there, so the close must not
-  // hand it back to the mic.
+  // hand it back to the mic. Each opening starts without it: a close the
+  // exit never finished doesn't decide the next one.
   const leavingRef = useRef(false);
+  // The keyboard is on the mic or in its panel. A session that ends under it
+  // takes both away, so the keyboard goes to whatever takes the slot.
+  const holdsFocusRef = useRef(false);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
   // The toggle shortcut would start a new session when focused elsewhere; the
   // pause shortcut is the resume affordance the user actually wants.
   const actionCombo = isPaused ? pauseShortcut : shortcut;
 
+  useEffect(() => {
+    const toolbar = triggerRef.current?.closest('[role="toolbar"]') ?? null;
+    return () => {
+      if (!holdsFocusRef.current || !toolbar) return;
+      requestAnimationFrame(() => {
+        const active = document.activeElement;
+        if (active && active !== document.body) return;
+        toolbar
+          .querySelector<HTMLElement>(VOICE_SLOT_SUCCESSOR_SELECTOR)
+          ?.focus({ preventScroll: true, focusVisible: false });
+      });
+    };
+  }, []);
+
+  const focusHandlers = {
+    onFocus: () => {
+      holdsFocusRef.current = true;
+    },
+    onBlur: () => {
+      holdsFocusRef.current = false;
+    },
+  };
+
   return (
-    <Popover open={open} onOpenChange={setOpen} modal={false}>
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        if (next) leavingRef.current = false;
+        setOpen(next);
+      }}
+      modal={false}
+    >
       <VoiceToolbarMenu
         onOpen={() => setOpen(false)}
         leadingItems={
@@ -565,6 +605,15 @@ function VoiceSessionButton({
             <PopoverTrigger asChild>
               <Button
                 {...hover}
+                onFocus={(event) => {
+                  focusHandlers.onFocus();
+                  hover.onFocus(event);
+                }}
+                onBlur={() => {
+                  focusHandlers.onBlur();
+                  hover.onBlur();
+                }}
+                ref={triggerRef}
                 variant="ghost"
                 size="icon"
                 data-toolbar-item={dataToolbarItem}
@@ -599,6 +648,7 @@ function VoiceSessionButton({
         align="end"
         className="w-auto p-0"
         aria-label="Dictation session"
+        {...focusHandlers}
         onCloseAutoFocus={(event) => {
           if (!leavingRef.current) return;
           leavingRef.current = false;

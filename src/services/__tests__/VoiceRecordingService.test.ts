@@ -2413,6 +2413,22 @@ describe("VoiceRecordingService — pause/resume (#9191)", () => {
     voiceRecordingService.destroy();
   });
 
+  it("forgets the session's clock when torn down mid-session (#14920)", async () => {
+    setupGlobals();
+    await resetVoiceStoreFns();
+    const voiceState = await getVoiceMockState();
+    voiceState.activeTarget = { panelId: "panel-1" };
+    voiceState.status = "recording";
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    await voiceRecordingService.start({ panelId: "panel-1", panelTitle: "Test" });
+    voiceRecordingService.pause();
+    expect(voiceRecordingService.getSessionClock()).not.toBeNull();
+
+    voiceRecordingService.destroy();
+    expect(voiceRecordingService.getSessionClock()).toBeNull();
+  });
+
   it("togglePause() is a no-op when status is idle", async () => {
     setupGlobals();
     await resetVoiceStoreFns();
