@@ -66,6 +66,8 @@ export interface VoiceSessionPanelProps {
   /** Whether the composer is there to send from right now. */
   canSend?: boolean;
   sendShortcut?: string;
+  /** What Stop says: a view that stops without going anywhere says only that. */
+  stopLabel?: string;
 }
 
 // Enough for three lines at the panel's width: what was just heard, never
@@ -234,6 +236,7 @@ export function VoiceSessionPanel({
   onSend,
   canSend = false,
   sendShortcut,
+  stopLabel = "Stop and return",
 }: VoiceSessionPanelProps) {
   const {
     phase,
@@ -451,7 +454,7 @@ export function VoiceSessionPanel({
             data-testid="voice-session-stop"
           >
             <Square className="fill-current" />
-            Stop and return
+            {stopLabel}
             {stopShortcut && (
               <KbdChord
                 shortcut={stopShortcut}

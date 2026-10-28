@@ -4,6 +4,8 @@ import type {
   VoiceInputError,
   VoiceInputStatus,
   VoiceLiveSessionUpdate,
+  VoiceLiveLevel,
+  VoicePauseRequest,
   VoiceRevealRequest,
   VoiceSessionEndReason,
   VoiceStopRequest,
@@ -2138,6 +2140,10 @@ export interface IpcEventMap {
   // Another view's indicator, to the owner and to the view on screen in the
   // owner's window, which goes to the owner's workspace on the owner's host.
   "voice-input:reveal-requested": VoiceRevealRequest;
+  // The live session's input level, to the views on screen that don't own it.
+  "voice-input:live-level": VoiceLiveLevel;
+  // To the owner: another view's control panel paused or resumed it.
+  "voice-input:pause-requested": VoicePauseRequest;
 
   // Demo mode events (main → renderer command forwarding)
   "demo:exec-move-to": DemoMoveToPayload;

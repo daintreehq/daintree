@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vite
 import {
   isActiveVoiceSession,
   type VoiceLiveSessionUpdate,
+  type VoiceLiveLevel,
+  type VoicePauseRequest,
   type VoiceRevealRequest,
+  type VoiceSessionSnapshot,
 } from "@shared/types";
 
 // Capture suspend/wake callbacks registered by the service.
@@ -223,6 +226,10 @@ function buildElectronStub() {
         (_callback: (payload: { sessionId: string; returnToTarget?: boolean }) => void) => () => {}
       ),
       onRevealRequested: vi.fn((_callback: (payload: VoiceRevealRequest) => void) => () => {}),
+      onLiveLevel: vi.fn((_callback: (payload: VoiceLiveLevel) => void) => () => {}),
+      onPauseRequested: vi.fn((_callback: (payload: VoicePauseRequest) => void) => () => {}),
+      publishDetails: vi.fn().mockResolvedValue(undefined),
+      setPausedLive: vi.fn().mockResolvedValue(true),
       getLiveSession: vi.fn().mockResolvedValue({ revision: 0, session: null }),
       getSettings: vi.fn().mockResolvedValue({
         enabled: true,
@@ -3131,7 +3138,28 @@ describe("VoiceRecordingService — a session another view owns (#14601)", () =>
     hostId: "local",
     projectId: "project-a",
     projectName: "Alpha",
+    details: null as VoiceSessionSnapshot | null,
   };
+  // The owner's report, with only its phase mattering here.
+  const reported = (phase: VoiceSessionSnapshot["phase"]): VoiceSessionSnapshot => ({
+    phase,
+    kind: "dictation",
+    targetTitle: "Claude",
+    targetChrome: null,
+    targetHostId: "local",
+    projectName: "Alpha",
+    worktreeLabel: null,
+    micLabel: null,
+    micSignal: "live",
+    micNotice: null,
+    stopWarning: false,
+    correctionEnabled: false,
+    locked: false,
+    wordCount: 0,
+    transcript: "",
+    provider: null,
+    clock: null,
+  });
 
   function hasMockState<T>(mod: object): mod is { __state: T } {
     return "__state" in mod;
@@ -3302,6 +3330,114 @@ describe("VoiceRecordingService — a session another view owns (#14601)", () =>
     await expect(voiceRecordingService.revealSessionElsewhere()).resolves.toBe(false);
     electron.voiceInput.revealLive.mockRejectedValueOnce(new Error("gone"));
     await expect(voiceRecordingService.revealSessionElsewhere()).resolves.toBe(false);
+  });
+
+  describe("controls for the other view's session (#14921)", () => {
+    afterEach(async () => {
+      const voiceModule = await import("@/store/voiceRecordingStore");
+      if (hasMockState<VoiceState>(voiceModule)) voiceModule.__state.sessionElsewhere = null;
+    });
+
+    it("pauses and resumes its own session when another view's panel asks", async () => {
+      const { voiceRecordingService, electron } = await arrange({ status: "recording" });
+      Reflect.set(voiceRecordingService, "sessionId", "mine");
+      const pause = vi.spyOn(voiceRecordingService, "pause").mockImplementation(() => {});
+      const resume = vi.spyOn(voiceRecordingService, "resume").mockImplementation(() => {});
+      const requested = electron.voiceInput.onPauseRequested.mock.calls[0]![0];
+
+      requested({ sessionId: "mine", paused: true });
+      expect(pause).toHaveBeenCalledTimes(1);
+      expect(resume).not.toHaveBeenCalled();
+
+      pause.mockClear();
+      requested({ sessionId: "mine", paused: false });
+      expect(resume).toHaveBeenCalledTimes(1);
+      expect(pause).not.toHaveBeenCalled();
+
+      resume.mockClear();
+      requested({ sessionId: "other", paused: true });
+      requested({ sessionId: "other", paused: false });
+      expect(pause).not.toHaveBeenCalled();
+      expect(resume).not.toHaveBeenCalled();
+      Reflect.set(voiceRecordingService, "sessionId", null);
+    });
+
+    it("pauses the other view's session by the id its panel shows", async () => {
+      const { voiceRecordingService, electron } = await arrange({});
+
+      await expect(voiceRecordingService.setSessionElsewherePaused("remote", true)).resolves.toBe(
+        true
+      );
+      expect(electron.voiceInput.setPausedLive).toHaveBeenCalledWith({
+        sessionId: "remote",
+        paused: true,
+      });
+
+      // A panel left open on an ended session acts on nothing.
+      await expect(voiceRecordingService.setSessionElsewherePaused("gone", false)).resolves.toBe(
+        false
+      );
+      electron.voiceInput.setPausedLive.mockRejectedValueOnce(new Error("gone"));
+      await expect(voiceRecordingService.setSessionElsewherePaused("remote", false)).resolves.toBe(
+        false
+      );
+      expect(electron.voiceInput.setPausedLive).toHaveBeenCalledTimes(2);
+    });
+
+    it.each([
+      { status: "recording" as const, paused: true },
+      { status: "paused" as const, paused: false },
+    ])("has the pause key act on the other view's $status session", async ({ status, paused }) => {
+      const { voiceRecordingService, electron } = await arrange({
+        sessionElsewhere: { ...elsewhere, details: reported(status) },
+      });
+
+      voiceRecordingService.togglePause();
+
+      await vi.waitFor(() => {
+        expect(electron.voiceInput.setPausedLive).toHaveBeenCalledWith({
+          sessionId: "remote",
+          paused,
+        });
+      });
+    });
+
+    it("has the pause key act on the other view's session after one here failed", async () => {
+      const { voiceRecordingService, electron } = await arrange({
+        status: "error",
+        sessionElsewhere: { ...elsewhere, details: reported("recording") },
+      });
+
+      voiceRecordingService.togglePause();
+
+      await vi.waitFor(() => {
+        expect(electron.voiceInput.setPausedLive).toHaveBeenCalledWith({
+          sessionId: "remote",
+          paused: true,
+        });
+      });
+    });
+
+    it("leaves the pause key alone while the other view's session can't pause", async () => {
+      const { voiceRecordingService, electron } = await arrange({
+        sessionElsewhere: { ...elsewhere, details: reported("finishing") },
+      });
+
+      voiceRecordingService.togglePause();
+      await Promise.resolve();
+
+      expect(electron.voiceInput.setPausedLive).not.toHaveBeenCalled();
+    });
+
+    it("stops the other view's session from the panel without taking the person there", async () => {
+      const { voiceRecordingService, electron } = await arrange({});
+
+      await voiceRecordingService.stopSessionElsewhereById("gone");
+      expect(electron.voiceInput.stopLive).not.toHaveBeenCalled();
+
+      await voiceRecordingService.stopSessionElsewhereById("remote");
+      expect(electron.voiceInput.stopLive).toHaveBeenCalledWith({ sessionId: "remote" });
+    });
   });
 
   it("asks main for nothing to reveal when no session runs elsewhere", async () => {

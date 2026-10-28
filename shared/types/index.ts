@@ -565,9 +565,18 @@ export type {
   RecentDictation,
   VoiceInputError,
   VoiceInputErrorSeverity,
+  VoiceLiveLevel,
   VoiceLiveSessionUpdate,
+  VoiceMicSignal,
+  VoicePauseRequest,
+  VoicePublishDetailsRequest,
   VoiceRevealRequest,
+  VoiceSessionClockAnchor,
+  VoiceSessionPhase,
+  VoiceSessionSnapshot,
+  VoiceTargetChrome,
   VoiceSessionElsewhere,
+  VoiceSessionKind,
   VoiceStopRequest,
   VoiceKeytermSource,
   VoiceSentTerm,
@@ -581,6 +590,8 @@ export {
   MAX_RECENT_DICTATIONS,
   VOICE_REPLAY_AUDIO_LOST_CODE,
   VOICE_STOP_AUDIO_LOST_CODE,
+  VOICE_SNAPSHOT_TRANSCRIPT_MAX_LENGTH,
+  voiceLevelFromRms,
 } from "./voice.js";
 
 // Workspace Host types - IPC protocol for workspace management

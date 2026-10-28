@@ -55,6 +55,8 @@ import {
 } from "@/store/voiceRecordingStore";
 import { keepRecentDictation, keepRecentDictationCorrection } from "@/services/recentDictations";
 import { joinCompletedSegments } from "@/lib/voiceTranscriptSegments";
+import { startVoiceDetailsPublisher } from "@/services/voiceSessionDetailsPublisher";
+import { setElsewhereLevel } from "@/services/voiceElsewhereLevel";
 import {
   isActiveVoiceSession,
   VOICE_REPLAY_AUDIO_LOST_CODE,
@@ -1328,6 +1330,25 @@ class VoiceRecordingService {
       .catch((error: unknown) => {
         logDebug(`${LOG_PREFIX} Couldn't read the live session`, voiceErrorLogFields(error));
       });
+    this.unsubscribers.push(voiceInput.onLiveLevel((level) => setElsewhereLevel(level)));
+    this.unsubscribers.push(() => setElsewhereLevel(null));
+
+    // What this view shows of a session it owns, for every other view's
+    // indicator and control panel (#14921).
+    this.unsubscribers.push(
+      startVoiceDetailsPublisher(
+        {
+          sessionId: () => this.sessionId,
+          clock: (now) => this.getSessionClock(now),
+          hostId: () => currentHostId(),
+        },
+        (request) =>
+          voiceInput.publishDetails(request).catch((error: unknown) => {
+            logDebug(`${LOG_PREFIX} Couldn't report the session`, voiceErrorLogFields(error));
+            return false;
+          })
+      )
+    );
 
     // Another view's dictation key or indicator, for a session this view owns.
     this.unsubscribers.push(
@@ -1344,6 +1365,13 @@ class VoiceRecordingService {
         voiceInput.stop(sessionId).catch((error: unknown) => {
           logDebug(`${LOG_PREFIX} Couldn't end an orphaned session`, voiceErrorLogFields(error));
         });
+      })
+    );
+    this.unsubscribers.push(
+      voiceInput.onPauseRequested(({ sessionId, paused }) => {
+        if (sessionId !== this.sessionId) return;
+        if (paused) this.pause();
+        else this.resume();
       })
     );
     this.unsubscribers.push(
@@ -4595,10 +4623,33 @@ class VoiceRecordingService {
     }
   }
 
-  /** Takes the person to the session another view owns: its window, project and panel. */
-  async revealSessionElsewhere(): Promise<boolean> {
+  /**
+   * Pauses or resumes the session another view owns. Named by id, so a panel
+   * still open on an ended session can't act on the one that replaced it.
+   */
+  async setSessionElsewherePaused(sessionId: string, paused: boolean): Promise<boolean> {
+    if (useVoiceRecordingStore.getState().sessionElsewhere?.sessionId !== sessionId) return false;
+    try {
+      return await window.electron.voiceInput.setPausedLive({ sessionId, paused });
+    } catch (error) {
+      logWarn(`${LOG_PREFIX} Couldn't pause dictation in another view`, voiceErrorLogFields(error));
+      return false;
+    }
+  }
+
+  /** Stops the session another view owns, from this view's control panel. */
+  async stopSessionElsewhereById(sessionId: string): Promise<void> {
     const session = useVoiceRecordingStore.getState().sessionElsewhere;
-    if (!session) return false;
+    if (session?.sessionId === sessionId) await this.stopSessionElsewhere(session, false);
+  }
+
+  /**
+   * Takes the person to the session another view owns: its window, project and
+   * panel. With `sessionId`, only while that is still the session.
+   */
+  async revealSessionElsewhere(sessionId?: string): Promise<boolean> {
+    const session = useVoiceRecordingStore.getState().sessionElsewhere;
+    if (!session || (sessionId !== undefined && session.sessionId !== sessionId)) return false;
     try {
       return await window.electron.voiceInput.revealLive(session.sessionId);
     } catch (error) {
@@ -5456,11 +5507,22 @@ class VoiceRecordingService {
    * the session is in a transitional phase (connecting, reconnecting, finishing).
    */
   togglePause(): void {
-    const status = useVoiceRecordingStore.getState().status;
+    const { status, sessionElsewhere } = useVoiceRecordingStore.getState();
     if (status === "recording") {
       this.pause();
     } else if (status === "paused") {
       this.resume();
+    } else if (
+      // No session of its own, even after one here ended in an error.
+      !isActiveVoiceSession(status) &&
+      (sessionElsewhere?.details?.phase === "recording" ||
+        sessionElsewhere?.details?.phase === "paused")
+    ) {
+      // The pause key works on dictation another view owns, as its stop key does.
+      void this.setSessionElsewherePaused(
+        sessionElsewhere.sessionId,
+        sessionElsewhere.details.phase === "recording"
+      );
     } else {
       logDebug(`${LOG_PREFIX} togglePause() ignored`, { status });
     }

@@ -190,6 +190,10 @@ function setupGlobals(options: {
     onLiveSession: vi.fn(() => () => {}),
     onStopRequested: vi.fn(() => () => {}),
     onRevealRequested: vi.fn(() => () => {}),
+    onLiveLevel: vi.fn(() => () => {}),
+    onPauseRequested: vi.fn(() => () => {}),
+    publishDetails: vi.fn().mockResolvedValue(undefined),
+    setPausedLive: vi.fn().mockResolvedValue(true),
     getLiveSession: vi.fn().mockResolvedValue({ revision: 0, session: null }),
     onStatus: vi.fn((cb: (payload: { sessionId: string; status: string }) => void) => {
       statusCallback = cb;

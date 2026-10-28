@@ -106,6 +106,107 @@ export interface VoiceSessionElsewhere {
   /** That workspace, a project or a scratch, as its own host knows it. */
   projectId: string | null;
   projectName: string | null;
+  /** What the owner last reported, or null until its first report lands. */
+  details: VoiceSessionSnapshot | null;
+}
+
+/**
+ * Proof of capture (#13105). pending: no real samples yet; live: a chunk above
+ * the noise floor arrived, latched for the session; silent: still none after
+ * the grace window.
+ */
+export type VoiceMicSignal = "pending" | "live" | "silent";
+
+/** What the session records: prompt text, a rewrite instruction, or a Canopy reply. */
+export type VoiceSessionKind = "dictation" | "rewrite" | "canopy-reply";
+
+/** The states a live session shows its control panel in (#14920). */
+export type VoiceSessionPhase =
+  "arming" | "connecting" | "recording" | "paused" | "reconnecting" | "finishing";
+
+/** The target pane's icon, as the owner derived it from the pane's identity. */
+export interface VoiceTargetChrome {
+  iconId: string | null;
+  color?: string;
+  label: string;
+  isAgent: boolean;
+  agentId: string | null;
+  processId: string | null;
+  runtimeKind: "agent" | "process" | "panel" | "none";
+  hasExited: boolean;
+}
+
+/**
+ * The session's clock at `at` (epoch ms): a view adds the time since, so
+ * nothing is sent as it ticks. Elapsed is wall time, pauses included; paused
+ * time grows while `paused`; an auto-stop counts down.
+ */
+export interface VoiceSessionClockAnchor {
+  at: number;
+  elapsedMs: number;
+  pausedMs: number;
+  paused: boolean;
+  autoStop: { reason: "pause" | "idle"; remainingMs: number } | null;
+}
+
+/** The most of the words so far a snapshot carries: the panel shows their tail. */
+export const VOICE_SNAPSHOT_TRANSCRIPT_MAX_LENGTH = 400;
+
+/**
+ * The live session as its owner's control panel shows it, reported to main
+ * and passed on to every other view, so their indicator and panel match the
+ * owner's (#14921). The input level travels apart, on `voice-input:live-level`,
+ * and the provider and the owning workspace come from main.
+ */
+export interface VoiceSessionSnapshot {
+  phase: VoiceSessionPhase;
+  kind: VoiceSessionKind;
+  targetTitle: string;
+  targetChrome: VoiceTargetChrome | null;
+  /** The host the words go to: the owner's own, or a Canopy reply's terminal's. */
+  targetHostId: HostId | null;
+  projectName: string | null;
+  worktreeLabel: string | null;
+  micLabel: string | null;
+  micSignal: VoiceMicSignal;
+  micNotice: { kind: "lost" | "fallback" | "silent"; bluetooth: boolean } | null;
+  /** The owner is warning that its auto-stop is close: of the pause, or of no new words. */
+  stopWarning: boolean;
+  correctionEnabled: boolean;
+  locked: boolean;
+  wordCount: number;
+  /** The end of the words so far, at most VOICE_SNAPSHOT_TRANSCRIPT_MAX_LENGTH. */
+  transcript: string;
+  /** The provider the owner started on, as its panel names it; null with no clock. */
+  provider: "openai" | "deepgram" | "grok" | null;
+  /** Null once the session is stopping. */
+  clock: VoiceSessionClockAnchor | null;
+}
+
+/** The owner's report of its live session, `voice-input:publish-details`. */
+export interface VoicePublishDetailsRequest {
+  sessionId: string;
+  details: VoiceSessionSnapshot;
+}
+
+/** Another view's panel pausing or resuming the live session. */
+export interface VoicePauseRequest {
+  sessionId: string;
+  paused: boolean;
+}
+
+/**
+ * The live session's input level, on the same 0-1 scale as the owner's meter.
+ * Sent only to the views on screen that don't own it, as main hears each chunk.
+ */
+export interface VoiceLiveLevel {
+  sessionId: string;
+  level: number;
+}
+
+/** The owner's meter scale: a PCM chunk's RMS (0-1) as a 0-1 level. */
+export function voiceLevelFromRms(rms: number): number {
+  return Math.min(1, rms * 6);
 }
 
 /** The longest name a view gives its workspace when it starts a dictation. */

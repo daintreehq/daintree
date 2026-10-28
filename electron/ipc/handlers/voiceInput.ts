@@ -19,15 +19,20 @@ import type {
   VoiceInputSettingsPatch,
   VoiceTranscriptionProvider,
 } from "../../../shared/types/ipc/api.js";
-import type {
-  VoiceLiveSessionUpdate,
-  VoiceRewriteOutcome,
-  LastDictationTerms,
-  VoiceKeytermSource,
-  VoiceSentTerm,
-  VoiceSessionEndReason,
-  VoiceStartOutcome,
-  VoiceStopRequest,
+import {
+  voiceLevelFromRms,
+  type VoiceLiveLevel,
+  type VoiceLiveSessionUpdate,
+  type VoicePauseRequest,
+  type VoicePublishDetailsRequest,
+  type VoiceSessionSnapshot,
+  type VoiceRewriteOutcome,
+  type LastDictationTerms,
+  type VoiceKeytermSource,
+  type VoiceSentTerm,
+  type VoiceSessionEndReason,
+  type VoiceStartOutcome,
+  type VoiceStopRequest,
 } from "../../../shared/types/voice.js";
 import type {
   VoiceCorrectionTiming,
@@ -147,6 +152,8 @@ import {
   VoiceInputPrefetchCorrectionsSchema,
   VoiceInputRewritePayloadSchema,
   VoiceInputStartOptionsSchema,
+  VoicePauseRequestSchema,
+  VoicePublishDetailsRequestSchema,
   VoiceSessionIdSchema,
   VoiceStopLiveRequestSchema,
   type VoiceInputCorrectPayload,
@@ -167,6 +174,7 @@ import { LOCAL_HOST_ID, parseHostScopedKey } from "../../../shared/types/remoteH
 import {
   getAllAppWebContents,
   getAppWebContents,
+  getShownAppWebContents,
   getWindowForWebContents,
 } from "../../window/webContentsRegistry.js";
 
@@ -246,6 +254,10 @@ interface VoiceSession {
   unwatchDestroyed: (() => void) | null;
   // Keeps its view out of eviction while it runs (#14773).
   releaseView: (() => void) | null;
+  // What the owner last reported of it, for every other view (#14921).
+  details: VoiceSessionSnapshot | null;
+  // When its level last went to the views on screen (performance.now()).
+  levelSentAt: number;
   // The renderer streams audio from the moment it sends the start request,
   // before main has loaded the service, assembled keyterms, and created a
   // provider. Chunks for a session still starting are held here and handed to
@@ -327,8 +339,45 @@ function liveSessionUpdateFor(webContentsId: number): VoiceLiveSessionUpdate {
       hostId,
       projectId: workspaceId,
       projectName: session.projectInfo.name ?? session.workspaceName,
+      details: session.details,
     },
   };
+}
+
+// About ten readings a second: what the owner's own meter gets from ~100ms chunks.
+const LIVE_LEVEL_MIN_INTERVAL_MS = 80;
+
+/**
+ * The live session's input level, from a chunk of its audio, to the view each
+ * window has on screen when that view doesn't own it. Cached views hear none:
+ * one comes on screen with its meter waiting for the next chunk, about 100ms.
+ */
+function forwardLiveLevel(session: VoiceSession, chunk: ArrayBuffer): void {
+  // Capped whatever size of chunk the owner's capture settles on.
+  const now = performance.now();
+  if (now - session.levelSentAt < LIVE_LEVEL_MIN_INTERVAL_MS) return;
+  const recipients = getShownAppWebContents().filter(
+    (wc) => wc.id !== session.webContentsId && !wc.isDestroyed()
+  );
+  if (recipients.length === 0) return;
+  session.levelSentAt = now;
+  const update: VoiceLiveLevel = { sessionId: session.id, level: pcm16Level(chunk) };
+  for (const wc of recipients) {
+    try {
+      wc.send(CHANNELS.VOICE_INPUT_LIVE_LEVEL, update);
+    } catch {
+      // A view being torn down misses one reading; the next chunk brings another.
+    }
+  }
+}
+
+// The owner's meter reads the same chunk the same way.
+function pcm16Level(chunk: ArrayBuffer): number {
+  const samples = new Int16Array(chunk, 0, Math.floor(chunk.byteLength / 2));
+  if (samples.length === 0) return 0;
+  let sumSq = 0;
+  for (let i = 0; i < samples.length; i++) sumSq += samples[i]! * samples[i]!;
+  return voiceLevelFromRms(Math.sqrt(sumSq / samples.length) / 32768);
 }
 
 // Every view hears about it, cached ones included: the dictation key has to
@@ -1353,6 +1402,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       // Taken before the first await, so no eviction can take the view
       // between the start and the session being live (#14773).
       releaseView: holdDictationView(ctx.webContentsId),
+      details: null,
+      levelSentAt: -Infinity,
       preStartAudio: { chunks: [], bytes: 0, overflowed: false },
       overflowReported: false,
       handedOff,
@@ -2206,6 +2257,29 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
   const handleStopLive = (request: VoiceStopRequest): boolean =>
     requestLiveSessionStop(request.sessionId, request.returnToTarget === true);
 
+  // The owner's report of what it shows, passed on to every other view.
+  // False when it isn't the live session's owner reporting, or the session
+  // isn't live yet, so the owner sends it again with its next change.
+  const handlePublishDetails = (ctx: IpcContext, request: VoicePublishDetailsRequest): boolean => {
+    const session = liveSession;
+    if (!session || session.ended || !ownedBy(session, request.sessionId, ctx.webContentsId)) {
+      return false;
+    }
+    session.details = request.details;
+    publishLiveSession();
+    return true;
+  };
+
+  // Another view's control panel: the owner pauses or resumes, as its own
+  // pause key would.
+  const handleSetPausedLive = (request: VoicePauseRequest): boolean => {
+    const session = liveSession;
+    if (!session || session.ended || session.id !== request.sessionId) return false;
+    if (session.sender.isDestroyed()) return false;
+    session.sender.send(CHANNELS.VOICE_INPUT_PAUSE_REQUESTED, request);
+    return true;
+  };
+
   // Another view's indicator.
   const handleRevealLive = (sessionId: string): boolean => {
     const session = liveSession;
@@ -2251,6 +2325,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // Audio for a session that isn't live — another view's, or one that has
     // already ended — must never reach the provider or the held buffer.
     if (!session || !ownedBy(session, sessionId, event.sender.id)) return;
+    forwardLiveLevel(session, chunk);
     const pending = session.preStartAudio;
     if (!pending) {
       service?.sendAudioChunk(chunk);
@@ -2779,6 +2854,17 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         VOICE_INPUT_METHOD_CHANNELS.revealLive,
         VoiceSessionIdSchema,
         handleRevealLive
+      ),
+      publishDetails: opValidated(
+        VOICE_INPUT_METHOD_CHANNELS.publishDetails,
+        VoicePublishDetailsRequestSchema,
+        handlePublishDetails,
+        { withContext: true }
+      ),
+      setPausedLive: opValidated(
+        VOICE_INPUT_METHOD_CHANNELS.setPausedLive,
+        VoicePauseRequestSchema,
+        handleSetPausedLive
       ),
       rewrite: opValidated(
         VOICE_INPUT_METHOD_CHANNELS.rewrite,

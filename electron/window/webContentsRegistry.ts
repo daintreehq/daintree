@@ -423,6 +423,18 @@ export function getAppView(win: BrowserWindow): WebContentsView | null {
 }
 
 /**
+ * The app view each window has on screen, one per window: never a cached
+ * project view. For pushes only a visible view has any use for.
+ */
+export function getShownAppWebContents(): WebContents[] {
+  const result: WebContents[] = [];
+  for (const view of windowToAppView.values()) {
+    if (view.webContents && !view.webContents.isDestroyed()) result.push(view.webContents);
+  }
+  return result;
+}
+
+/**
  * Get all registered app view webContents (for broadcasting).
  */
 export function getAllAppWebContents(): WebContents[] {

@@ -1770,12 +1770,18 @@ export interface GeneratedElectronAPI {
     prefetchCorrections(
       ...args: IpcInvokeMap["voice-input:prefetch-corrections"]["args"]
     ): Promise<IpcInvokeMap["voice-input:prefetch-corrections"]["result"]>;
+    publishDetails(
+      ...args: IpcInvokeMap["voice-input:publish-details"]["args"]
+    ): Promise<IpcInvokeMap["voice-input:publish-details"]["result"]>;
     revealLive(
       ...args: IpcInvokeMap["voice-input:reveal-live"]["args"]
     ): Promise<IpcInvokeMap["voice-input:reveal-live"]["result"]>;
     rewrite(
       ...args: IpcInvokeMap["voice-input:rewrite"]["args"]
     ): Promise<IpcInvokeMap["voice-input:rewrite"]["result"]>;
+    setPausedLive(
+      ...args: IpcInvokeMap["voice-input:set-paused-live"]["args"]
+    ): Promise<IpcInvokeMap["voice-input:set-paused-live"]["result"]>;
     start(
       ...args: IpcInvokeMap["voice-input:start"]["args"]
     ): Promise<IpcInvokeMap["voice-input:start"]["result"]>;

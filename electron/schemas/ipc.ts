@@ -17,7 +17,10 @@ import {
   VOICE_REWRITE_MAX_INSTRUCTION_CHARS,
   VOICE_REWRITE_MAX_SELECTION_CHARS,
 } from "../../shared/config/voiceCorrection.js";
-import { VOICE_WORKSPACE_NAME_MAX_LENGTH } from "../../shared/types/voice.js";
+import {
+  VOICE_SNAPSHOT_TRANSCRIPT_MAX_LENGTH,
+  VOICE_WORKSPACE_NAME_MAX_LENGTH,
+} from "../../shared/types/voice.js";
 
 /** Schema for a launch hint — built-in agent id or plugin-provided string. */
 const LaunchAgentIdSchema = z.union([z.enum(BUILT_IN_AGENT_IDS), z.string().min(1)]);
@@ -779,6 +782,68 @@ export const VoiceSessionIdSchema = z.string().min(1).max(64);
 export const VoiceStopLiveRequestSchema = z.object({
   sessionId: VoiceSessionIdSchema,
   returnToTarget: z.boolean().optional(),
+});
+
+const VoiceDetailLabelSchema = z.string().max(VOICE_WORKSPACE_NAME_MAX_LENGTH);
+const VOICE_IDENTITY_MAX_LENGTH = 1024;
+const VoiceDurationMsSchema = z
+  .number()
+  .finite()
+  .min(0)
+  .max(7 * 24 * 60 * 60 * 1000);
+
+// The owner's report of its live session, passed on to every other view (#14921).
+export const VoicePublishDetailsRequestSchema = z.object({
+  sessionId: VoiceSessionIdSchema,
+  details: z.object({
+    phase: z.enum(["arming", "connecting", "recording", "paused", "reconnecting", "finishing"]),
+    kind: z.enum(["dictation", "rewrite", "canopy-reply"]),
+    targetTitle: VoiceDetailLabelSchema,
+    targetChrome: z
+      .object({
+        // Plugin icon keys carry a project plugin instance id, so these run long.
+        iconId: z.string().max(VOICE_IDENTITY_MAX_LENGTH).nullable(),
+        color: z.string().max(64).optional(),
+        label: VoiceDetailLabelSchema,
+        isAgent: z.boolean(),
+        agentId: z.string().max(VOICE_IDENTITY_MAX_LENGTH).nullable(),
+        processId: z.string().max(VOICE_IDENTITY_MAX_LENGTH).nullable(),
+        runtimeKind: z.enum(["agent", "process", "panel", "none"]),
+        hasExited: z.boolean(),
+      })
+      .nullable(),
+    targetHostId: z.string().min(1).max(256).nullable(),
+    projectName: VoiceDetailLabelSchema.nullable(),
+    worktreeLabel: VoiceDetailLabelSchema.nullable(),
+    micLabel: VoiceDetailLabelSchema.nullable(),
+    micSignal: z.enum(["pending", "live", "silent"]),
+    micNotice: z
+      .object({ kind: z.enum(["lost", "fallback", "silent"]), bluetooth: z.boolean() })
+      .nullable(),
+    stopWarning: z.boolean(),
+    correctionEnabled: z.boolean(),
+    locked: z.boolean(),
+    wordCount: z.number().int().min(0).max(1_000_000),
+    transcript: z.string().max(VOICE_SNAPSHOT_TRANSCRIPT_MAX_LENGTH),
+    provider: z.enum(["openai", "deepgram", "grok"]).nullable(),
+    clock: z
+      .object({
+        at: z.number().finite().min(0),
+        elapsedMs: VoiceDurationMsSchema,
+        pausedMs: VoiceDurationMsSchema,
+        paused: z.boolean(),
+        autoStop: z
+          .object({ reason: z.enum(["pause", "idle"]), remainingMs: VoiceDurationMsSchema })
+          .nullable(),
+      })
+      .nullable(),
+  }),
+});
+
+// Another view's panel pausing or resuming the live session (#14921).
+export const VoicePauseRequestSchema = z.object({
+  sessionId: VoiceSessionIdSchema,
+  paused: z.boolean(),
 });
 
 // The terminal being dictated into: keyterms are read from it alone.

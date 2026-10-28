@@ -185,6 +185,28 @@ describe("webContentsRegistry", () => {
     expect(getAppView(winB)).toBe(viewB);
   });
 
+  it("getShownAppWebContents lists the view each window shows, never a cached one", async () => {
+    const { getShownAppWebContents, getAllAppWebContents, registerAppView, registerProjectView } =
+      await loadRegistry();
+    const winA = createWindow(1);
+    const winB = createWindow(2);
+    const shownA = createWebContents(201);
+    const shownB = createWebContents(202);
+    const cached = createWebContents(203);
+    electronMock.fromId.mockImplementation((id) =>
+      id === cached.id ? (cached as unknown as WebContents) : null
+    );
+    registerAppView(winA, createView(shownA));
+    registerAppView(winB, createView(shownB));
+    registerProjectView("project-c", cached as unknown as WebContents);
+
+    expect(getAllAppWebContents()).toContain(cached);
+    expect(getShownAppWebContents()).toEqual([shownA, shownB]);
+
+    shownB.setDestroyed(true);
+    expect(getShownAppWebContents()).toEqual([shownA]);
+  });
+
   it("getAllAppWebContents prunes app views whose webContents became undefined", async () => {
     const { getAllAppWebContents, getAppView, registerAppView } = await loadRegistry();
     const win = createWindow(1);
