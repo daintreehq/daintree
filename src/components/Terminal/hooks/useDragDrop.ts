@@ -32,8 +32,8 @@ export interface DragDropUploadOptions {
   cwdProvider?: () => string;
   /**
    * This is the pane's own input bar, so it shares file drops with the pane's
-   * terminal: whichever of the two holds the keyboard takes a drop let go over
-   * either. False for a composer that only borrows the terminal id (Canopy's
+   * terminal: a drop let go over the bar lands here, or on the terminal when
+   * the bar can't take it. False for a composer that only borrows the terminal id (Canopy's
    * reply box), which keeps every drop let go over it.
    */
   sharesPaneDrops?: boolean;
@@ -86,9 +86,10 @@ export function useDragDrop(
     [addToProjectDirectory]
   );
 
-  // Where files let go over this bar land: the terminal while it holds the
-  // keyboard, and nowhere while neither surface can take them. Add to project
-  // is this bar's own gesture, so it stays here whatever holds the keyboard.
+  // Where files let go over this bar land: here, as a click would put the
+  // keyboard here; the terminal when this bar can't take them; nowhere while
+  // neither surface can. Add to project is this bar's own gesture, so it never
+  // passes to the terminal.
   const fileDropTarget = useCallback(
     (e: React.DragEvent): TerminalFocusTarget | null => {
       const here = canInsert?.() ?? true;
@@ -215,7 +216,7 @@ export function useDragDrop(
       if (dropped.length === 0) return;
 
       // Decided at the drop rather than trusted from the drag. Asked before
-      // the editor is: a bar still loading can't keep the drop, but a focused
+      // the editor is: a bar still loading can't keep the drop, but the
       // terminal can take it. A terminal that declines leaves the drop here,
       // where it was let go, unless the bar can't take it either.
       const target = fileDropTarget(e);

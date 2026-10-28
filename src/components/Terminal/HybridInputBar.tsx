@@ -612,18 +612,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const handleAttachFiles = useAttachFiles(editorViewRef, cwd, uploadSurface);
     const handleAttachFromHost = useAttachFromHost(editorViewRef, cwd);
 
-    // A drop on this pane's agent terminal lands here while this bar holds the
-    // keyboard, or while nothing in the pane does and a click on the terminal
-    // would focus the bar — in the pane's own composer, never Canopy's reply
-    // box for the same terminal. A bar that can't take the drop declines, and
-    // it falls through to the terminal instead of vanishing.
+    // A drop on this pane's agent terminal lands here when a click on the
+    // terminal would focus the bar — in the pane's own composer, never Canopy's
+    // reply box for the same terminal. A bar that can't take the drop
+    // declines, and it falls through to the terminal instead of vanishing.
     useEffect(() => {
       if (isolated) return;
       return registerPaneDropTarget(terminalId, "hybridInput", {
-        ownsFocus: () => {
-          const view = editorViewRef.current;
-          return !!view && editorOwnsDomFocus(view);
-        },
         canTake: canTakeDrop,
         take: (sources) => {
           const view = editorViewRef.current;

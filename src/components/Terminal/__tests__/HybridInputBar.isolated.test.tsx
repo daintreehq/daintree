@@ -168,27 +168,18 @@ describe("HybridInputBar isolated", () => {
 
     function registerTerminal() {
       registerPaneDropTarget("term-1", "xterm", {
-        ownsFocus: () => false,
         canTake: () => true,
         take: () => true,
       });
     }
 
-    it("claims the drop while its editor holds the keyboard, even with the window blurred", async () => {
+    it("claims a drop let go over it, and leaves one let go over the terminal there", async () => {
       const view = mount(false);
       await act(async () => {});
       registerTerminal();
-      expect(resolvePaneDropTarget("term-1", "xterm")).toBe("xterm");
 
-      const editor = view.container.querySelector<HTMLElement>(".cm-content");
-      editor!.focus();
-      expect(document.activeElement).toBe(editor);
-      const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
-      try {
-        expect(resolvePaneDropTarget("term-1", "xterm")).toBe("hybridInput");
-      } finally {
-        hasFocus.mockRestore();
-      }
+      expect(resolvePaneDropTarget("term-1", "hybridInput")).toBe("hybridInput");
+      expect(resolvePaneDropTarget("term-1", "xterm")).toBe("xterm");
       view.unmount();
     });
 
